@@ -500,7 +500,7 @@ Each Ask run, including one that ends cancelled or in error, SHALL append one JS
 - **THEN** a line with outcome `answered` is appended to `ask_trace.jsonl` in the data directory
 
 ### Requirement: Ask trace contents
-An Ask trace record SHALL have `version: 2` and hold the question, model, provider, prompts, `outcome`, `op_count`, `op_cap`, `latency_ms`, `model_turns`, `phase_ms`, `model_turn_ms`, `tool_calls`, `floor`, `evidence_checks`, `combined_reads`, `evidence_refs`, `supplied_context_chars`, `tokens`, `cost_usd`, `forced_finalize`, `degraded`, `notes` and `stream_timing_ms`.
+An Ask trace record SHALL have `version: 2` and hold the question, model, provider, prompts, `outcome`, `op_count`, `op_cap`, `latency_ms`, `model_turns`, `phase_ms`, `model_turn_ms`, `tool_calls`, `floor`, `evidence_checks`, `combined_reads`, `evidence_refs`, `supplied_context_chars`, `tokens`, `forced_finalize`, `degraded`, `notes` and `stream_timing_ms`.
 
 #### Scenario: Cancelled run timing
 - **WHEN** a run is cancelled after answer text streamed

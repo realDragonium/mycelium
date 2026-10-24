@@ -73,7 +73,7 @@ class DraftCreated(BaseModel):
     flagged: list[str] = Field(default_factory=list)
     #: candidates skipped as duplicates, each "candidate :: existing_id".
     skipped_duplicates: list[str] = Field(default_factory=list)
-    #: tool calls + args, op count, latency, token/cost, candidate ledger.
+    #: tool calls + args, op count, latency, tokens, candidate ledger.
     trace: dict = Field(default_factory=dict)
 
 

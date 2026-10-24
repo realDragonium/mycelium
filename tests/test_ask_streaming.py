@@ -133,7 +133,12 @@ def test_real_provider_stream_delivers_answer_before_completion(provider, monkey
             substrate=FakeSubstrate(
                 {"recon": [{"id": "stm_1", "text": "The worker retries."}]}
             ),
-            config=AskConfig(provider=provider, enforce_floor=False, trace_dir=""),
+            config=AskConfig(
+                model="claude-haiku-4-5",
+                provider=provider,
+                enforce_floor=False,
+                trace_dir="",
+            ),
             stream=AskStream(emit=events.append),
         )
     assert result.answer == answer["answer"]
@@ -232,7 +237,9 @@ def execute(monkeypatch, turns, *, standard=False, sink=None):
                 },
             }
         ),
-        config=AskConfig(enforce_floor=standard, trace_dir=""),
+        config=AskConfig(
+            model="claude-haiku-4-5", enforce_floor=standard, trace_dir=""
+        ),
         stream=stream,
     )
     return result, events, requests
@@ -356,7 +363,9 @@ def test_cancel_after_answer_delta_never_forces_another_model_call(monkeypatch):
         run_ask(
             "Why?",
             substrate=FakeSubstrate({"recon": [{"id": "stm_1", "text": "retry"}]}),
-            config=AskConfig(enforce_floor=False, trace_dir=""),
+            config=AskConfig(
+                model="claude-haiku-4-5", enforce_floor=False, trace_dir=""
+            ),
             stream=stream,
         )
     assert len(requests) == 1
@@ -368,7 +377,10 @@ def test_cancel_before_start_does_no_retrieval():
     stream.cancelled.set()
     with pytest.raises(AskCancelled):
         run_ask(
-            "Why?", substrate=substrate, config=AskConfig(trace_dir=""), stream=stream
+            "Why?",
+            substrate=substrate,
+            config=AskConfig(model="claude-haiku-4-5", trace_dir=""),
+            stream=stream,
         )
     assert substrate.calls == []
 
@@ -440,7 +452,7 @@ def test_recon_only_reference_cannot_satisfy_adjacency(monkeypatch):
                 "get_statements": {"statements": [], "missing": ["stm_missing"]},
             }
         ),
-        config=AskConfig(trace_dir=""),
+        config=AskConfig(model="claude-haiku-4-5", trace_dir=""),
     )
     assert result.trace["floor"]["satisfied"] is False
     assert result.confidence == "low"
@@ -473,7 +485,7 @@ def test_rejected_adjacency_sources_name_the_refs_that_qualify(monkeypatch):
                 },
             }
         ),
-        config=AskConfig(trace_dir=""),
+        config=AskConfig(model="claude-haiku-4-5", trace_dir=""),
     )
     check = result.trace["evidence_checks"][-1]
     assert check["ok"] is False
@@ -485,7 +497,9 @@ def test_forced_finalize_keeps_deterministic_coverage_gaps(monkeypatch):
     result = run_ask(
         "Why?",
         substrate=FakeSubstrate({"recon": [{"id": "stm_1", "text": "x" * 25_000}]}),
-        config=AskConfig(limits=AskSettings(op_cap=1), trace_dir=""),
+        config=AskConfig(
+            model="claude-haiku-4-5", limits=AskSettings(op_cap=1), trace_dir=""
+        ),
     )
     assert result.confidence == "low"
     assert any("omitted" in gap for gap in result.gaps)
@@ -505,7 +519,10 @@ def test_cancelled_trace_has_first_text_but_no_completion(monkeypatch, tmp_path)
             "Why?",
             substrate=FakeSubstrate({"recon": [{"id": "stm_1", "text": "retry"}]}),
             config=AskConfig(
-                enforce_floor=False, trace_dir="", trace_log_path=str(path)
+                model="claude-haiku-4-5",
+                enforce_floor=False,
+                trace_dir="",
+                trace_log_path=str(path),
             ),
             stream=stream,
         )
@@ -543,7 +560,9 @@ def test_cancellation_during_recon_records_incomplete_trace(tmp_path):
         run_ask(
             "Why?",
             substrate=FakeSubstrate({"recon": recon}),
-            config=AskConfig(trace_dir="", trace_log_path=str(path)),
+            config=AskConfig(
+                model="claude-haiku-4-5", trace_dir="", trace_log_path=str(path)
+            ),
             stream=stream,
         )
     trace = json.loads(path.read_text())

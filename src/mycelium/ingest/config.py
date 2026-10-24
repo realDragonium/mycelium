@@ -1,11 +1,9 @@
 """Tunables for the `ingest` write-harness loop.
 
-Model choices use saved per-action settings, with legacy environment values imported
-once on upgrade. Task budgets come from saved AI settings.
-
-The model default is **Sonnet** (`claude-sonnet-4-6`) — one model, one context
-drives extract -> reconcile -> classify -> link -> emit. The id is config,
-never hardcoded in logic; choose it in AI settings.
+The model is the one saved for the `ingest` action in AI settings, picked from
+the admin's model catalog; there is no built-in default. One model, one
+context drives extract -> reconcile -> classify -> link -> emit. Task budgets
+come from saved AI settings.
 
 `ingest` runs hotter than `ask`: it reconciles *every* extracted candidate
 against the substrate, so the op cap and wall clock are larger.
@@ -19,10 +17,7 @@ from pathlib import Path
 from typing import Final
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider, ReasoningEffort, pricing
-
-#: Current Sonnet model id (confirmed against Anthropic's model catalog).
-DEFAULT_MODEL = "claude-sonnet-4-6"
+from ..ai import Provider, ReasoningEffort
 
 #: The reasoning doctrine the inner model reads, shipped beside this package.
 _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
@@ -35,7 +30,7 @@ DOCTRINE_NAME: Final = "ingest"
 
 @dataclass(frozen=True)
 class IngestConfig:
-    model: str = DEFAULT_MODEL
+    model: str = ""
     provider: Provider = "claude"
     reasoning_effort: ReasoningEffort | None = None
     limits: product_settings.IngestSettings = field(
@@ -43,19 +38,15 @@ class IngestConfig:
     )
     #: Path to the reasoning doctrine injected into the system prompt.
     doctrine_path: str = _DEFAULT_DOCTRINE_PATH
-    #: Spending cap per run, in USD. Needs a list price; without one the
-    #: op cap and wall clock are the only bounds.
-    max_cost_usd: float | None = None
+    #: Most tokens one run may use, cache reads included; None (or 0) leaves
+    #: the op cap and wall clock as the only bounds.
+    max_run_tokens: int | None = None
     #: JSONL sink for the trace. None → resolved by the caller to a default
     #: under the data dir (see server wiring).
     trace_log_path: str | None = None
     #: Directory for per-run speedscope timing files. Defaults under the data
     #: dir (shared with ask/find); empty string disables file writing.
     trace_dir: str | None = None
-
-    @property
-    def price(self) -> pricing.Price | None:
-        return pricing.price(self.provider, self.model)
 
     @classmethod
     def from_env(cls) -> IngestConfig:

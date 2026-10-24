@@ -818,7 +818,6 @@ def _progress(ctx: _RunContext, activity: str) -> None:
                 activity,
                 elapsed_s=time.monotonic() - ctx.start,
                 retrieved=len(ctx.retrieved_ids),
-                price=ctx.config.price,
             )
         )
     except Exception:  # noqa: BLE001 — progress is advisory
@@ -1340,7 +1339,6 @@ def _build_trace(ctx: _RunContext, outcome: str, *, cited: list[str]) -> dict:
             "gaps_filed": len(trace.reported_gaps),
         },
         cited=cited,
-        price=config.price,
     )
     tracing.emit_trace(
         trace.spans,

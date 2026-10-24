@@ -690,7 +690,6 @@ def _build_trace(ctx: _RunContext, outcome: str) -> dict:
         outcome=outcome,
         latency_ms=latency_ms,
         floor=_floor_state(ctx),
-        price=config.price,
     )
     record["evidence_refs"] = dict(ctx.evidence.by_ref)
     record["supplied_context_chars"] = ctx.evidence.supplied_chars

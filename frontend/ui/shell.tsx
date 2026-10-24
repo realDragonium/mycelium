@@ -20,7 +20,7 @@ import { KnowledgeHealthScreen } from './knowledge-health';
 import { MediaLibrary } from './media';
 import { NamesWorkspace } from './names-workspace';
 import { SettingsScreen } from './settings';
-import { usd, type Budget } from './ai-usage';
+import { tokens, type Budget } from './ai-usage';
 import { DataCtx, ErrorBoundary, GoIngestCtx, I, LoadError, Loading, MeCtx, type IconName } from './lib';
 import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, type View } from './router';
 import { getJSON, getServerInfo, type KnowledgeGap, type Me } from './api';
@@ -177,7 +177,7 @@ function BudgetBanner() {
     <div className={`restore-banner notice ${budget.paused ? 'error' : 'warn'}`} role="status">
       <I.warn width="16" height="16" />
       <span>
-        <strong>AI budget.</strong> Estimated spend this month is {usd(budget.spent_usd)}, {budget.percent}% of the {usd(budget.limit_usd)} budget.
+        <strong>AI budget.</strong> {tokens(budget.used_tokens)} tokens used this month, {budget.percent}% of the {tokens(budget.limit_tokens)} budget.
         {budget.paused ? ' Background actions are paused.' : ''} <Link to={{ view: 'settings', section: 'usage' }}>See AI usage</Link>
       </span>
     </div>

@@ -65,7 +65,11 @@ def _connect(ops, *, known=(), **config):
         client=client,
         substrate=FakeSubstrate({"get_statements": _statements}),
         emitter=emitter,
-        config=IngestConfig(trace_log_path=None, limits=IngestSettings(**config)),
+        config=IngestConfig(
+            trace_log_path=None,
+            model="claude-sonnet-4-6",
+            limits=IngestSettings(**config),
+        ),
     )
     return result, emitter, client
 
@@ -213,7 +217,7 @@ def test_leaves_a_statement_it_finds_badly_phrased_unlinked():
         client=client,
         substrate=FakeSubstrate({"get_statements": _statements}),
         emitter=emitter,
-        config=IngestConfig(trace_log_path=None),
+        config=IngestConfig(model="claude-sonnet-4-6", trace_log_path=None),
     )
 
     assert emitter.queued[0][2] == {"links": [_edge("stm_invoice", "stm_export")]}
@@ -303,8 +307,8 @@ def test_an_alias_must_come_from_a_batch_statement_that_uses_it():
 
 
 def test_stops_reading_while_another_turn_and_the_final_emit_fit_under_the_cap():
-    # A read over 10k cached tokens costs $0.0031, but the forced emit writes
-    # that history to the cache again ($0.0376): the next read would not fit.
+    # A read over 10k cached tokens fits, but another one and the forced emit,
+    # which reads that history again, would not.
     read = _reads()[0]
     read.usage.cache_read_input_tokens = 10_000
     emit = _emit_input(ledger=[_ledger_row("stm_export", "unphraseable", note="none")])
@@ -317,14 +321,14 @@ def test_stops_reading_while_another_turn_and_the_final_emit_fit_under_the_cap()
         substrate=FakeSubstrate(),
         emitter=FakeEmitter(),
         config=IngestConfig(
+            model="claude-sonnet-4-6",
             trace_log_path=None,
-            max_cost_usd=0.04,
+            max_run_tokens=25_000,
         ),
     )
 
-    assert result.trace["forced_finalize"] == "cost_cap"
+    assert result.trace["forced_finalize"] == "token_cap"
     assert len(client.calls) == 2
-    assert result.trace["cost_usd"] < 0.04
 
 
 def test_its_model_calls_are_metered_as_connect_and_a_spent_budget_pauses_it():

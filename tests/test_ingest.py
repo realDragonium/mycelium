@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import time
 import types
+from dataclasses import replace
 
 import pytest
 
@@ -241,7 +242,11 @@ def _run(responses, results=None, emitter=None, **config_over):
     emitter = emitter or FakeEmitter()
     limits = {k: v for k, v in config_over.items() if k in IngestSettings.model_fields}
     rest = {k: v for k, v in config_over.items() if k not in limits}
-    cfg = IngestConfig(limits=IngestSettings(**limits), trace_log_path=None, **rest)
+    cfg = IngestConfig(
+        limits=IngestSettings(**limits),
+        trace_log_path=None,
+        **{"model": "claude-sonnet-4-6", **rest},
+    )
     result = run_ingest(
         "An invite is submitted.",
         client=client,
@@ -679,22 +684,18 @@ def test_op_cap_with_unresponsive_model_returns_nothing_never_raises():
 
 
 @pytest.mark.parametrize(
-    ("model", "cap", "read_turns", "expected_cost", "forced_finalize"),
+    ("cap", "read_turns", "forced_finalize"),
     [
-        ("claude-opus-5-5", 0.054, 1, 0.00278, "cost_cap"),
-        ("claude-opus-5-5", 0.058, 2, 0.00542, "cost_cap"),
-        ("claude-unlisted", 0.000001, 2, None, None),
+        (30_000, 1, "token_cap"),
+        (40_400, 2, "token_cap"),
+        (None, 2, None),
     ],
 )
-def test_cost_and_cap_use_the_models_list_price(
-    model: str,
-    cap: float,
-    read_turns: int,
-    expected_cost: float | None,
-    forced_finalize: str | None,
+def test_the_token_cap_leaves_room_for_another_read_and_the_emit(
+    cap: int | None, read_turns: int, forced_finalize: str | None
 ) -> None:
-    # Opus cache reads cost 5% of input. At $0.058, that discount leaves
-    # room for a second read and the emit reserve; a 10% rate would stop early.
+    # Each read uses 10,115 tokens. After one, another read and an emit that
+    # reads the history again would bring the run to 30,350; after two, 40,465.
     reads = _reconcile_then_adjacency()[:read_turns]
     for read in reads:
         read.usage = Usage(
@@ -705,15 +706,12 @@ def test_cost_and_cap_use_the_models_list_price(
         )
     result, client, _sub, _emitter = _run(
         [*reads, _message([_tool_use(EMIT_TOOL, _good_new_op_emit())])],
-        model=model,
-        max_cost_usd=cap,
+        max_run_tokens=cap,
     )
 
     assert isinstance(result, DraftCreated)
     assert len(client.calls) == read_turns + 1
-    assert all(call["model"] == model for call in client.calls)
     assert result.trace["forced_finalize"] == forced_finalize
-    assert result.trace["cost_usd"] == expected_cost
 
 
 def test_api_error_degrades_to_forced_finalize():
@@ -728,7 +726,7 @@ def test_api_error_degrades_to_forced_finalize():
     client = Boom([])
     substrate = FakeSubstrate()
     emitter = FakeEmitter()
-    cfg = IngestConfig(trace_log_path=None)
+    cfg = IngestConfig(model="claude-sonnet-4-6", trace_log_path=None)
     result = run_ingest(
         "x", client=client, substrate=substrate, emitter=emitter, config=cfg
     )
@@ -824,7 +822,11 @@ def test_oversized_input_is_truncated_and_noted():
     )
     substrate = FakeSubstrate()
     emitter = FakeEmitter()
-    cfg = IngestConfig(limits=IngestSettings(max_input_chars=10), trace_log_path=None)
+    cfg = IngestConfig(
+        model="claude-sonnet-4-6",
+        limits=IngestSettings(max_input_chars=10),
+        trace_log_path=None,
+    )
     result = run_ingest(
         big, client=client, substrate=substrate, emitter=emitter, config=cfg
     )
@@ -856,7 +858,6 @@ def test_trace_record_is_complete_and_serialisable():
         "gaps",
         "floor",
         "tokens",
-        "cost_usd",
         "forced_finalize",
         "degraded",
         "notes",
@@ -877,7 +878,7 @@ def test_trace_written_to_jsonl_file(tmp_path):
     )
     substrate = FakeSubstrate()
     emitter = FakeEmitter()
-    cfg = IngestConfig(trace_log_path=str(log))
+    cfg = IngestConfig(model="claude-sonnet-4-6", trace_log_path=str(log))
     run_ingest(
         "An invite is submitted.",
         client=client,
@@ -1287,7 +1288,7 @@ def _system_prompt_of_one_run(config=None):
         client=client,
         substrate=FakeSubstrate(),
         emitter=FakeEmitter(),
-        config=config or IngestConfig(trace_log_path=None),
+        config=config or IngestConfig(model="claude-sonnet-4-6", trace_log_path=None),
     )
     return _system_text(client.calls[0])
 
@@ -1362,7 +1363,7 @@ def test_g_doctrine_path_override_via_env(tmp_path, monkeypatch):
     cfg = IngestConfig.from_env()
     assert cfg.doctrine_path == str(custom)
 
-    system_prompt = _system_prompt_of_one_run(cfg)
+    system_prompt = _system_prompt_of_one_run(replace(cfg, model="claude-sonnet-4-6"))
     assert "CUSTOM DOCTRINE MARKER 12345" in system_prompt
 
 
@@ -1371,7 +1372,9 @@ def test_g_unreadable_doctrine_falls_back_to_base_prompt_with_note():
     the base prompt and records why."""
     _prompt_store()
     cfg = IngestConfig(
-        doctrine_path="/nonexistent/path/doctrine.md", trace_log_path=None
+        model="claude-sonnet-4-6",
+        doctrine_path="/nonexistent/path/doctrine.md",
+        trace_log_path=None,
     )
     emit = _emit_input(
         ledger=[_ledger_row("x", "duplicate", matched=["stm_1"])],
@@ -1423,6 +1426,7 @@ def test_reading_stops_in_time_for_the_final_emit(monkeypatch):
         substrate=FakeSubstrate(),
         emitter=FakeEmitter(),
         config=IngestConfig(
+            model="claude-sonnet-4-6",
             limits=IngestSettings(thinking=True, wall_clock_s=120.0),
             trace_log_path=None,
         ),
@@ -1544,7 +1548,11 @@ def test_t9_real_emitter_persists_draft_and_ops_via_drafts_store_and_drops_none(
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     client = FakeAnthropic(responses)
-    cfg = IngestConfig(limits=IngestSettings(thinking=True), trace_log_path=None)
+    cfg = IngestConfig(
+        model="claude-sonnet-4-6",
+        limits=IngestSettings(thinking=True),
+        trace_log_path=None,
+    )
     result = run_ingest(
         "An invite is submitted.",
         client=client,
@@ -2065,7 +2073,11 @@ def test_model_turns_cache_and_stream_only_on_the_owned_transport(monkeypatch):
     monkeypatch.setattr(
         loop.ai, "turn", lambda task, config, client: seen.append((task, config))
     )
-    cfg = IngestConfig(trace_log_path=None, limits=IngestSettings(request_timeout_s=90))
+    cfg = IngestConfig(
+        model="claude-sonnet-4-6",
+        trace_log_path=None,
+        limits=IngestSettings(request_timeout_s=90),
+    )
     until = time.monotonic() + 30
     loop._model_turn(None, cfg, "sys", [], [], force=False, until=until)
     loop._model_turn(FakeAnthropic([]), cfg, "sys", [], [], force=False, until=until)

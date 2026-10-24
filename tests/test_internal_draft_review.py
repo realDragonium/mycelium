@@ -1150,7 +1150,7 @@ def test_sweep_resumes_paused_reviews_without_retry_limits(
 ):
     at = datetime(2026, 10, 1, tzinfo=UTC)
     budget = product_settings.AIBudgetSettings(
-        monthly_limit_usd=1, pause_background=True
+        monthly_limit_tokens=1000, pause_background=True
     )
     set_product(budget)
     with store.transaction(server._drafts_db()):
@@ -1160,8 +1160,7 @@ def test_sweep_resumes_paused_reviews_without_retry_limits(
                 action="draft_review",
                 provider="openai",
                 model="gpt-fixture",
-                usage=ai.Usage(),
-                cost_usd=1,
+                usage=ai.Usage(input_tokens=1000),
                 duration_ms=1,
                 ok=True,
                 run_id=None,
@@ -1190,7 +1189,7 @@ def test_sweep_resumes_paused_reviews_without_retry_limits(
     assert draft_review_runs.sweep(later) == []
     assert _result(draft_id)["run_id"] == paused_run["run_id"]
     if resume == "raise-budget":
-        set_product(budget.model_copy(update={"monthly_limit_usd": 2}))
+        set_product(budget.model_copy(update={"monthly_limit_tokens": 2000}))
     elif resume == "disable-pausing":
         set_product(budget.model_copy(update={"pause_background": False}))
     else:

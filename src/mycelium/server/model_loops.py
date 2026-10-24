@@ -82,6 +82,7 @@ def ask(
 
     if model_settings.get("ask").external_agent:
         raise AskIsExternal(ASK_EXTERNAL)
+    model_settings.require("ask")
     config = for_depth(AskConfig.from_env(), depth)
     if config.trace_log_path is None:
         config = replace(
@@ -131,10 +132,12 @@ def ingest(text: str) -> dict[str, Any]:
     a wall-clock budget; on exhaustion it degrades to a forced emit (or
     `nothing_to_ingest`) rather than raising.
     """
+    from .. import model_settings
     from ..ingest import IngestConfig, external, run_ingest
 
     if external.external("ingest"):
         return external.queue("ingest", external.LoopState(text=text), _requester())
+    model_settings.require("ingest")
     config = IngestConfig.from_env()
     if config.trace_log_path is None:
         config = replace(
@@ -161,9 +164,9 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
 
     The connect action's saved settings choose the model and bound the run:
     at most `batch_size` statements per call, an operation cap, a wall clock
-    and a spending cap. The draft goes to review exactly as an ingest draft
-    does. Returns the same shapes as `ingest`, with `cost_usd` (null when the
-    model has no known price), and `gaps_filed`: the knowledge gaps opened
+    and a token cap. The draft goes to review exactly as an ingest draft
+    does. Returns the same shapes as `ingest`, with `tokens` (every token the
+    run's model calls used), and `gaps_filed`: the knowledge gaps opened
     for statements too badly phrased to connect. The statements it looked at
     are not offered to "connect next" again until they or the statements
     around them change. Refused while the monthly AI budget pauses
@@ -235,7 +238,8 @@ def connected(result: IngestResult, targets: Sequence[Target]) -> dict[str, Any]
             and not knowledge_health.has_open_gap(_db(), item.statement_id)
         ]
     response = result.model_dump()
-    response["cost_usd"] = result.trace.get("cost_usd")
+    used = result.trace.get("tokens") or {}
+    response["tokens"] = sum(n for kind, n in used.items() if kind != "total")
     response["gaps_filed"] = gaps
     if result.outcome == "draft_created":
         response["submitted_for_review"] = _auto_submit(result.draft_id)

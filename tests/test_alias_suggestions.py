@@ -8,7 +8,13 @@ from mycelium import alias_suggestions as aliases
 from mycelium.ingest.draft import InProcessDraftEmitter
 from mycelium.product_settings import IngestSettings
 from mycelium.server import runtime
+from settings_helpers import assume_configured_models, offer_models
 from test_reviewed_application import _app
+
+
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    assume_configured_models(monkeypatch)
 
 
 @contextmanager
@@ -206,6 +212,8 @@ def test_manual_scan_uses_independent_model_and_rejects_external_evidence(
     tmp_path, monkeypatch
 ):
     with vocabulary(tmp_path, monkeypatch) as (client, entity_id, statement_id):
+        offer_models("openai", "gpt-fixture")
+        offer_models("claude", "claude-fixture")
         model_settings.save(
             "alias_discovery",
             model_settings.SaveSelection(
@@ -334,7 +342,11 @@ def test_ingest_validates_alias_quote_against_actual_input(quote, queued):
         ),
         substrate=FakeSubstrate(),
         emitter=emitter,
-        config=IngestConfig(limits=IngestSettings(thinking=False), trace_log_path=None),
+        config=IngestConfig(
+            model="claude-sonnet-4-6",
+            limits=IngestSettings(thinking=False),
+            trace_log_path=None,
+        ),
     )
     assert bool(emitter.queued) is queued
     if not queued:
@@ -385,7 +397,11 @@ def test_ingest_puts_alias_suggestions_in_their_own_submitted_draft(with_knowled
         ),
         substrate=FakeSubstrate(),
         emitter=emitter,
-        config=IngestConfig(limits=IngestSettings(thinking=False), trace_log_path=None),
+        config=IngestConfig(
+            model="claude-sonnet-4-6",
+            limits=IngestSettings(thinking=False),
+            trace_log_path=None,
+        ),
     )
     by_draft = {}
     for draft_id, kind, _ in emitter.queued:
@@ -457,7 +473,11 @@ def test_split_renumbers_references_to_the_knowledge_draft():
         ),
         substrate=FakeSubstrate(),
         emitter=emitter,
-        config=IngestConfig(limits=IngestSettings(thinking=False), trace_log_path=None),
+        config=IngestConfig(
+            model="claude-sonnet-4-6",
+            limits=IngestSettings(thinking=False),
+            trace_log_path=None,
+        ),
     )
 
     knowledge = [

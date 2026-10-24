@@ -71,7 +71,7 @@ waits until an outside agent claims and writes it (`agent_task` shows who
 holds it), which the `mycelium-agent-tasks` skill covers. Do not poll for
 it; tell the operator.
 `summary` reports what the run is doing while it runs, then its turns,
-tokens, cost, the statements it retrieved and cited, and the gaps it filed.
+tokens, the statements it retrieved and cited, and the gaps it filed.
 
 | `status` | Report |
 |---|---|

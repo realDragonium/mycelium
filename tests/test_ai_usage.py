@@ -27,12 +27,12 @@ def _call(
     action: str = "ask",
     *,
     model: str = "claude-sonnet-5-5",
-    cost: float | None = 1.0,
-    output: int = 100,
+    output: int = 85,
     ok: bool = True,
     run_id: str | None = None,
     draft_id: str | None = None,
 ) -> ai.usage.Call:
+    """A call of 10 input, 5 cached and `output` output tokens."""
     return ai.usage.Call(
         action=action,
         provider="claude",
@@ -40,7 +40,6 @@ def _call(
         usage=ai.Usage(
             input_tokens=10, cache_read_input_tokens=5, output_tokens=output
         ),
-        cost_usd=cost,
         duration_ms=1200,
         ok=ok,
         run_id=run_id,
@@ -52,22 +51,22 @@ def test_report_aggregates_the_period_by_day_action_model_and_run(
     conn: sqlite3.Connection,
 ) -> None:
     ai_usage.record(conn, _call(), at="2026-09-30T23:59:59.000Z")
-    ai_usage.record(conn, _call(cost=0.5), at="2026-10-01T08:00:00.000Z")
+    ai_usage.record(conn, _call(), at="2026-10-01T08:00:00.000Z")
     ai_usage.record(
-        conn, _call("docgen", run_id="drn_a", cost=2.0), at="2026-10-01T09:00:00.000Z"
+        conn, _call("docgen", run_id="drn_a", output=185), at="2026-10-01T09:00:00.000Z"
     )
     ai_usage.record(
         conn,
-        _call("docgen", run_id="drn_a", cost=1.0, ok=False),
+        _call("docgen", run_id="drn_a", ok=False),
         at="2026-10-02T09:00:00.000Z",
     )
     ai_usage.record(
         conn,
-        _call("draft_review", run_id="drv_1", draft_id="drf_1", cost=0.25),
+        _call("draft_review", run_id="drv_1", draft_id="drf_1"),
         at="2026-10-02T10:00:00.000Z",
     )
     ai_usage.record(
-        conn, _call(model="unpriced", cost=None), at="2026-10-02T11:00:00.000Z"
+        conn, _call(model="claude-haiku-5-5"), at="2026-10-02T11:00:00.000Z"
     )
 
     report = ai_usage.report(conn, "2026-10-01T00:00:00.000Z")
@@ -75,28 +74,27 @@ def test_report_aggregates_the_period_by_day_action_model_and_run(
     assert report.totals.model_dump() == {
         "calls": 5,
         "failed_calls": 1,
-        "unpriced_calls": 1,
-        "input_tokens": 75,
+        "input_tokens": 50,
         "cached_tokens": 25,
-        "output_tokens": 500,
-        "cost_usd": 3.75,
+        "output_tokens": 525,
+        "tokens": 600,
     }
-    assert [(d.day, d.calls, d.cost_usd) for d in report.days] == [
-        ("2026-10-01", 2, 2.5),
-        ("2026-10-02", 3, 1.25),
+    assert [(d.day, d.calls, d.tokens) for d in report.days] == [
+        ("2026-10-01", 2, 300),
+        ("2026-10-02", 3, 300),
     ]
-    assert [(a.action, a.calls, a.cost_usd) for a in report.actions] == [
-        ("docgen", 2, 3.0),
-        ("ask", 2, 0.5),
-        ("draft_review", 1, 0.25),
+    assert [(a.action, a.calls, a.tokens) for a in report.actions] == [
+        ("docgen", 2, 300),
+        ("ask", 2, 200),
+        ("draft_review", 1, 100),
     ]
-    assert [(m.model, m.priced) for m in report.models] == [
-        ("claude-sonnet-5-5", True),
-        ("unpriced", False),
+    assert [(m.model, m.tokens) for m in report.models] == [
+        ("claude-sonnet-5-5", 500),
+        ("claude-haiku-5-5", 100),
     ]
-    assert [(r.run_id, r.draft_id, r.calls, r.cost_usd) for r in report.runs] == [
-        ("drn_a", None, 2, 3.0),
-        ("drv_1", "drf_1", 1, 0.25),
+    assert [(r.run_id, r.draft_id, r.calls, r.tokens) for r in report.runs] == [
+        ("drn_a", None, 2, 300),
+        ("drv_1", "drf_1", 1, 100),
     ]
 
 
@@ -122,36 +120,31 @@ def test_installed_metering_records_each_call_in_the_drafts_db(
         1,
     )
     assert (row["input_tokens"], row["output_tokens"]) == (1_000_000, 1000)
-    assert row["cost_usd"] == pytest.approx(0.10 + 0.0005)
+    assert row["cost_usd"] is None
 
 
-def test_mean_run_cost_averages_whole_priced_runs(conn: sqlite3.Connection) -> None:
+def test_mean_run_tokens_averages_whole_runs(conn: sqlite3.Connection) -> None:
     since = "2026-10-01T00:00:00.000Z"
-    assert ai_usage.mean_run_cost(conn, "draft_review", since) is None
-    for run_id, cost in [("drv_1", 0.25), ("drv_1", 0.25), ("drv_2", 0.1)]:
-        ai_usage.record(
-            conn, _call("draft_review", run_id=run_id, cost=cost), at="2026-10-02"
-        )
+    assert ai_usage.mean_run_tokens(conn, "draft_review", since) is None
+    for run_id in ("drv_1", "drv_1", "drv_2"):
+        ai_usage.record(conn, _call("draft_review", run_id=run_id), at="2026-10-02")
     ai_usage.record(
-        conn, _call("draft_review", run_id="drv_3", cost=None), at="2026-10-02"
-    )
-    ai_usage.record(
-        conn, _call("draft_review", run_id="drv_0", cost=9.0), at="2026-09-30"
+        conn, _call("draft_review", run_id="drv_0", output=9000), at="2026-09-30"
     )
 
-    assert ai_usage.mean_run_cost(conn, "draft_review", since) == pytest.approx(0.3)
+    assert ai_usage.mean_run_tokens(conn, "draft_review", since) == 150
 
 
 def test_budget_counts_only_this_utc_month(conn: sqlite3.Connection) -> None:
-    ai_usage.record(conn, _call(cost=50.0), at="2026-09-30T23:00:00.000Z")
-    ai_usage.record(conn, _call(cost=8.5), at="2026-10-01T00:00:00.000Z")
-    settings = AIBudgetSettings(monthly_limit_usd=10, warn_percent=80)
+    ai_usage.record(conn, _call(output=5000), at="2026-09-30T23:00:00.000Z")
+    ai_usage.record(conn, _call(output=835), at="2026-10-01T00:00:00.000Z")
+    settings = AIBudgetSettings(monthly_limit_tokens=1000, warn_percent=80)
 
     status = ai_usage.budget(conn, settings, NOW)
 
     assert status is not None
-    assert (status.spent_usd, status.percent, status.warning, status.paused) == (
-        8.5,
+    assert (status.used_tokens, status.percent, status.warning, status.paused) == (
+        850,
         85.0,
         True,
         False,
@@ -162,12 +155,12 @@ def test_budget_counts_only_this_utc_month(conn: sqlite3.Connection) -> None:
 def test_a_spent_budget_pauses_only_background_actions_when_asked(
     conn: sqlite3.Connection,
 ) -> None:
-    ai_usage.record(conn, _call(cost=10.0), at="2026-10-05T00:00:00.000Z")
-    pausing = AIBudgetSettings(monthly_limit_usd=10, pause_background=True)
+    ai_usage.record(conn, _call(), at="2026-10-05T00:00:00.000Z")
+    pausing = AIBudgetSettings(monthly_limit_tokens=100, pause_background=True)
 
     for action in ("audience_labelling", "draft_review", "connect"):
         assert ai_usage.paused_reason(conn, action, pausing, NOW)
     for action in ("ask", "ingest", "docgen", "alias_discovery", "other"):
         assert ai_usage.paused_reason(conn, action, pausing, NOW) is None
-    warning_only = AIBudgetSettings(monthly_limit_usd=10)
+    warning_only = AIBudgetSettings(monthly_limit_tokens=100)
     assert ai_usage.paused_reason(conn, "draft_review", warning_only, NOW) is None

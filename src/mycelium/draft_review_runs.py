@@ -160,7 +160,9 @@ def start(
     if settings.mode == "off":
         raise ValueError("internal draft review is off")
     if not settings.model:
-        raise ValueError("Choose a model ID before starting an internal draft review.")
+        raise ValueError(
+            model_settings.missing_model("draft_review", settings.provider)
+        )
     # Checked before a run is recorded: without credentials every attempt
     # fails, and a restored copy would otherwise fill up with failed runs.
     if reason := credentials_error(settings):
@@ -357,9 +359,9 @@ class BacklogJob(BaseModel):
     picks up the drafts still waiting."""
 
     status: Literal["running", "paused", "finished"] = "running"
-    #: The most the job may spend; None leaves only the monthly AI budget.
-    budget_usd: float | None = None
-    spent_usd: float = 0.0
+    #: The most tokens the job may use; None leaves only the monthly AI budget.
+    budget_tokens: int | None = None
+    used_tokens: int = 0
     reviewed: int = 0
     remaining: int = 0
     detail: str | None = None
@@ -378,16 +380,16 @@ def backlog_job() -> BacklogJob | None:
         return None if _backlog_job is None else _backlog_job.model_copy()
 
 
-def review_backlog(budget_usd: float | None = None) -> BacklogJob:
+def review_backlog(budget_tokens: int | None = None) -> BacklogJob:
     """Start reviewing the backlog oldest first, stopping before a draft
-    whose likely cost would pass `budget_usd`."""
+    whose likely token use would pass `budget_tokens`."""
     global _backlog_job
     if reason := _backlog_unavailable():
         raise ValueError(reason)
     with _backlog_lock:
         if _backlog_job is not None and _backlog_job.status != "finished":
             raise ValueError("a backlog review is already started; resume it")
-        _backlog_job = BacklogJob(budget_usd=budget_usd, remaining=len(backlog()))
+        _backlog_job = BacklogJob(budget_tokens=budget_tokens, remaining=len(backlog()))
         _backlog_attempted.clear()
         _drain_in_background()
         return _backlog_job.model_copy()
@@ -463,13 +465,13 @@ def _drain() -> None:
             logger.exception("could not start review of %s", draft_id)
             continue
         _wait_for(draft_id)
-        cost = ai_usage.draft_cost(
+        used = ai_usage.draft_tokens(
             drafts_store.connection(), "draft_review", draft_id, since
         )
         with _backlog_lock:
             assert _backlog_job is not None  # set before the thread starts
             _backlog_job.reviewed += 1
-            _backlog_job.spent_usd += cost
+            _backlog_job.used_tokens += used
 
 
 def _next_backlog_draft() -> str | None:
@@ -502,16 +504,16 @@ def _backlog_spent() -> str | None:
         return reason
     with _backlog_lock:
         job = _backlog_job
-        if job is None or job.budget_usd is None:
+        if job is None or job.budget_tokens is None:
             return None
-        spent, limit = job.spent_usd, job.budget_usd
+        used, limit = job.used_tokens, job.budget_tokens
     since = timestamps.of(datetime.now(UTC) - timedelta(days=30))
-    next_draft = ai_usage.mean_run_cost(conn, "draft_review", since) or 0.0
-    if spent + next_draft <= limit:
+    next_draft = ai_usage.mean_run_tokens(conn, "draft_review", since) or 0
+    if used + next_draft <= limit:
         return None
     return (
-        f"Stopped at the backlog budget: about ${spent:.2f} of ${limit:g} spent, "
-        f"and the next draft likely costs ${next_draft:.2f}. Resume to go on."
+        f"Stopped at the backlog budget: {used:,} of {limit:,} tokens used, "
+        f"and the next draft likely uses about {next_draft:,}. Resume to go on."
     )
 
 
@@ -979,23 +981,14 @@ def _authored(key: RecordKey, row: sqlite3.Row) -> str | None:
     return changed
 
 
-def _estimated_cost(
+def _estimated_tokens(
     contexts: list[PartContext],
-    settings: draft_review_settings.Snapshot,
     limits: product_settings.ReviewSettings,
     instructions: ai_prompts.Snapshot,
-) -> float | None:
-    price = ai.pricing.price(settings.provider, settings.model)
-    if price is None:
-        return None
+) -> int:
     system = len(draft_review_model.build_system_prompt(instructions.text))
     return sum(
-        price.cost_usd(
-            ai.Usage(
-                input_tokens=(system + len(item.context)) // _CHARS_PER_TOKEN,
-                output_tokens=limits.max_tokens,
-            )
-        )
+        (system + len(item.context)) // _CHARS_PER_TOKEN + limits.max_tokens
         for item in contexts
     )
 
@@ -1153,12 +1146,12 @@ def _review(
         except Refused as exc:
             reason = str(exc)
     if reason is None:
-        cost = _estimated_cost(contexts, settings, limits, instructions)
-        if cost is not None and cost > limits.max_cost_usd:
+        tokens = _estimated_tokens(contexts, limits, instructions)
+        if limits.max_draft_tokens and tokens > limits.max_draft_tokens:
             reason = (
-                f"Reviewing this draft could cost up to ${cost:.2f} in "
-                f"{len(contexts)} parts, above the ${limits.max_cost_usd:g} a "
-                "draft review may cost (Settings › Product › Draft review). "
+                f"Reviewing this draft could use up to {tokens:,} tokens in "
+                f"{len(contexts)} parts, above the {limits.max_draft_tokens:,} "
+                "a draft review may use (Settings › Limits › Draft review). "
                 "Split it into smaller drafts."
             )
     if reason is not None:

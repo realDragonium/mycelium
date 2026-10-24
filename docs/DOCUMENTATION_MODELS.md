@@ -18,8 +18,7 @@ A document takes several minutes and many model turns. Claude runs cache the
 system prompt, tools and conversation between turns, so each turn pays full
 price only for what it added. Every run records a summary: what it is doing
 while it runs, then turns, duration, input, cached and output tokens, the
-statements it retrieved and cited, the gaps it filed and, for a Claude model
-with a list price, an estimated cost. The workspace shows it on the run and in
+statements it retrieved and cited and the gaps it filed. The workspace shows it on the run and in
 the generation history. Set `MYCELIUM_DOCGEN_TRACE_LOG` to a file path to also
 append one JSON line per run with its turns, tool calls and per-turn usage,
 keyed by the run id.
@@ -208,8 +207,7 @@ run lists the notes it was briefed with (`review_notes`).
 Existing tool-operation, turn, wall-clock and request-timeout limits apply. The
 Anthropic retry setting remains specific to the Claude SDK; the GPT transport
 does not retry HTTP requests automatically. The loop retains its bounded final
-attempt when a model call fails. GPT trace cost is null because no list price
-is kept for it; token usage is still recorded.
+attempt when a model call fails. Token usage is recorded as for Claude.
 
 Transport and workflow tests use local fake Responses payloads and isolated
 stores. They establish routing and gates, not the prose quality or account

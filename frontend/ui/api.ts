@@ -102,7 +102,9 @@ export interface ActionSettings {
   external_agent?: boolean; agent_review?: 'server' | 'agent'; agent_supported?: boolean;
   configuration_error?: string | null; model_warning?: string | null; providers: ProviderStatus[];
 }
-export interface ModelSettings { can_configure: boolean; actions: ActionSettings[] }
+// A model an admin made selectable.
+export interface CatalogModel { provider: Provider; model: string }
+export interface ModelSettings { can_configure: boolean; actions: ActionSettings[]; catalog: CatalogModel[] }
 
 export async function getAskExternal(signal?: AbortSignal): Promise<boolean> {
   try {
@@ -445,9 +447,8 @@ export interface HealthCounts {
   unlabelled: number; labelling_failed: number;
   open_gaps: number; pending_drafts: number; out_of_date_documents: number; old_media: number;
 }
-// `priced` is false when the model has no known price: then neither the
-// cost nor the spending cap applies.
-export interface ConnectLimits { batch_size: number; max_cost_usd: number; provider: string; model: string; priced: boolean; external_agent: boolean }
+// `max_run_tokens` is 0 when runs have no token cap.
+export interface ConnectLimits { batch_size: number; max_run_tokens: number; provider: string; model: string; external_agent: boolean }
 export type CurationKind = 'isolated' | 'unnamed' | 'rephrase' | 'gap';
 // `name` is null once the holder is no longer a known user. Outcome `looked`
 // is the server's connect pass; the rest come from outside agents.
@@ -465,7 +466,7 @@ export interface HealthEntity { id: string; name: string | null; description: st
 export interface Page<T> { items: T[]; next_after: string | null }
 export type ConnectResult =
   | Extract<IngestResult, { outcome: 'waiting_for_agent' }>
-  | (Exclude<IngestResult, { outcome: 'waiting_for_agent' }> & { cost_usd: number | null; flagged?: string[]; gaps_filed?: string[] });
+  | (Exclude<IngestResult, { outcome: 'waiting_for_agent' }> & { tokens: number; flagged?: string[]; gaps_filed?: string[] });
 
 export const knowledgeHealth = {
   view: () => getJSON<HealthView>('/api/knowledge-health'),

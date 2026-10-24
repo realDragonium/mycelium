@@ -138,7 +138,7 @@ def _run(responses, results=None, *, question="why does it retry?", **config_ove
     cfg = AskConfig(
         limits=AskSettings(**{"thinking": True, **limits}),
         trace_log_path=None,
-        **config_over,
+        **{"model": "claude-haiku-4-5", **config_over},
     )
     result = run_ask(question, client=client, substrate=substrate, config=cfg)
     return result, client, substrate
@@ -358,7 +358,7 @@ def test_quick_depth_config_drops_floor_and_tightens_caps():
         for_depth,
     )
 
-    base = AskConfig()
+    base = AskConfig(model="claude-haiku-4-5")
     assert for_depth(base, "standard") is base  # unchanged
 
     quick = for_depth(base, "quick")
@@ -372,6 +372,7 @@ def test_quick_depth_config_drops_floor_and_tightens_caps():
     )
     # ceilings only: an already-tighter budget still wins
     tight = AskConfig(
+        model="claude-haiku-4-5",
         limits=AskSettings(
             op_cap=3,
             wall_clock_s=10.0,
@@ -579,7 +580,6 @@ def test_trace_record_is_complete():
         "adjacency_note",
         "floor",
         "tokens",
-        "cost_usd",
         "forced_finalize",
         "degraded",
         "notes",
@@ -599,7 +599,7 @@ def test_trace_record_is_complete():
     json.dumps(trace)
 
 
-def test_trace_prices_any_listed_claude_model_per_turn():
+def test_trace_records_each_turns_usage():
     responses = [
         _message([_tool_use("search_statements", {"query": "retry"})]),
         _message(
@@ -616,8 +616,6 @@ def test_trace_prices_any_listed_claude_model_per_turn():
 
     turn = {"input": 10, "cache_read": 0, "cache_creation": 0, "output": 5}
     assert result.trace["turn_usage"] == [turn] * 3
-    # 3 turns of 10 input tokens at $3/MTok and 5 output tokens at $15/MTok.
-    assert result.trace["cost_usd"] == pytest.approx(3 * (10 * 3 + 5 * 15) / 1e6)
 
 
 def test_trace_written_to_jsonl_file(tmp_path):
@@ -637,7 +635,7 @@ def test_trace_written_to_jsonl_file(tmp_path):
     ]
     client = FakeAnthropic(responses)
     substrate = FakeSubstrate({"recon": [{"id": "stm_1", "text": "x"}]})
-    cfg = AskConfig(trace_log_path=str(log))
+    cfg = AskConfig(model="claude-haiku-4-5", trace_log_path=str(log))
     run_ask("why?", client=client, substrate=substrate, config=cfg)
 
     lines = log.read_text().strip().splitlines()

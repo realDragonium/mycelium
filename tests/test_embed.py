@@ -222,7 +222,6 @@ def test_openai_embedding_usage_is_metered(
         "text-embedding-3-small",
     )
     assert call.usage.input_tokens == 100
-    assert call.cost_usd == 0.000002
     assert call.ok is True
 
 

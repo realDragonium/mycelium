@@ -3,6 +3,7 @@ import { deleteJSON, enc, errorMessage, getJSON, postJSON, putJSON } from './api
 import { Card, KindTag, LoadError, Loading, Notice, formatDate } from './lib';
 import { Link } from './router';
 import { dataOf, useAsync } from './use-async';
+import { tokens } from './ai-usage';
 
 export type AudienceScope = 'internal' | 'external';
 export interface AudienceRef { id: string; name: string; scope: AudienceScope }
@@ -25,11 +26,11 @@ interface AgentTask {
 }
 export interface AudienceStatus {
   statements: number; labelled_ai: number; labelled_curator: number; unlabelled: number; queued: number; failed: number;
-  last_error: string | null; cost_usd: number; automatic: boolean; confirm_external_grants: boolean; model: string; provider: string;
+  last_error: string | null; tokens: number; automatic: boolean; confirm_external_grants: boolean; model: string; provider: string;
   backfill: BackfillProgress | null; external_agent?: boolean; agent_tasks?: AgentTask[];
 }
 interface Backfill { started_at: string; queued: number }
-interface BackfillProgress extends Backfill { labelled: number; cost_usd: number }
+interface BackfillProgress extends Backfill { labelled: number; tokens: number }
 export interface AudiencesResponse {
   audiences: AudienceView[]; can_configure: boolean; statements: number; unlabelled: number; pending: number; labelling: AudienceStatus;
 }
@@ -48,7 +49,6 @@ interface AudienceDraft { id: string; name: string; scope: AudienceScope; descri
 export const AudienceBadge = ({ scope }: { scope: AudienceScope }) => <span className={`audience-badge ${scope}`}>{scope}</span>;
 export const AudienceIdentity = ({ audience }: { audience: AudienceRef }) => <span className="audience-identity"><span>{audience.name}</span><AudienceBadge scope={audience.scope} /></span>;
 
-const formatCost = (value: number | null) => value === null ? '—' : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
 const labelSummary = (label: AudienceLabel | null, queued: boolean) => queued ? 'Queued for labelling' : !label ? 'Unlabelled' : `${label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}${label.text_changed_at ? ' · text changed since decision' : ''}`}${label.pending.length ? ' · waiting for confirmation' : ''}${label.narrowed ? ` · narrowed after an edit: ${label.narrowed.reason}` : ''}${label.spot_check ? ' · edited, external grant kept for a spot check' : ''}`;
 
 export function TextChangedActions({ statementId, onDone }: { statementId: string; onDone: () => void }) {
@@ -245,15 +245,15 @@ function LabellingCard({ data, onReload }: { data: AudiencesResponse; onReload: 
     setBusy(true); setError(null);
     try {
       const result = await postJSON<Backfill>('/api/audiences/labelling/backfill', { relabel_ai: relabelAi });
-      setPolledStatus({ ...status, queued: result.queued, backfill: { ...result, labelled: 0, cost_usd: 0 } });
+      setPolledStatus({ ...status, queued: result.queued, backfill: { ...result, labelled: 0, tokens: 0 } });
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   };
   return <Card title="Statement labelling" actions={data.can_configure && <><button type="button" className="btn sm" disabled={busy} onClick={() => void start(false)}>Label unlabelled statements</button><button type="button" className="btn ghost sm" disabled={busy} onClick={() => void start(true)}>Relabel AI labels</button></>}>
     <div className="audience-metrics"><div><b>{status.labelled_ai}</b><span>AI-labelled</span></div><div><b>{status.labelled_curator}</b><span>Curator</span></div><div><b>{status.unlabelled}</b><span>Unlabelled</span></div><div><b>{status.queued}</b><span>Queued</span></div><div><b>{status.failed}</b><span>Failed</span></div></div>
-    <p className="hint">{status.statements} statements · {formatCost(status.cost_usd)} estimated total cost · {status.external_agent ? 'labelled by external agents' : `${status.provider} / ${status.model}`} · Automatic labelling is <b>{status.automatic ? 'on' : 'off'}</b>. <Link to={{ view: 'settings', section: 'limits' }}>Change it under Limits.</Link></p>
+    <p className="hint">{status.statements} statements · {tokens(status.tokens)} tokens used · {status.external_agent ? 'labelled by external agents' : `${status.provider} / ${status.model}`} · Automatic labelling is <b>{status.automatic ? 'on' : 'off'}</b>. <Link to={{ view: 'settings', section: 'limits' }}>Change it under Limits.</Link></p>
     {status.external_agent && !!status.agent_tasks?.length && <p className="hint">{status.agent_tasks.length} batch{status.agent_tasks.length === 1 ? '' : 'es'} with agents · {status.agent_tasks.map(task => task.status === 'claimed' && task.claimed_by ? `claimed by ${task.claimed_by}` : 'waiting').join(' · ')}</p>}
-    {status.backfill && <Notice tone={running ? 'info' : 'success'}>{running ? `Labelling ${status.backfill.labelled} of ${status.backfill.queued} queued statements… Estimated cost since start: ${formatCost(status.backfill.cost_usd)}.` : 'Backfill finished.'}</Notice>}
+    {status.backfill && <Notice tone={running ? 'info' : 'success'}>{running ? `Labelling ${status.backfill.labelled} of ${status.backfill.queued} queued statements… ${tokens(status.backfill.tokens)} tokens used since start.` : 'Backfill finished.'}</Notice>}
     {status.last_error && <Notice tone="error">Last labelling error: {status.last_error}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
   </Card>;

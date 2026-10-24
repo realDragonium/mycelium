@@ -29,10 +29,10 @@ const FIELDS: Record<string, [string, number?, (number | 'any')?]> = {
   max_entities: ['Concepts in the overview', 1, 1], max_capabilities: ['Key statements in the overview', 0, 1],
   max_items: ['Maximum proposed documents', 1, 1], coverage_min_statements: ['Coverage gap from statements', 1, 1],
   replan_hint_statements: ['Re-plan hint after new statements', 1, 1], approve_batch: ['Items per batch approval', 1, 1],
-  monthly_limit_usd: ['Monthly budget in USD (0 for none)', 0, 'any'], warn_percent: ['Warn admins at percent of budget', 1, 1],
+  monthly_limit_tokens: ['Monthly budget in tokens (0 for none)', 0, 1], warn_percent: ['Warn admins at percent of budget', 1, 1],
   pause_background: ['Pause background actions at 100%'],
   quiet_minutes: ['Quiet minutes before an automatic revision', 0, 1], revisions_per_day: ['Automatic revisions per profile per day', 0, 1],
-  max_cost_usd: ['Spending cap per run (USD)', 0.01, 'any'],
+  max_run_tokens: ['Most tokens per run (0 for no cap)', 0, 1], max_draft_tokens: ['Most tokens to review one draft (0 for no cap)', 0, 1],
   image_max_bytes: ['Largest image (bytes)', 1, 1], video_max_bytes: ['Largest video (bytes)', 1, 1],
   stale_after_days: ['Flag media older than (days)', 1, 1],
   product_version: ['Current product version (blank turns the version check off)'],
@@ -191,7 +191,7 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
               {kind === 'ask' && 'Quick questions keep their smaller built-in limits. Thinking and caching apply when Claude is selected. '}
               {['ingest', 'docgen'].includes(kind) && 'Extended thinking applies when Claude is selected; reasoning effort is set with each action’s model. '}
               {kind === 'concurrency' ? 'Lower limits let running work finish and hold new runs until capacity frees up.'
-                : kind === 'ai_budget' ? 'A soft limit on estimated spend per UTC calendar month. Admins see a banner once spend passes the warning percentage. With pausing on, reaching 100% stops audience labelling, draft review and the connect pass from calling a model until the month ends or the budget is raised; Ask, ingest, documentation and alias discovery always run.'
+                : kind === 'ai_budget' ? 'A soft limit on tokens used per UTC calendar month, counting input, cache reads and writes, and output. Admins see a banner once usage passes the warning percentage. With pausing on, reaching 100% stops audience labelling, draft review and the connect pass from calling a model until the month ends or the budget is raised; Ask, ingest, documentation and alias discovery always run.'
                 : 'Saved limits apply to new runs.'}
             </p>
           </>}

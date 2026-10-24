@@ -1,7 +1,7 @@
 """The docgen trace: one complete, machine-readable JSON record per run.
 
 Same discipline as its siblings — every tool call with its args and result
-size, op count, model, latency, tokens, cost — but what is being scored here
+size, op count, model, latency, tokens — but what is being scored here
 is *whether the document was grounded*, so the record carries `grounding`
 (what the run retrieved against what the document cited) and the resolution
 it made, rather than a reconcile ledger.
@@ -19,7 +19,6 @@ from typing import Any, Literal, NotRequired, TypedDict
 from .. import agentloop
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
 from ..ai import Provider, Usage
-from ..ai.pricing import Price
 from ..tracing import SpanRecorder
 
 
@@ -47,7 +46,6 @@ class RunSummary(TypedDict):
     turns: int
     duration_s: float
     tokens: dict[str, int]
-    cost_usd: float | None
     statements_retrieved: int
     statements_cited: int
     gaps_filed: int
@@ -85,7 +83,7 @@ class TraceBuilder:
             "cache_creation": 0,
         }
     )
-    #: Token usage per model turn, in order, so a cost can be attributed to
+    #: Token usage per model turn, in order, so usage can be attributed to
     #: the turn that spent it.
     turn_usage: list[TurnUsage] = field(default_factory=list)
     #: knowledge gaps filed during the run, each "gap_id :: text".
@@ -135,23 +133,18 @@ class TraceBuilder:
             }
         )
 
-    def cost_usd(self, price: Price | None) -> float | None:
-        return agentloop.cost_usd(self.tokens, price)
-
     def progress(
         self,
         activity: str | None,
         *,
         elapsed_s: float,
         retrieved: int,
-        price: Price | None,
     ) -> RunSummary:
         return {
             "activity": activity,
             "turns": self.model_turns,
             "duration_s": round(elapsed_s, 1),
             "tokens": dict(self.tokens),
-            "cost_usd": self.cost_usd(price),
             "statements_retrieved": retrieved,
             "statements_cited": 0,
             "gaps_filed": len(self.reported_gaps),
@@ -164,7 +157,6 @@ class TraceBuilder:
         latency_ms: float,
         grounding: dict,
         cited: list[str],
-        price: Price | None,
     ) -> dict:
         tokens = dict(self.tokens)
         tokens["total"] = tokens["input"] + tokens["output"]
@@ -195,12 +187,10 @@ class TraceBuilder:
             "reviews": self.reviews,
             "tokens": tokens,
             "turn_usage": self.turn_usage,
-            "cost_usd": self.cost_usd(price),
             "summary": self.progress(
                 None,
                 elapsed_s=latency_ms / 1000.0,
                 retrieved=grounding["retrieved_ids"],
-                price=price,
             )
             | {"statements_cited": len(cited), "cited_statement_ids": cited},
             "forced_finalize": self.forced_finalize,

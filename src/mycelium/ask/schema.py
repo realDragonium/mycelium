@@ -29,7 +29,7 @@ class Answered(BaseModel):
     gaps: list[str] = Field(default_factory=list)
     #: statement ids the answer rests on.
     provenance: list[str] = Field(default_factory=list)
-    #: tool calls + args, op count, latency, token/cost, sub-question ledger.
+    #: tool calls + args, op count, latency, tokens, sub-question ledger.
     trace: dict = Field(default_factory=dict)
 
 

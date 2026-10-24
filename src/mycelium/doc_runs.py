@@ -123,9 +123,7 @@ def start_run(
     review_instructions = ai_prompts.resolve("document_review")
     if review == "server":
         if not config.model:
-            raise ValueError(
-                f"Choose a {config.provider} documentation model in AI settings."
-            )
+            raise ValueError(model_settings.missing_model("docgen", config.provider))
         if reason := model_settings.provider_availability(config.provider).reason:
             raise ValueError(reason)
     max_active = _max_active()

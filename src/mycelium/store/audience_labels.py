@@ -238,7 +238,6 @@ def set_label(
     source: Source,
     reason: str,
     model: str | None = None,
-    cost_usd: float | None = None,
     labelled_by: str | None = None,
     pending: Sequence[str] = (),
     decisions: dict[str, Decision] | None = None,
@@ -251,10 +250,10 @@ def set_label(
         "INSERT INTO statement_audience_labels "
         "(statement_id, audiences, source, reason, model, cost_usd, labelled_at, "
         "labelled_by, pending, decisions, narrowed, kept_on_edit) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(statement_id) DO UPDATE SET "
+        "VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?) ON CONFLICT(statement_id) DO UPDATE SET "
         "audiences = excluded.audiences, source = excluded.source, "
         "reason = excluded.reason, model = excluded.model, "
-        "cost_usd = excluded.cost_usd, labelled_at = excluded.labelled_at, "
+        "cost_usd = NULL, labelled_at = excluded.labelled_at, "
         "labelled_by = excluded.labelled_by, text_changed_at = NULL, "
         "pending = excluded.pending, decisions = excluded.decisions, "
         "narrowed = excluded.narrowed, kept_on_edit = excluded.kept_on_edit",
@@ -264,7 +263,6 @@ def set_label(
             source,
             reason,
             model,
-            cost_usd,
             _now(),
             labelled_by,
             _json_list(set(pending)),
@@ -285,7 +283,6 @@ def apply_ai_label(
     *,
     reason: str,
     model: str,
-    cost_usd: float | None,
     hold: Collection[str] = (),
     graph: Graph | None = None,
     narrowed: Narrowed | None = None,
@@ -335,7 +332,6 @@ def apply_ai_label(
         source="ai",
         reason=reason,
         model=model,
-        cost_usd=cost_usd,
         pending=sorted(waiting),
         decisions={key: value for key, value in decided.items() if key in kept},
         narrowed=narrowed,
@@ -749,22 +745,21 @@ def list_labelled_statements(
     return rows, total
 
 
-def label_counts(conn: sqlite3.Connection) -> tuple[int, int, int, float]:
-    """(total statements, AI labels, curator labels, label cost)."""
+def label_counts(conn: sqlite3.Connection) -> tuple[int, int, int]:
+    """(total statements, AI labels, curator labels)."""
     row = conn.execute(
         "SELECT (SELECT COUNT(*) FROM statements) AS total, "
         "(SELECT COUNT(*) FROM statement_audience_labels WHERE source = 'ai') AS ai, "
-        "(SELECT COUNT(*) FROM statement_audience_labels WHERE source = 'curator') AS curator, "
-        "(SELECT COALESCE(SUM(cost_usd), 0) FROM statement_audience_labels) AS cost"
+        "(SELECT COUNT(*) FROM statement_audience_labels WHERE source = 'curator') AS curator"
     ).fetchone()
-    return int(row["total"]), int(row["ai"]), int(row["curator"]), float(row["cost"])
+    return int(row["total"]), int(row["ai"]), int(row["curator"])
 
 
-def backfill_counts(conn: sqlite3.Connection, started_at: str) -> tuple[int, float]:
-    """AI labels and their cost since the backfill started."""
+def backfill_count(conn: sqlite3.Connection, started_at: str) -> int:
+    """AI labels since the backfill started."""
     row = conn.execute(
-        "SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost "
-        "FROM statement_audience_labels WHERE source = 'ai' AND labelled_at >= ?",
+        "SELECT COUNT(*) FROM statement_audience_labels "
+        "WHERE source = 'ai' AND labelled_at >= ?",
         (started_at,),
     ).fetchone()
-    return int(row["n"]), float(row["cost"])
+    return int(row[0])

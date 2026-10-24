@@ -12,7 +12,7 @@ Enabling the feature does not sweep the existing backlog. An administrator can
 list it with `GET /api/draft-review/backlog` and review it, oldest first, with
 `POST /api/draft-review/backlog`; see [Inspecting and rerunning](#inspecting-and-rerunning).
 In the web app, **Settings → Draft review** offers **Review N waiting drafts**,
-with the estimated cost and an optional spending limit, whenever review is on
+with the tokens it is likely to use and an optional token limit, whenever review is on
 and the backlog is not empty, and shows the review's progress with **Pause**
 and **Resume**.
 A curator can explicitly review an existing submitted draft.
@@ -21,7 +21,7 @@ A curator can explicitly review an existing submitted draft.
 
 Administrators configure review in **Settings → Draft review**, also linked
 from Drafts. It configures this action independently of
-Ask, Ingest, and Documentation. Choose the mode, provider, model ID, reasoning
+Ask, Ingest, and Documentation. Choose the mode, provider, model (from the [model catalog](AI_MODELS.md#model-catalog)), reasoning
 effort (empty uses the model's default), independent reviewer account, and
 whether **Allow applying accepted reviews** (`application_enabled`) is on, then
 save. Changes take effect for new submissions and explicit reruns
@@ -82,7 +82,7 @@ settings disable review instead of reviving environment defaults. The settings
 form reports the error and allows an administrator to save an explicit repair;
 saving off does not depend on credentials or a valid reviewer. Backup refuses
 to omit unreadable instance settings; restore validates the required settings
-section before replacing an existing instance. Older archives without settings receive built-in defaults with automation off. Restore never imports the target environment.
+section before replacing an existing instance. Older archives without settings restore with no model chosen and automation off. Restore never imports the target environment.
 
 ## Evidence and scope
 
@@ -146,11 +146,11 @@ applied together with the others'. The draft keeps one assessment, whose
 `parts` lists each part's label, rationale, questions, corrections,
 contradictions and operations; the Drafts screen shows them under **Reviewed in N parts**.
 
-Before any call the reviewer estimates the review's cost from the context
-size, the output bound and the model's price, and refuses a draft that could
-cost more than **Settings → Product → Draft review → Spending cap per run**
-(US$1 by default), naming the estimate and asking for smaller drafts. A model
-without a known price has no cap.
+Before any call the reviewer estimates the tokens the review could use from
+each part's context size and the output bound, and refuses a draft that could
+use more than **Settings → Limits → Draft review → Most tokens to review one
+draft** (300,000 by default, 0 for no cap), naming the estimate and asking for
+smaller drafts.
 
 A draft that would overwrite a record changed after the draft was created, or
 one that no longer exists, is refused without a call, so an old draft never
@@ -326,9 +326,9 @@ from the creator-supplied evidence. It returns `{review: ...}` for the new
 attempt.
 
 Admin-only `GET /api/draft-review/backlog` returns `{draft_ids: [...],
-estimated_cost_usd}`: submitted drafts the current configuration has not
-reached, and what reviewing them is likely to cost, from the average cost of a
-review run over the last 30 days (`null` without a priced one). That is a draft with no
+estimated_tokens}`: submitted drafts the current configuration has not
+reached, and the tokens reviewing them is likely to use, from the average
+review run over the last 30 days (`null` without one). That is a draft with no
 attempt, a failed attempt that recorded no review, an advisory assessment
 made under another mode, any unapplied assessment in `review-and-apply` (for
 example one held by the application gate), or a question or held corrections
@@ -336,12 +336,12 @@ whose draft has changed since. Drafts containing only alias suggestions are excl
 It also returns `job`: the backlog review this process last started, or
 `null`.
 
-`POST /api/draft-review/backlog`, with an optional `{budget_usd}`, starts that
+`POST /api/draft-review/backlog`, with an optional `{budget_tokens}`, starts that
 review and returns `{job}`. It reviews one draft at a time, oldest first, each
 draft at most once per job, and before each draft stops when the job's
-spending plus the average run cost would pass `budget_usd`, or when the
+tokens plus those of an average run would pass `budget_tokens`, or when the
 monthly AI budget is reached. The job reports `status` (`running`, `paused`,
-`finished`), `spent_usd`, `reviewed`, `remaining` and a `detail` saying why it
+`finished`), `budget_tokens`, `used_tokens`, `reviewed`, `remaining` and a `detail` saying why it
 stopped. `POST /api/draft-review/backlog/pause` stops it after the draft under
 review, and `POST /api/draft-review/backlog/resume` continues it. Starting
 again while a job is unfinished is refused. The job lives in the server

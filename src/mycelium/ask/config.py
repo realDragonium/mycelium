@@ -1,15 +1,10 @@
 """Tunables for the `ask` reasoning loop.
 
-Model choices use saved per-action settings, with legacy environment values imported
-once on upgrade. Task budgets come from saved AI settings.
-
-The model default is **Haiku** (`claude-haiku-4-5`). The spec originally
-mandated one model (Sonnet), but the ask loop's latency is dominated by
-per-call model inference across its sequential retrieval turns, and Haiku's
-much lower per-call latency is the only lever that brings a multi-hop answer
-under ~40s. The id is config, never hardcoded in logic; set
-`MYCELIUM_ASK_MODEL=claude-sonnet-4-6` before the one-time upgrade import, or choose Sonnet
-in AI settings. A model missing from the list-price table gets no cost estimate.
+The model is the one saved for the `ask` action in AI settings, picked from
+the admin's model catalog; there is no built-in default. The loop's latency is
+dominated by per-call model inference across its sequential retrieval turns,
+so a small, fast model keeps a multi-hop answer under ~40s. Task budgets come
+from saved AI settings.
 """
 
 from __future__ import annotations
@@ -18,11 +13,7 @@ import os
 from dataclasses import dataclass, field, replace
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider, ReasoningEffort, pricing
-
-#: Current Haiku model id (confirmed against Anthropic's model catalog:
-#: claude-haiku-4-5, 200K context, $1/$5 per MTok).
-DEFAULT_MODEL = "claude-haiku-4-5"
+from ..ai import Provider, ReasoningEffort
 
 #: The `quick` depth profile (see `for_depth`). A time-boxed caller — e.g.
 #: Intercom, which drops an MCP call at ~30s — cannot afford the floor's forced
@@ -37,7 +28,7 @@ QUICK_REQUEST_TIMEOUT_S = 20.0
 
 @dataclass(frozen=True)
 class AskConfig:
-    model: str = DEFAULT_MODEL
+    model: str = ""
     provider: Provider = "claude"
     reasoning_effort: ReasoningEffort | None = None
     limits: product_settings.AskSettings = field(
@@ -55,10 +46,6 @@ class AskConfig:
     #: under the data dir so on Fargate it lands on the writable volume and the
     #: `/api/traces` endpoint can serve it. Empty string disables file writing.
     trace_dir: str | None = None
-
-    @property
-    def price(self) -> pricing.Price | None:
-        return pricing.price(self.provider, self.model)
 
     @classmethod
     def from_env(cls) -> AskConfig:

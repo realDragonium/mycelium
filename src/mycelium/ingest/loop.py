@@ -235,9 +235,9 @@ class _RunContext:
     nudged: bool = False
     floor_blocks: int = 0
     malformed_retries: int = 0
-    #: Held back from the spending cap so the turns that end the run fit
+    #: Held back from the token cap so the turns that end the run fit
     #: under it: see `_reserve`.
-    largest_turn_usd: float = 0.0
+    largest_turn_tokens: int = 0
     largest_output_tokens: int = 0
     history_tokens: int = 0
     #: An outside agent's emit_draft input, standing in for the model's turns
@@ -311,11 +311,10 @@ def _execute(
         reason = (
             check_budget(trace, config.limits, start, max_turns)
             or ("wall_clock" if time.monotonic() >= ctx.reading_until else None)
-            or _cost_reached(trace, config, _reserve(ctx, config))
+            or _tokens_reached(trace, config, _reserve(ctx))
         )
         if reason:
             return _forced_finalize(reason, ctx)
-        spent_before = _spent(trace, config)
         tokens_before = dict(trace.tokens)
 
         try:
@@ -342,7 +341,7 @@ def _execute(
             return _forced_finalize("wall_clock" if stopped else "api_error", ctx)
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
-        _note_turn(ctx, config, spent_before, tokens_before)
+        _note_turn(ctx, tokens_before)
         messages.append({"role": "assistant", "content": resp.content})
 
         tool_uses = [block for block in resp.content if isinstance(block, ai.ToolUse)]
@@ -392,49 +391,31 @@ def _execute(
             return result
 
 
-def _spent(trace: TraceBuilder, config: IngestConfig) -> float:
-    return trace.cost_usd(config.price) or 0.0
+def _used(trace: TraceBuilder) -> int:
+    return sum(trace.tokens.values())
 
 
-def _note_turn(
-    ctx: _RunContext,
-    config: IngestConfig,
-    spent_before: float,
-    tokens_before: Mapping[str, int],
-) -> None:
+def _note_turn(ctx: _RunContext, tokens_before: Mapping[str, int]) -> None:
     turn = {k: v - tokens_before[k] for k, v in ctx.trace.tokens.items()}
-    ctx.largest_turn_usd = max(
-        ctx.largest_turn_usd, _spent(ctx.trace, config) - spent_before
-    )
+    ctx.largest_turn_tokens = max(ctx.largest_turn_tokens, sum(turn.values()))
     ctx.largest_output_tokens = max(ctx.largest_output_tokens, turn["output"])
     ctx.history_tokens = sum(turn.values())
 
 
-def _reserve(ctx: _RunContext, config: IngestConfig) -> float:
-    """What the run may still spend after this check: one more reading turn
-    like the dearest so far, then the forced emit. Forcing the tool choice
-    invalidates the cached history: that turn writes the whole history to the
-    cache again."""
-    price = config.price
-    if price is None:
-        return 0.0
-    return ctx.largest_turn_usd + price.cost_usd(
-        ai.Usage(
-            cache_creation_input_tokens=ctx.history_tokens,
-            output_tokens=ctx.largest_output_tokens,
-        )
-    )
+def _reserve(ctx: _RunContext) -> int:
+    """What the run may still use after this check: one more reading turn
+    like the largest so far, then the forced emit, which reads the whole
+    history again."""
+    return ctx.largest_turn_tokens + ctx.history_tokens + ctx.largest_output_tokens
 
 
-def _cost_reached(
-    trace: TraceBuilder, config: IngestConfig, reserve_usd: float
+def _tokens_reached(
+    trace: TraceBuilder, config: IngestConfig, reserve: int
 ) -> str | None:
-    """The spending cap, checked before each turn; an unpriced model has no
-    cap."""
-    if config.max_cost_usd is None or config.price is None:
+    """The token cap, checked before each turn."""
+    if not config.max_run_tokens:
         return None
-    spent = _spent(trace, config)
-    return "cost_cap" if spent + reserve_usd >= config.max_cost_usd else None
+    return "token_cap" if _used(trace) + reserve >= config.max_run_tokens else None
 
 
 def _handle_emit(tool_use: Any, ctx: _RunContext) -> IngestResult | None:
@@ -1193,7 +1174,6 @@ def _build_trace(trace: TraceBuilder, outcome: str, ctx: _RunContext) -> dict:
         outcome=outcome,
         latency_ms=latency_ms,
         floor=_floor_state(ctx.reads_after_vocab),
-        price=config.price,
     )
     tracing.emit_trace(
         trace.spans,

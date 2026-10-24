@@ -86,6 +86,7 @@ class SettingsView(Snapshot):
     openai_model: str
     claude_reasoning_effort: ClaudeEffort | None = None
     openai_reasoning_effort: ReasoningEffort | None = None
+    catalog: list[model_settings.CatalogModel]
 
 
 def load_controls(conn: sqlite3.Connection) -> ControlSnapshot:
@@ -148,7 +149,7 @@ def configuration_issues(settings: Settings) -> list[str]:
 
     issues = []
     if not settings.model:
-        issues.append("Enter a model ID for the selected provider.")
+        issues.append(model_settings.missing_model("draft_review", settings.provider))
     availability = model_settings.provider_availability(settings.provider)
     if availability.reason:
         issues.append(availability.reason)
@@ -202,6 +203,7 @@ def view(principal: auth.Principal) -> SettingsView:
             model_settings.provider_availability("openai"),
         ],
         reviewers=reviewers,
+        catalog=model_settings.catalog_view(),
     )
 
 

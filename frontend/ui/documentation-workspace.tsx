@@ -7,7 +7,7 @@ import { AudienceIdentity, type AudienceRef } from './audiences';
 
 interface DocumentationRoute { tab: string; document: string | null; revision: string | null; run: string | null; profile: string | null }
 interface DocumentationModelOption {
-  provider: string; label: string; model: string | null; reasoning_effort: string | null; available: boolean;
+  provider: string; label: string; model: string | null; reasoning_effort: string | null; available: boolean; reason: string | null;
 }
 interface DocumentationOptions {
   default_provider: string;
@@ -33,7 +33,7 @@ interface DocumentationRun {
 interface RunSummary {
   activity: string | null; turns: number; duration_s: number;
   tokens: { input: number; cache_read: number; cache_creation: number; output: number };
-  cost_usd: number | null; statements_retrieved: number; statements_cited: number; gaps_filed: number;
+  statements_retrieved: number; statements_cited: number; gaps_filed: number;
   cited_statement_ids?: string[];
   review_findings?: ReviewNote[];
 }
@@ -74,7 +74,7 @@ interface PlanItem {
 }
 interface PlanSummary {
   id: string; created_at: string; finished_at: string | null; outcome: 'planned' | 'failed' | null; error: string | null; activity: string | null;
-  provider: string | null; model: string | null; cost_usd: number | null; proposed: number | null; dropped: Record<string, number>; agent_task?: AgentTask | null;
+  provider: string | null; model: string | null; tokens: number | null; proposed: number | null; dropped: Record<string, number>; agent_task?: AgentTask | null;
 }
 interface DocumentationPlan {
   guideline_set: string; audience: AudienceRef | null; unavailable: string | null; latest: PlanSummary | null; items: PlanItem[];
@@ -126,8 +126,8 @@ const docEntityName = (id: string) => substrate.data.entities.find(entity => ent
 const docDate = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : 'Not recorded';
 const docTokens = (count: number) => count >= 1000 ? `${(count / 1000).toFixed(count >= 100_000 ? 0 : 1)}k` : String(count);
 const docDuration = (seconds: number) => seconds >= 60 ? `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} s` : `${Math.round(seconds)} s`;
-const docCost = (summary: RunSummary) => summary.cost_usd === null ? 'cost not estimated' : `about $${summary.cost_usd.toFixed(2)}`;
-const docRunLine = (summary: RunSummary) => `${summary.turns} turns · ${docDuration(summary.duration_s)} · ${docCost(summary)} · ${summary.statements_cited} of ${summary.statements_retrieved} retrieved statements cited`;
+const docTotalTokens = ({ tokens }: RunSummary) => tokens.input + tokens.cache_read + tokens.cache_creation + tokens.output;
+const docRunLine = (summary: RunSummary) => `${summary.turns} turns · ${docDuration(summary.duration_s)} · ${docTokens(docTotalTokens(summary))} tokens · ${summary.statements_cited} of ${summary.statements_retrieved} retrieved statements cited`;
 
 function agentRunStatus(task: AgentTask) {
   if (task.status === 'waiting') return <>Waiting for an agent to claim it.{task.release_reason && <> Last released: {task.release_reason}.</>}</>;
@@ -157,7 +157,6 @@ function DocumentationRunSummary({ summary }: { summary: RunSummary }) {
   return <dl className="docw-summary">
     <div><dt>Turns</dt><dd>{summary.turns}</dd></div>
     <div><dt>Duration</dt><dd>{docDuration(summary.duration_s)}</dd></div>
-    <div><dt>Estimated cost</dt><dd>{summary.cost_usd === null ? 'Not estimated for this model' : `$${summary.cost_usd.toFixed(2)}`}</dd></div>
     <div><dt>Input tokens</dt><dd>{docTokens(tokens.input + tokens.cache_read + tokens.cache_creation)} ({docTokens(tokens.cache_read)} from cache)</dd></div>
     <div><dt>Output tokens</dt><dd>{docTokens(tokens.output)}</dd></div>
     <div><dt>Statements</dt><dd>{summary.statements_cited} cited of {summary.statements_retrieved} retrieved</dd></div>
@@ -170,7 +169,7 @@ function DocumentationModel({ options, value, onChange, disabled, filter }: {
   filter?: (model: DocumentationModelOption) => boolean;
 }) {
   return <label>Model for this run<select value={value} onChange={event => onChange(event.target.value)} disabled={disabled}>
-    {options.models.filter(model => !filter || filter(model)).map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.provider === 'agent' ? model.label : `${model.label} · ${model.model} · ${model.reasoning_effort ?? 'Model default'} effort${model.available ? '' : ' (unavailable)'}`}</option>)}
+    {options.models.filter(model => !filter || filter(model)).map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.provider === 'agent' ? model.label : model.model ? `${model.label} · ${model.model} · ${model.reasoning_effort ?? 'Model default'} effort${model.available ? '' : ' (unavailable)'}` : `${model.label} · no model chosen`}</option>)}
   </select></label>;
 }
 
@@ -230,7 +229,7 @@ function DocumentationGenerator({ options, document, documents = [], onStarted }
       <button type="submit" disabled={!allowed || !prompt.trim()}>{busy ? 'Starting…' : document || anchored ? 'Generate next revision' : 'Generate document'}</button>
     </fieldset>
     {!options.can_generate && <p>Writer or admin access is required to generate and publish documents.</p>}
-    {!selected?.available && <p>The selected provider needs server credentials before it can run.</p>}
+    {!selected?.available && <p>{selected?.reason || 'The selected provider needs server credentials before it can run.'}</p>}
     {error && <p role="alert">{error}</p>}
     {bothEdited && <div className="docw-actions"><button type="button" disabled={busy} onClick={event => submit(event, true)}>Start from the published copy on GitHub</button></div>}
     {bothEdited && document && <p>The new revision starts from the GitHub text; revision {document.current_revision} stays in the history.</p>}
@@ -549,7 +548,7 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
         <button type="button" disabled={!canAct || active || !!plan.unavailable} onClick={() => act(() => docPost('plans/' + encodeURIComponent(selected), {}))}>{active ? 'Planning…' : latest ? 'Plan again' : 'Plan documentation'}</button>
         {latest?.finished_at && (latest.provider === 'agent'
           ? <span className="docw-meta">Last plan made by an external agent</span>
-          : latest.cost_usd !== null && <span className="docw-meta">Last plan cost about ${latest.cost_usd.toFixed(2)} · {latest.model}</span>)}
+          : latest.tokens !== null && <span className="docw-meta">Last plan used {docTokens(latest.tokens)} tokens · {latest.model}</span>)}
       </div>}
       {active && latest && <p role="status">{latest.agent_task ? agentPlanStatus(latest.agent_task) : <>{latest.activity || 'Planning'}… started {docDate(latest.created_at)}.</>} You can leave this screen; the plan keeps running.</p>}
       {plan?.replan_hint && <p role="status">{plan.new_since_plan} statements became visible to this audience since the last plan. Plan again to consider them.</p>}

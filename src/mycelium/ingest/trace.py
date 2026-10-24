@@ -1,7 +1,7 @@
 """The ingest trace: one complete, machine-readable JSON record per run.
 
 Adapted from `ask/trace.py` (kept untouched). The same discipline applies —
-record every tool call, op count, model/latency/token/cost — but the ledger
+record every tool call, op count, model/latency/tokens — but the ledger
 here is the *per-candidate reconcile ledger* plus the proposed ops, flagged
 contradictions, and skipped duplicates, because the thing being scored is
 "did each extracted fact get reconciled and classified before any op was
@@ -20,7 +20,6 @@ from typing import Any
 from .. import agentloop
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
 from ..ai import Provider
-from ..ai.pricing import Price
 from ..tracing import SpanRecorder
 
 
@@ -81,16 +80,12 @@ class TraceBuilder:
     def add_usage(self, usage: Any) -> None:
         agentloop.add_usage(self, usage)
 
-    def cost_usd(self, price: Price | None) -> float | None:
-        return agentloop.cost_usd(self.tokens, price)
-
     def build(
         self,
         *,
         outcome: str,
         latency_ms: float,
         floor: dict,
-        price: Price | None,
     ) -> dict:
         tokens = dict(self.tokens)
         tokens["total"] = tokens["input"] + tokens["output"]
@@ -112,7 +107,6 @@ class TraceBuilder:
             "gaps": self.gaps,
             "floor": floor,
             "tokens": tokens,
-            "cost_usd": self.cost_usd(price),
             "forced_finalize": self.forced_finalize,
             "degraded": self.degraded,
             "notes": self.notes,

@@ -9,11 +9,13 @@ from mycelium import auth, docs_store, drafts_store, server
 from mycelium.docgen.publication import BothSidesEdited
 from mycelium.http import create_app
 from mycelium.http.authentication import AuthMiddleware
+from settings_helpers import assume_configured_models
 
 
 @pytest.fixture(autouse=True)
 def _anthropic_credentials(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+    assume_configured_models(monkeypatch)
 
 
 @pytest.fixture

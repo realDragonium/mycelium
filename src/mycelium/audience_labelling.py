@@ -47,7 +47,6 @@ from . import (
     workers,
 )
 from .agent_tasks import View as AgentTaskView
-from .ai.pricing import price
 from .audiences import Audience
 
 logger = logging.getLogger(__name__)
@@ -192,7 +191,7 @@ def label_batches(conn: sqlite3.Connection, *, call: Call = _call) -> int | None
     try:
         if not live:
             raise ValueError("No audiences are configured.")
-        selected = model_settings.get("audience_labelling")
+        selected = model_settings.require("audience_labelling")
         config = ai.ModelConfig(
             provider=selected.provider,
             model=selected.model,
@@ -223,12 +222,11 @@ def label_batches(conn: sqlite3.Connection, *, call: Call = _call) -> int | None
             for task in tasks
         ]
 
-    cost = price(selected.provider, selected.model)
     labelled = 0
     first_error: Exception | None = None
     for chunk, future in zip(chunks, futures, strict=True):
         try:
-            result, usage = future.result()
+            result, _ = future.result()
         except ai.usage.Paused as exc:
             first_error = first_error or exc
         except Exception as exc:
@@ -238,14 +236,12 @@ def label_batches(conn: sqlite3.Connection, *, call: Call = _call) -> int | None
                     conn, [str(row["id"]) for row in chunk], str(exc)
                 )
         else:
-            share = cost.cost_usd(usage) / len(chunk) if cost is not None else None
             labelled += _apply(
                 conn,
                 chunk,
                 result,
                 live=live,
                 model=selected.model,
-                share=share,
                 confirm_external_grants=limits.confirm_external_grants,
             )
     if first_error is not None:
@@ -260,7 +256,6 @@ def _apply(
     *,
     live: tuple[Audience, ...],
     model: str,
-    share: float | None,
     confirm_external_grants: bool,
 ) -> int:
     """Store what the labeller decided for the queued statements in `rows`
@@ -296,7 +291,6 @@ def _apply(
                 granted,
                 reason=reason,
                 model=model,
-                cost_usd=share,
                 hold=hold,
                 graph=graph,
                 narrowed=narrowed,
@@ -505,7 +499,6 @@ def _submit_agent_task(
         labelling,
         live=live,
         model=f"agent:{claimant}",
-        share=None,
         confirm_external_grants=limits.confirm_external_grants,
     )
     return agent_tasks.closed(
@@ -671,7 +664,8 @@ def stop(timeout: float = 5.0) -> None:
 
 class BackfillProgress(Backfill):
     labelled: int
-    cost_usd: float
+    #: Tokens audience labelling used since the backfill started.
+    tokens: int
 
 
 class Status(BaseModel):
@@ -682,7 +676,8 @@ class Status(BaseModel):
     queued: int
     failed: int
     last_error: str | None
-    cost_usd: float
+    #: Tokens audience labelling has used, as the AI usage ledger counts them.
+    tokens: int
     automatic: bool
     confirm_external_grants: bool
     model: str
@@ -695,19 +690,20 @@ class Status(BaseModel):
 
 
 def status(conn: sqlite3.Connection) -> Status:
-    from . import drafts_store
+    from . import ai_usage, drafts_store
 
-    total, ai, curator, cost = store.audience_labels.label_counts(conn)
+    total, ai, curator = store.audience_labels.label_counts(conn)
     queued, failed, error = store.audience_labels.queue_counts(conn)
     selected = model_settings.get("audience_labelling")
     # Progress is read from the queue, so it survives a restart: the run
     # began when its oldest waiting statement was queued.
     started = store.audience_labels.queue_started_at(conn)
-    progress = (
-        store.audience_labels.backfill_counts(conn, started)
+    labelled_since = (
+        store.audience_labels.backfill_count(conn, started)
         if started is not None
         else None
     )
+    ledger = drafts_store.connection()
     return Status(
         statements=total,
         labelled_ai=ai,
@@ -716,7 +712,7 @@ def status(conn: sqlite3.Connection) -> Status:
         queued=queued,
         failed=failed,
         last_error=error,
-        cost_usd=round(cost, 4),
+        tokens=ai_usage.action_tokens(ledger, "audience_labelling"),
         automatic=_automatic(),
         confirm_external_grants=_confirming(),
         model=selected.model,
@@ -730,10 +726,10 @@ def status(conn: sqlite3.Connection) -> Status:
         ],
         backfill=BackfillProgress(
             started_at=started,
-            queued=queued + progress[0],
-            labelled=progress[0],
-            cost_usd=round(progress[1], 4),
+            queued=queued + labelled_since,
+            labelled=labelled_since,
+            tokens=ai_usage.action_tokens(ledger, "audience_labelling", started),
         )
-        if started is not None and progress is not None
+        if started is not None and labelled_since is not None
         else None,
     )

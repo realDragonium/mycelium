@@ -22,8 +22,13 @@ from mycelium import (
 from mycelium.docgen.config import DocgenConfig, model_choices, resolve_provider
 from mycelium.docgen.loop import _execute
 from mycelium.docgen.schema import DocumentWritten, NothingWritten
-from settings_helpers import save_model
+from settings_helpers import assume_configured_models, save_model
 from test_docgen import FakeGapReporter, _substrate
+
+
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    assume_configured_models(monkeypatch)
 
 
 def _call(
@@ -257,7 +262,6 @@ def test_gpt_generation_retains_grounding_and_fresh_review(monkeypatch, review_p
     assert isinstance(result, DocumentWritten if review_pass else NothingWritten)
     assert all(turn["model"] == "configured-gpt" for turn in captured)
     assert result.trace["provider"] == "openai"
-    assert result.trace["cost_usd"] is None
     reviews = [turn for turn in captured if isinstance(turn["tool_choice"], dict)]
     assert reviews
     assert all(len(turn["input"]) == 1 for turn in reviews)

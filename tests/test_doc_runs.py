@@ -27,11 +27,13 @@ from mycelium import (
 )
 from mycelium.server import admission
 from product_settings_helpers import set_product
+from settings_helpers import assume_configured_models
 
 
 @pytest.fixture(autouse=True)
 def _anthropic_credentials(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+    assume_configured_models(monkeypatch)
 
 
 @pytest.fixture(autouse=True)

@@ -29,16 +29,7 @@ Status = Literal["done", "todo", "dismissed"]
 #: The settings screen each step is completed on.
 Section = Literal["models", "audiences", "documentation", "review", "usage"]
 
-ACTION_NAMES: dict[model_settings.Action, str] = {
-    "ask": "Ask",
-    "ingest": "Ingestion",
-    "docgen": "Document generation",
-    "draft_review": "Draft review",
-    "alias_discovery": "Alias discovery",
-    "audience_labelling": "Audience labelling",
-    "documentation_planning": "Documentation planning",
-    "connect": "Connecting statements",
-}
+ACTION_NAMES = model_settings.ACTION_NAMES
 PROVIDER_NAMES: dict[Provider, str] = {"claude": "Claude", "openai": "OpenAI"}
 MODES: dict[str, str] = {
     "off": "Off",
@@ -178,10 +169,10 @@ def _review(controls: draft_review_settings.ControlSnapshot) -> tuple[Status, st
 def _budget(prompts: sqlite3.Connection) -> tuple[Status, str]:
     limit = product_settings.get(
         product_settings.AIBudgetSettings, conn=prompts
-    ).monthly_limit_usd
+    ).monthly_limit_tokens
     if limit > 0:
-        return "done", f"${limit:,.2f} a month."
-    return "todo", "Set a monthly limit to be warned before AI spend runs over."
+        return "done", f"{limit:,} tokens a month."
+    return "todo", "Set a monthly token limit to be warned before AI use runs over."
 
 
 def blocked(review_mode: str, prompts: sqlite3.Connection) -> list[Blocked]:

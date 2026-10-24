@@ -48,7 +48,6 @@ from . import (
     request_timing,
     store,
 )
-from .ai.pricing import price
 from .audiences import Audience
 from .doc_plans import Item
 
@@ -658,15 +657,17 @@ def plan(
         ):
             doc_plans.record_activity(drafts, plan_id, "Proposing documents")
             proposal, usage = call(inputs.task, config)
-        cost = price(selected.provider, selected.model)
         _keep(
             drafts,
             plan_id,
             planned,
             inputs,
             proposal,
-            tokens={"input": usage.input_tokens, "output": usage.output_tokens},
-            cost_usd=cost.cost_usd(usage) if cost is not None else None,
+            tokens={
+                "input": usage.input_tokens + usage.cache_creation_input_tokens,
+                "cached": usage.cache_read_input_tokens,
+                "output": usage.output_tokens,
+            },
         )
     except Exception as exc:
         logger.exception("documentation planning failed: %s", plan_id)
@@ -686,8 +687,8 @@ def start(guideline_set: str, *, created_by: str | None) -> str:
 
     planned = target(guideline_set, documentation_profiles.capture())
     selected = model_settings.get("documentation_planning")
-    if not selected.external_agent and not selected.model:
-        raise Unavailable("Choose a documentation planning model in AI settings.")
+    if reason := model_settings.model_error("documentation_planning", selected):
+        raise Unavailable(reason)
     drafts = drafts_store.connection()
     with _start_lock:
         if doc_plans.active_plan(drafts, guideline_set) is not None:
@@ -1009,7 +1010,8 @@ class PlanSummary(BaseModel):
     activity: str | None
     provider: str | None
     model: str | None
-    cost_usd: float | None
+    #: Every token the plan's model call used; None when an agent made it.
+    tokens: int | None
     proposed: int | None
     dropped: dict[str, int]
     #: The task an outside agent makes the plan through, when one does.
@@ -1039,7 +1041,7 @@ class PlanView(BaseModel):
 
 def _summary(row: sqlite3.Row, drafts: sqlite3.Connection) -> PlanSummary:
     summary = json.loads(row["summary"]) if row["summary"] else {}
-    cost = summary.get("cost_usd")
+    tokens = summary.get("tokens")
     proposed = summary.get("proposed")
     return PlanSummary(
         id=str(row["id"]),
@@ -1050,7 +1052,9 @@ def _summary(row: sqlite3.Row, drafts: sqlite3.Connection) -> PlanSummary:
         activity=row["activity"],
         provider=row["provider"],
         model=row["model"],
-        cost_usd=float(cost) if cost is not None else None,
+        tokens=sum(int(count) for count in tokens.values())
+        if isinstance(tokens, dict)
+        else None,
         proposed=int(proposed) if proposed is not None else None,
         dropped={str(k): int(v) for k, v in summary.get("dropped", {}).items()},
         agent_task=None

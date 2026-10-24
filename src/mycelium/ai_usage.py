@@ -1,15 +1,17 @@
-"""What the instance spends on models: the call ledger, reports and budget.
+"""What the instance uses on models: the call ledger, reports and budget.
 
 Every model call lands here through the recorder `install` hands to
 `ai.usage`, one compact row per call, in the drafts database beside the runs
 it is attributed to. Like those runs it is operational history rather than
 substrate truth. It rides along in backups: rows are small, and a restore
-without them would reset the month's spend and silently re-arm a budget that
+without them would reset the month's usage and silently re-arm a budget that
 had paused background work.
 
-Costs are list-price estimates (`ai.pricing`); a call to an unpriced model
-keeps its tokens with no cost and is counted separately so a total never
-reads as complete when it is not. Days and the budget month are UTC.
+Usage is counted in tokens: a call's total is everything the provider
+processed for it, input, cache reads, cache writes and output. Mycelium
+keeps no prices; spend is on each provider's billing dashboard. Rows written
+by earlier versions keep their `cost_usd`, which nothing reads any more.
+Days and the budget month are UTC.
 
 The recorder writes through its own autocommit connection per thread, so a
 call made while the caller holds a drafts transaction neither joins nor
@@ -80,8 +82,8 @@ def uninstall() -> None:
 def record(conn: sqlite3.Connection, call: usage.Call, at: str | None = None) -> None:
     conn.execute(
         "INSERT INTO ai_usage (at, action, provider, model, input_tokens, "
-        "cached_tokens, cache_write_tokens, output_tokens, cost_usd, duration_ms, "
-        "ok, run_id, draft_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "cached_tokens, cache_write_tokens, output_tokens, duration_ms, "
+        "ok, run_id, draft_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             at or timestamps.now(),
             call.action,
@@ -91,7 +93,6 @@ def record(conn: sqlite3.Connection, call: usage.Call, at: str | None = None) ->
             call.usage.cache_read_input_tokens,
             call.usage.cache_creation_input_tokens,
             call.usage.output_tokens,
-            call.cost_usd,
             call.duration_ms,
             int(call.ok),
             call.run_id,
@@ -102,47 +103,46 @@ def record(conn: sqlite3.Connection, call: usage.Call, at: str | None = None) ->
 
 # --- reports -------------------------------------------------------------------
 
+#: Every token a call processed.
+_TOKENS = "input_tokens + cached_tokens + cache_write_tokens + output_tokens"
 
-class Totals(BaseModel):
+
+class Tokens(BaseModel):
     calls: int
-    failed_calls: int
-    unpriced_calls: int
+    #: Input the provider processed without a cache hit, cache writes included.
     input_tokens: int
+    #: Input read from the provider's prompt cache.
     cached_tokens: int
     output_tokens: int
-    cost_usd: float
+    #: All of the above.
+    tokens: int
+
+
+class Totals(Tokens):
+    failed_calls: int
 
 
 class Day(BaseModel):
     day: str
     calls: int
-    cost_usd: float
+    tokens: int
 
 
-class ActionSpend(BaseModel):
+class ActionUsage(Tokens):
     action: str
-    calls: int
-    input_tokens: int
-    output_tokens: int
-    cost_usd: float
 
 
-class ModelSpend(BaseModel):
+class ModelUsage(Tokens):
     provider: str
     model: str
-    calls: int
-    input_tokens: int
-    output_tokens: int
-    cost_usd: float
-    priced: bool
 
 
-class RunSpend(BaseModel):
+class RunUsage(BaseModel):
     action: str
     run_id: str | None
     draft_id: str | None
     calls: int
-    cost_usd: float
+    tokens: int
     last_at: str
 
 
@@ -150,74 +150,61 @@ class Report(BaseModel):
     since: str
     totals: Totals
     days: list[Day]
-    actions: list[ActionSpend]
-    models: list[ModelSpend]
-    runs: list[RunSpend]
+    actions: list[ActionUsage]
+    models: list[ModelUsage]
+    runs: list[RunUsage]
 
 
 _SUMS = (
-    "COUNT(*) AS calls, COALESCE(SUM(input_tokens + cached_tokens + "
-    "cache_write_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) "
-    "AS output_tokens, COALESCE(SUM(cost_usd), 0) AS cost_usd"
+    "COUNT(*) AS calls, "
+    "COALESCE(SUM(input_tokens + cache_write_tokens), 0) AS input_tokens, "
+    "COALESCE(SUM(cached_tokens), 0) AS cached_tokens, "
+    "COALESCE(SUM(output_tokens), 0) AS output_tokens, "
+    f"COALESCE(SUM({_TOKENS}), 0) AS tokens"
 )
 
 
 def report(conn: sqlite3.Connection, since: str, *, top_runs: int = 10) -> Report:
-    """Spend from `since` (a `timestamps` value) on, and the most expensive
-    runs that made calls in that period."""
+    """Token use from `since` (a `timestamps` value) on, and the runs that
+    used the most tokens in that period."""
     totals = conn.execute(
-        "SELECT COUNT(*), COALESCE(SUM(1 - ok), 0), "
-        "COALESCE(SUM(cost_usd IS NULL), 0), "
-        "COALESCE(SUM(input_tokens + cached_tokens + cache_write_tokens), 0), "
-        "COALESCE(SUM(cached_tokens), 0), COALESCE(SUM(output_tokens), 0), "
-        "COALESCE(SUM(cost_usd), 0) FROM ai_usage WHERE at >= ?",
+        f"SELECT {_SUMS}, COALESCE(SUM(1 - ok), 0) AS failed_calls "
+        "FROM ai_usage WHERE at >= ?",
         (since,),
     ).fetchone()
     days = conn.execute(
         "SELECT substr(at, 1, 10) AS day, COUNT(*) AS calls, "
-        "COALESCE(SUM(cost_usd), 0) AS cost_usd FROM ai_usage WHERE at >= ? "
+        f"COALESCE(SUM({_TOKENS}), 0) AS tokens FROM ai_usage WHERE at >= ? "
         "GROUP BY day ORDER BY day",
         (since,),
     ).fetchall()
     actions = conn.execute(
         f"SELECT action, {_SUMS} FROM ai_usage WHERE at >= ? "
-        "GROUP BY action ORDER BY cost_usd DESC, calls DESC",
+        "GROUP BY action ORDER BY tokens DESC, calls DESC",
         (since,),
     ).fetchall()
     models = conn.execute(
-        f"SELECT provider, model, {_SUMS}, SUM(cost_usd IS NULL) = 0 AS priced "
-        "FROM ai_usage WHERE at >= ? GROUP BY provider, model "
-        "ORDER BY cost_usd DESC, calls DESC",
+        f"SELECT provider, model, {_SUMS} FROM ai_usage WHERE at >= ? "
+        "GROUP BY provider, model ORDER BY tokens DESC, calls DESC",
         (since,),
     ).fetchall()
     # A review run is reached through its draft, so draft-only calls group by
     # draft and every other attributed call by its run.
     runs = conn.execute(
         "SELECT action, run_id, draft_id, COUNT(*) AS calls, "
-        "COALESCE(SUM(cost_usd), 0) AS cost_usd, MAX(at) AS last_at FROM ai_usage "
+        f"COALESCE(SUM({_TOKENS}), 0) AS tokens, MAX(at) AS last_at FROM ai_usage "
         "WHERE at >= ? AND (run_id IS NOT NULL OR draft_id IS NOT NULL) "
         "GROUP BY action, COALESCE(run_id, draft_id) "
-        "ORDER BY cost_usd DESC, last_at DESC LIMIT ?",
+        "ORDER BY tokens DESC, last_at DESC LIMIT ?",
         (since, top_runs),
     ).fetchall()
     return Report(
         since=since,
-        totals=Totals(
-            calls=totals[0],
-            failed_calls=totals[1],
-            unpriced_calls=totals[2],
-            input_tokens=totals[3],
-            cached_tokens=totals[4],
-            output_tokens=totals[5],
-            cost_usd=totals[6],
-        ),
+        totals=Totals.model_validate(dict(totals)),
         days=[Day.model_validate(dict(row)) for row in days],
-        actions=[ActionSpend.model_validate(dict(row)) for row in actions],
-        models=[
-            ModelSpend.model_validate({**dict(row), "priced": bool(row["priced"])})
-            for row in models
-        ],
-        runs=[RunSpend.model_validate(dict(row)) for row in runs],
+        actions=[ActionUsage.model_validate(dict(row)) for row in actions],
+        models=[ModelUsage.model_validate(dict(row)) for row in models],
+        runs=[RunUsage.model_validate(dict(row)) for row in runs],
     )
 
 
@@ -225,13 +212,13 @@ def report(conn: sqlite3.Connection, since: str, *, top_runs: int = 10) -> Repor
 
 
 class Budget(BaseModel):
-    limit_usd: float
-    spent_usd: float
+    limit_tokens: int
+    used_tokens: int
     percent: float
     warn_percent: int
-    #: Spend has reached the warning threshold.
+    #: Usage has reached the warning threshold.
     warning: bool
-    #: Spend has reached the limit and background actions are paused.
+    #: Usage has reached the limit and background actions are paused.
     paused: bool
     month_start: str
 
@@ -242,35 +229,44 @@ def month_start(now: datetime) -> str:
     )
 
 
-def spent_since(conn: sqlite3.Connection, since: str) -> float:
+def tokens_since(conn: sqlite3.Connection, since: str) -> int:
     row = conn.execute(
-        "SELECT COALESCE(SUM(cost_usd), 0) FROM ai_usage WHERE at >= ?", (since,)
+        f"SELECT COALESCE(SUM({_TOKENS}), 0) FROM ai_usage WHERE at >= ?", (since,)
     ).fetchone()
-    return float(row[0])
+    return int(row[0])
 
 
-def mean_run_cost(conn: sqlite3.Connection, action: str, since: str) -> float | None:
-    """What one run of `action` has cost on average since `since`, or None
-    when no fully priced run is on record."""
+def mean_run_tokens(conn: sqlite3.Connection, action: str, since: str) -> int | None:
+    """The tokens one run of `action` has used on average since `since`, or
+    None when no run is on record."""
     row = conn.execute(
-        "SELECT AVG(cost) FROM (SELECT SUM(cost_usd) AS cost FROM ai_usage "
-        "WHERE action = ? AND at >= ? AND run_id IS NOT NULL "
-        "GROUP BY run_id HAVING COUNT(cost_usd) = COUNT(*))",
+        f"SELECT AVG(tokens) FROM (SELECT SUM({_TOKENS}) AS tokens FROM ai_usage "
+        "WHERE action = ? AND at >= ? AND run_id IS NOT NULL GROUP BY run_id)",
         (action, since),
     ).fetchone()
-    return None if row[0] is None else float(row[0])
+    return None if row[0] is None else round(row[0])
 
 
-def draft_cost(
-    conn: sqlite3.Connection, action: str, draft_id: str, since: str
-) -> float:
-    """What `action` has spent on one draft since `since`."""
+def action_tokens(conn: sqlite3.Connection, action: str, since: str = "") -> int:
+    """The tokens `action` has used since `since`, or ever."""
     row = conn.execute(
-        "SELECT COALESCE(SUM(cost_usd), 0) FROM ai_usage "
+        f"SELECT COALESCE(SUM({_TOKENS}), 0) FROM ai_usage "
+        "WHERE action = ? AND at >= ?",
+        (action, since),
+    ).fetchone()
+    return int(row[0])
+
+
+def draft_tokens(
+    conn: sqlite3.Connection, action: str, draft_id: str, since: str
+) -> int:
+    """The tokens `action` has used on one draft since `since`."""
+    row = conn.execute(
+        f"SELECT COALESCE(SUM({_TOKENS}), 0) FROM ai_usage "
         "WHERE action = ? AND draft_id = ? AND at >= ?",
         (action, draft_id, since),
     ).fetchone()
-    return float(row[0])
+    return int(row[0])
 
 
 def budget(
@@ -278,15 +274,16 @@ def budget(
     settings: product_settings.AIBudgetSettings,
     now: datetime | None = None,
 ) -> Budget | None:
-    """This month's spend against the budget, or None when no budget is set."""
-    if not settings.monthly_limit_usd:
+    """This month's token use against the budget, or None when no budget is
+    set."""
+    if not settings.monthly_limit_tokens:
         return None
     start = month_start(now or datetime.now(UTC))
-    spent = spent_since(conn, start)
-    percent = spent / settings.monthly_limit_usd * 100
+    used = tokens_since(conn, start)
+    percent = used / settings.monthly_limit_tokens * 100
     return Budget(
-        limit_usd=settings.monthly_limit_usd,
-        spent_usd=round(spent, 6),
+        limit_tokens=settings.monthly_limit_tokens,
+        used_tokens=used,
         percent=round(percent, 1),
         warn_percent=settings.warn_percent,
         warning=percent >= settings.warn_percent,
@@ -307,8 +304,8 @@ def paused_reason(
     if status is None or not status.paused:
         return None
     return (
-        "Paused: this month's estimated AI spend has reached the "
-        f"${status.limit_usd:g} budget. Raise the budget or turn off pausing "
+        "Paused: this month's AI usage has reached the budget of "
+        f"{status.limit_tokens:,} tokens. Raise the budget or turn off pausing "
         "in Settings › AI usage to resume."
     )
 
