@@ -22,7 +22,7 @@ focuses it.
 | | Ask | `#/ask?q=…` | A reasoned answer with confidence, gaps, provenance and a trace; report a gap from it |
 | | Find | `#/find?q=…&mode=semantic\|grep\|survey` | Raw scored statements, plus entities whose names match |
 | Explore | Browse | `#/browse` | Every statement, entity and name as a table |
-| | Statement | `#/s/<id>` | Text (editable), mentions, connections graph or list, conditions, lineage, audiences with their label's source and reason (curators override; a curator label whose text changed since the decision is flagged to confirm or hand back to AI; a curator confirms or rejects an external grant waiting for confirmation; a relabel after an edit that narrowed the audiences shows why), media (writers upload, edit, label and detach; readers see what their audience allows) |
+| | Statement | `#/s/<id>` | Text (editable), mentions, connections graph or list, conditions, lineage, audiences with their label's source and reason (curators override; a curator label whose text changed since the decision is flagged to confirm or hand back to AI; a curator confirms or rejects an external grant waiting for confirmation; a relabel after an edit that narrowed the audiences shows why), media (writers upload, edit, label and detach; readers see it) |
 | | Entity | `#/e/<id>` | Aliases, mentioning statements, entity links, media |
 | | Statement graph | `#/graph?focus=<id>` | Force-directed graph of statements and entities around a picked concept or statement; `?all=1` shows everything |
 | | Entity map | `#/entities?focus=<id>` | Entities and their links, framed on a picked concept; `?all=1` without one; add and remove entity links |
@@ -47,10 +47,10 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 
 | Group | Section | Address | Contents |
 |---|---|---|---|
-| You | Account & tokens | `#/settings/account` | Your name, role, audience and auth state; create and revoke MCP tokens; admins pick and change each token's audience |
+| You | Account & tokens | `#/settings/account` | Your name, role and auth state; create and revoke MCP tokens |
 | | Appearance | `#/settings/appearance` | Theme, density and answer typeface, saved in this browser |
 | Instance | Set up Mycelium | `#/settings/setup` | Admins: the setup checklist (see below) |
-| People | Members & invites | `#/settings/members` | Admins: roles, audiences, suspension, invites, service accounts and their tokens |
+| People | Members & invites | `#/settings/members` | Admins: roles, suspension, invites, service accounts and their tokens |
 | AI | Models | `#/settings/models` | Provider, model and reasoning effort per action |
 | | Prompts | `#/settings/prompts` | Each action's instructions, with history; marks edited prompts behind the shipped default |
 | | Draft review | `#/settings/review` | Automatic review mode, reviewer, model, whether reviews may apply and whether only clean approvals apply automatically; review the backlog oldest first, with an optional spending limit, pause and resume |
@@ -108,18 +108,6 @@ regains focus, so a server restart shows without reloading the page.
   labelling or automatic document revision is on but its provider has no
   credentials. Those workers wait without starting runs until credentials are
   configured.
-
-### Scoped to an audience
-
-A user scoped to an [audience](AUDIENCES.md#scoped-users-and-tokens) sees the
-audience beside their role in the sidebar and on Account & tokens. The app
-shows them only what they can read: Home without its waiting-for-you queue,
-Browse, the statement and entity pages without editing, the graphs, Glossary,
-and Documents as a read-only library of the documents written for their
-audience. Ask runs without the report-a-gap control. Ingest, Curate and every
-settings section other than Account & tokens and Appearance are hidden. A user
-whose audience was retired is held on Account & tokens until an admin
-rescopes them.
 
 ## Older addresses
 

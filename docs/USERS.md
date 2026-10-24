@@ -41,6 +41,10 @@ Both paths read the same declaration, so policy can't drift between
 transports, and `tools/list` shows a caller only the tools their role can
 invoke (see [the MCP tool manifest](MCP_TOOLS.md)).
 
+A role is the whole of what a user or token may reach: every principal reads
+the whole knowledge base its role allows. [Audiences](AUDIENCES.md) only bound
+what documentation is written from.
+
 ---
 
 ## Inviting a human
@@ -167,29 +171,6 @@ way without being suspended; see
 Useful when an employee leaves, when a service-account credential
 might be compromised, or as a "soft delete" before you decide to
 remove someone for good.
-
----
-
-## Scoping to an audience
-
-An admin can scope a person, a service account or a single token to an
-[audience](AUDIENCES.md). A scoped principal reads only what that audience may
-see, and only through the read tools and routes listed in
-[Scoped users and tokens](AUDIENCES.md#scoped-users-and-tokens). Its role is
-clamped to reader, so it never writes, drafts or administers.
-
-- **A user:** the **Audience** column in the members table. A user's audience
-  applies to every token they own, whatever the token says.
-- **A token:** pick the audience when you mint it under **MCP tokens**, or
-  change it afterwards in the same list. Tokens a scoped user mints carry
-  their audience.
-- **An OAuth connection:** an admin approving a client in the browser picks
-  the audience on the consent screen.
-
-Full access is the default. Mycelium refuses to scope the last active
-unscoped admin. Scoping is read on every request, so it takes effect
-immediately. If the audience is retired, the scoped principal is refused
-until you pick another one.
 
 ---
 

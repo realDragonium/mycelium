@@ -45,8 +45,7 @@ The agent needs a **writer** or **admin** token. That is the role that may
 already ask the server for documentation, so an agent can do no more than its
 token could request. Drafters cannot claim: a drafter's writes go to a draft
 for review, but an agent's document, plan or labels are saved as a server
-model's would be. Readers, askers and tokens scoped to an audience cannot
-claim either.
+model's would be. Readers and askers cannot claim either.
 
 ## Kinds
 

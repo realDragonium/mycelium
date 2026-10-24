@@ -105,11 +105,3 @@ phrased it badly. Try one other wording, then treat it as absent.
 
 Then call `report_knowledge_gap(text=…)` once per distinct missing fact, as
 described in mycelium-knowledge-source.
-
-## On an audience-scoped connection
-
-A scoped connection reads only what its audience may see, so something you
-cannot find may still exist. Say "that is not available here" rather than
-"the knowledge base does not say" or "it does not exist", and do not suggest
-that anything is hidden. A scoped connection cannot report gaps; pass them
-to the user instead.

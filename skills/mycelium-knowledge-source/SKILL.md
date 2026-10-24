@@ -1,6 +1,6 @@
 ---
 name: mycelium-knowledge-source
-description: Use a Mycelium server as the source of product knowledge from a coding, support or research agent. Covers connecting over MCP (browser sign-in or a token), choosing between ask, search_statements and get_statements, citing statement ids, reporting knowledge gaps, and what an audience-scoped connection can and cannot see. Use this whenever you answer a product question from Mycelium, cite what it says, or find that it does not know something. For writing knowledge use mycelium-authoring; for proposing it through review use mycelium-draft.
+description: Use a Mycelium server as the source of product knowledge from a coding, support or research agent. Covers connecting over MCP (browser sign-in or a token), choosing between ask, search_statements and get_statements, citing statement ids and reporting knowledge gaps. Use this whenever you answer a product question from Mycelium, cite what it says, or find that it does not know something. For writing knowledge use mycelium-authoring; for proposing it through review use mycelium-draft.
 ---
 
 # Mycelium as a knowledge source
@@ -102,21 +102,3 @@ something. Curators see gaps under **Curate → Knowledge gaps**.
 
 Do not fill a gap from memory or from the code and present it as Mycelium's
 answer. If you can verify it elsewhere, say where the answer came from.
-
-## Audience-scoped connections
-
-An admin can scope a user, token or OAuth connection to an **audience**
-(`docs/AUDIENCES.md`). A scoped connection:
-
-- reads only statements that audience may see, links whose ends and
-  conditions it may see, and concepts those statements mention. External
-  audiences see no concept descriptions and only the names visible
-  statements matched;
-- is a reader whatever its role: no writes, no drafts, **no gap reports**;
-- runs `ask` inside the same boundary, so the answer cannot rest on
-  knowledge the audience may not see.
-
-So an empty or thin result on a scoped connection does not prove the
-knowledge is absent; it may be outside the audience. Tell the user that the
-connection is scoped and the answer covers only what that audience may see.
-When you cannot report a gap, pass it to the user to raise with a curator.

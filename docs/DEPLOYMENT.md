@@ -495,8 +495,8 @@ Confirm external grants** is on, which is the default.
    the audience labelling instructions (**Settings → Prompts**), click
    **Relabel AI labels**, and review a new sample.
 
-Until a grant is confirmed, external documents, plans and scoped tokens do
-not see the statement.
+Until a grant is confirmed, external documents and plans do not see the
+statement.
 
 ---
 
@@ -775,6 +775,14 @@ left: the `research_runs` table in `mycelium-drafts.db`, and the research
 instructions, model selection, limits, sources and concurrency limit in
 `mycelium-prompts.db`. Drafts that research runs created are ordinary drafts
 and stay. Importing an older archive skips the same data.
+
+The first start of a build where audiences no longer scope principals drops
+`audience_id` from the users, MCP tokens and OAuth codes in
+`mycelium-auth.db`. A user or token that was scoped to an audience now reads
+what its role allows, and each one is logged as a warning naming its id and
+former audience. Importing an older archive drops the column the same way. A
+code-only rollback adds the column back empty, so every principal stays
+unscoped.
 
 ---
 

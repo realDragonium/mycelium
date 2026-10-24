@@ -33,7 +33,7 @@ never a writer's: a drafter's writes go to its draft, a writer's land live.
 
 Check the tool list: `claim_curation_work` present and `list_drafts` absent
 means drafter. `list_drafts` present means writer or admin: stop and ask for
-a drafter token. A token scoped to an audience cannot claim work.
+a drafter token.
 
 Then `list_my_drafts()`. Every write joins your one open draft (per account,
 or per MCP session when the client keeps one). If an open draft already
