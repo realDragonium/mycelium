@@ -4,8 +4,10 @@ A **guideline set** is the writing guidance a documentation-generation run
 follows: one set-wide instruction text, one set-wide exposure boundary, plus
 one template per document type it can produce. Sets live in the prompt-text
 store (`prompt_store`, its own `mycelium-prompts.db`) as ordinary rows, so
-adding, editing or replacing one is a tool call — never a code change and
-never a redeploy.
+adding, editing or replacing one is a save in the web app or an HTTP request —
+never a code change and never a redeploy. No tool writes prompt texts: the
+tools only read them (`get_prompt_text`, `list_prompt_texts`) and retire them
+(`retire_prompt_text`).
 
 Open **Settings → Documentation → Writing profiles & templates** to create, edit,
 duplicate or retire profiles and templates. The shared editor also shows text
@@ -128,7 +130,7 @@ of startup or the normal editing workflow.
 
 **`internal-doc`** — four rows, a deliberately minimal set for terse
 internal notes. It exists to prove that a variant needs no code: it was added
-entirely through the management tools and has no source files, no seeding at
+entirely through the profile editor and its HTTP routes and has no source files, no seeding at
 startup and no entry anywhere in `src/`.
 
 Its `exposure` row is where the two sets are most visibly different, which is
