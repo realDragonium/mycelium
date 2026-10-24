@@ -148,19 +148,26 @@ The system SHALL list the newest 100 runs through `list_documentation_runs` with
 - **THEN** `get_documentation_run` returns the refused `draft_title` and `draft_body` beside the findings in `error`
 
 ### Requirement: Restart admits unfinished runs again
-The system SHALL, when the server starts, admit every unfinished documentation run again under its own run id and in its original admission order, a running one from scratch, with the current documentation model and writing profile; a run that had already written its document SHALL be finished as `document_written`, and a run that cannot be admitted again SHALL fail with an error that names the reason and says Retry starts it again. A run waiting for an outside agent keeps waiting. In quarantine no run is admitted again; each fails with an error saying so.
+The system SHALL, when the server starts, admit every unfinished documentation run again under its own run id and in its original admission order, restarting a running one from scratch with the current documentation model and writing profile. A run waiting for an outside agent keeps waiting.
 
 #### Scenario: Server restarts mid-run
 - **WHEN** the server restarts while a run is running and another is queued behind it
 - **THEN** the running run starts again first and the queued run keeps its place behind it
 
+#### Scenario: Server restarts while an agent run waits
+- **WHEN** the server restarts while a run is `waiting_for_agent`
+- **THEN** the run still reports `waiting_for_agent`
+
+### Requirement: Runs that cannot be admitted after a restart
+The system SHALL finish a run that had already written its document as `document_written`, and SHALL fail a run that cannot be admitted again with an error that names the reason and says Retry starts it again. In quarantine no run is admitted again; each fails with an error saying so.
+
 #### Scenario: A run cannot be admitted again
 - **WHEN** the server restarts while a run is queued and its documentation model has no key any more
 - **THEN** the run reports `status` `failed` with an error naming the missing key and saying Retry starts it again
 
-#### Scenario: Server restarts while an agent run waits
-- **WHEN** the server restarts while a run is `waiting_for_agent`
-- **THEN** the run still reports `waiting_for_agent`
+#### Scenario: Server restarts in quarantine
+- **WHEN** the server starts with `--quarantine` while a run is queued
+- **THEN** the run reports `status` `failed` with an error saying the server runs in quarantine
 
 ### Requirement: Profile snapshot at admission
 The system SHALL capture the documentation instructions, review instructions and all writing profiles at admission and record on the run the selected guidance, exposure, template, audience and their versions (`profile_revisions`, `profile_snapshot`), so edits saved while a run is queued or running do not change that run.
