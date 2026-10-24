@@ -15,7 +15,7 @@ the server, using the agents its people already run.
 |---|---|---|
 | Documentation (writing and revising) | Yes | Kind `documentation` |
 | Documentation review | Yes, for documents an agent wrote | Kind `document_review`, when Review is **Another agent**. A person's manual edit is still reviewed by the server's reviewer |
-| Documentation planning | Yes | Kind `documentation_planning` |
+| Documentation planning | Yes | Kind `documentation_planning`, and `plan_review` for a profile whose plan items an AI reviewer decides |
 | Audience labelling | Yes | Kind `audience_labelling` |
 | Ingest | Yes | Kind `ingest` |
 | Connect pass | Yes | Kind `connect` |
@@ -45,7 +45,7 @@ already ask the server for documentation, so an agent can do no more than its
 token could request. Drafters cannot claim: a drafter's writes go to a draft
 for review, but an agent's document, plan or labels are saved as a server
 model's would be. Readers cannot claim either. A draft's creator is never
-given its review: a claim that held such tasks back says so in `note`, and a
+given its review, nor the agent that made a plan its plan review: a claim that held such tasks back says so in `note`, and a
 submission by the creator is refused and the task goes back to the queue.
 
 ## Kinds
@@ -55,6 +55,7 @@ submission by the creator is refused and the task goes back to the queue.
 | `documentation` | A documentation run starts, or a document is revised, while Documentation is set to External agent | The document: title, Markdown body and the statement ids it rests on, as the server's writer emits it |
 | `document_review` | An agent's document passed its checks and Documentation's Review is **Another agent** | The review: exposure and conformance verdicts with findings |
 | `documentation_planning` | A plan is requested for a writing profile, by a person or by the profile's automatic planning, while Documentation planning is set to External agent | The proposed documents, placing the brief's uncovered statements in updates of existing documents or in new ones |
+| `plan_review` | A profile whose plan items an AI reviewer decides has proposed items no review decided (checked by the maintenance sweep and when an agent claims), while Documentation planning is set to External agent | A decision for every item: `approve` or `dismiss`, with a reason |
 | `audience_labelling` | An agent asks for labelling work while Audience labelling is set to External agent | A label for each statement in the batch |
 | `ingest` | `ingest` is called while Ingest is set to External agent | The `emit_draft` input: proposed operations, the reconcile ledger, flags and skipped duplicates |
 | `connect` | `connect_statements` is called while Connect is set to External agent | The same, for the statements in the batch |
@@ -118,6 +119,10 @@ refused submission and, once done, its `result`, such as the draft it made.
 - **Plans.** A proposal is kept as a model's is: only items citing statements
   the profile's audience may see, using templates the profile has and naming
   documents it owns survive. The overview is read again when it is submitted.
+- **Plan reviews.** Every item in the brief must be decided once, with a
+  reason. An item a person decided meanwhile is left as they decided it. An
+  approval starts the item's run within the batch-approval and active-run
+  limits; a dismissal is remembered for the profile.
 - **Labels.** Every statement in the batch must be labelled once, with
   audience ids that exist and a reason. New external grants wait for
   confirmation when the labelling settings ask for it, as the server labeller's
@@ -143,12 +148,12 @@ loop would try again:
 | Citations, vocabulary or media | 3 |
 | Review | 1 (the document returns to its writer with the review's findings) |
 | Malformed review | 1 |
-| Malformed or invalid plan, labels, aliases or draft review | 2 |
+| Malformed or invalid plan, plan review, labels, aliases or draft review | 2 |
 | Malformed ingest or connect draft | 1 |
 | Ingest or connect reading floor or ledger | 3, then the last submission is kept as a degraded draft, as the loop's forced finalize keeps one |
 
 When the last retry is used, the run is recorded as nothing written, the plan
-fails, or the statements' labelling failure is counted, as for a server model.
+fails, a plan review's items wait for a person, or the statements' labelling failure is counted, as for a server model.
 
 ## Review
 
@@ -165,7 +170,8 @@ review's findings.
   saved or refused. `get_documentation_run` and the run list carry
   `agent_task`: the task's status, who holds it and until when, failures and
   the last findings. A waiting run does not take one of the active-run slots.
-- **Documentation plans** show the same in `latest.agent_task`.
+- **Documentation plans** show the same in `latest.agent_task`, and an open
+  plan review in `review_task`.
 - **Audience labelling status** (`GET /api/audiences/labelling`) has
   `external_agent` and the open batches in `agent_tasks`. Automatic labelling
   does not call a model while the setting is on.

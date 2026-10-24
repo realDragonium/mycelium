@@ -6,7 +6,7 @@ Let outside agents do the model work of an action set to External agent instead 
 ## Requirements
 
 ### Requirement: Task kinds
-The system SHALL queue tasks of kind `documentation`, `document_review`, `documentation_planning`, `audience_labelling`, `ingest`, `connect`, `alias_discovery` and `draft_review`. Labelling batches are made when an agent claims, from the statements due then, at the labelling batch size, and a statement in an open batch is not put in another.
+The system SHALL queue tasks of kind `documentation`, `document_review`, `documentation_planning`, `plan_review`, `audience_labelling`, `ingest`, `connect`, `alias_discovery` and `draft_review`. Labelling batches are made when an agent claims, from the statements due then, at the labelling batch size, and a statement in an open batch is not put in another. Plan reviews are queued for profiles whose plan review is `ai` while proposed items wait undecided.
 
 #### Scenario: Labelling batch at claim time
 - **WHEN** audience labelling is set to External agent and an agent claims `audience_labelling` work
@@ -55,7 +55,7 @@ The system SHALL review a grounded agent document against the template and the a
 - **THEN** the submission returns `accepted` and the run reports `document_written`
 
 ### Requirement: Reviewer independence
-The system MUST never offer a `document_review` task to the principal that submitted the document it reviews, nor a `draft_review` task to the principal that created the draft. A claim that withheld such tasks SHALL say so in its `note`, and a submission by the draft's creator SHALL be refused naming the reason and the task returned to the queue.
+The system MUST never offer a `document_review` task to the principal that submitted the document it reviews, a `draft_review` task to the principal that created the draft, nor a `plan_review` task to the agent that made the plan it reviews. A claim that withheld such tasks SHALL say so in its `note`, and a submission by the draft's creator SHALL be refused naming the reason and the task returned to the queue.
 
 #### Scenario: Another agent reviews
 - **WHEN** documentation review is set to `agent` and writer A's document passes the emit gate
@@ -64,6 +64,10 @@ The system MUST never offer a `document_review` task to the principal that submi
 #### Scenario: A drafter claims its own draft's review
 - **WHEN** the only waiting `draft_review` task is for a draft writer A created and A claims `draft_review`
 - **THEN** A gets no task and a `note` saying the waiting task is its own draft
+
+#### Scenario: The planner claims its plan's review
+- **WHEN** agent A made a plan and the only waiting `plan_review` task reviews it
+- **THEN** A gets no task and a `note` saying the waiting task is a plan it made, and agent B is given it
 
 ### Requirement: Failed reviews return to the writer once
 The system SHALL return the writing task to the queue with a failed review's findings once; a second failed review records the run as nothing written with the refused draft.
@@ -181,3 +185,14 @@ The system SHALL never use agents for embeddings. Ask MUST NOT be queued as an a
 #### Scenario: Ask set to External agent
 - **WHEN** Ask is set to External agent and a caller asks a question
 - **THEN** no agent task is queued
+
+### Requirement: Agent plan reviews decide every item
+The system SHALL brief a `plan_review` task with the profile's audience, templates and documents and each item still proposed with the statements it draws on that the audience may see, and SHALL keep a submission only when it decides every briefed item exactly once (`approve` or `dismiss`, with a reason); a missing, repeated or unknown item is refused with findings, and after 2 refusals the task fails and its items wait for a person.
+
+#### Scenario: An item left out
+- **WHEN** an agent submits decisions for one of a review's two items
+- **THEN** the submission is refused with a finding naming the undecided item
+
+#### Scenario: A person decided meanwhile
+- **WHEN** a person dismisses an item after the review was briefed and the agent approves it
+- **THEN** the item stays dismissed and no run starts for it

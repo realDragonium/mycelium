@@ -98,7 +98,8 @@ replaced, deleted or relabelled away from its audience. See
 Each writing profile has a maintenance policy, set in its editor under
 **Settings → Documentation**:
 
-- `manual` (the default): an out-of-date document waits for someone to revise it.
+- `manual` (the default): an out-of-date document waits for someone to revise
+  it, or for the profile's [AI plan reviewer](DOCUMENTATION_PLANNING.md#reviewing-by-ai).
 - `propose`: the document gets an update item in the profile's plan, briefed
   with the changed statements ([Documentation planning](DOCUMENTATION_PLANNING.md)).
 - `auto-revise`: Mycelium starts the revision itself. It goes through the
@@ -183,8 +184,17 @@ Archives predating document backups contain no document library to restore.
 REST exposes `request_documentation`, `list_generated_documents`,
 `get_generated_document`, `list_document_revisions`, `get_document_revision`,
 `revise_document`, and `deliver_document`. MCP exposes `request_documentation`,
-`get_documentation_run`, `get_generated_document`, and `revise_document`. Publishing
-stays in the UI; see [the MCP tool manifest](MCP_TOOLS.md).
+`get_documentation_run`, `get_generated_document`, `revise_document`,
+`request_documentation_plan` and `deliver_document`; see
+[the MCP tool manifest](MCP_TOOLS.md).
+
+`deliver_document` (over MCP or `POST /deliver-document`) is for agents: it
+is refused unless the document's writing profile has **Agents may deliver**
+on (its editor under **Settings → Documentation**; off by default, also for
+profiles saved before it existed). It then opens or updates the pull request
+as **Create / update GitHub PR** does. People publish from the document in
+the web app whatever the setting. Merging stays with the destination
+repository.
 `revise_document` requires `document_id`, `expected_revision`, and either
 instructions or `update_sources=true`, which briefs the run with the cited
 statements that changed (`stale.changes` on `get_generated_document` and

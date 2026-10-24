@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 47 of its 86 registered tools over MCP. Every
+question. Mycelium therefore advertises 49 of its 87 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -13,10 +13,11 @@ that set, and the registered tools in agreement.
 Role filtering still applies: `tools/list` shows a caller only the tools their role
 can invoke. The minimum role is reader: a reader sees 19 tools. A drafter sees 40
 because their writes are queued on a draft, but they do not see `list_drafts`,
-`request_documentation`, `revise_document` or the tools that claim and do
-agent tasks. A writer sees 44 and does not see the admin-only
+`request_documentation`, `revise_document`, `request_documentation_plan`,
+`deliver_document` or the tools that claim and do agent tasks. A writer sees
+46 and does not see the admin-only
 `delete_statement`, `merge_statements` or `merge_entities`. An admin sees all
-47. While Ask is set to External agent, `ask` is listed to no one, so each
+49. While Ask is set to External agent, `ask` is listed to no one, so each
 count is one lower.
 
 ## Over MCP
@@ -69,12 +70,14 @@ decision, and the rest runs in-process.
 | `request_documentation` | Starts a documentation run. `anchor_entity_id`, with a guideline set and document type, names the entity the document is about, so a repeat request revises that document; without one, the run creates a document. |
 | `get_documentation_run` | Polls a run that `request_documentation` or `revise_document` returns. A run the review refused lists the failed findings in `summary.review_findings`; a retry briefed with them lists them in `review_notes`. `retryable` says whether the run can be started again as it was (it wrote nothing and was not a manual edit). |
 | `get_generated_document` | Reads the written document and the revision that `revise_document` needs, the state of its pull request (open, merged or closed), refreshed from GitHub at most once a minute, and `stale`: whether a statement it cites was edited, deleted or merged away since, or is no longer visible to the document's audience, with old and new text. |
-| `claim_agent_task` | Leases work an action set to External agent would otherwise give a server model (writing, reviewing or planning documentation, labelling audiences, ingest, the connect pass, alias discovery, draft review) for 30 minutes, with a brief holding the model's instructions, input and result schema. Writers and admins only; a draft's creator is never given its review, and `note` says when such tasks were withheld. See [Agent tasks](AGENT_TASKS.md). |
+| `claim_agent_task` | Leases work an action set to External agent would otherwise give a server model (writing, reviewing or planning documentation, reviewing a plan's items, labelling audiences, ingest, the connect pass, alias discovery, draft review) for 30 minutes, with a brief holding the model's instructions, input and result schema. Writers and admins only; a draft's creator is never given its review, and `note` says when such tasks were withheld. See [Agent tasks](AGENT_TASKS.md). |
 | `read_for_agent_task` | Runs one of a task's read tools for it and records the read; a documentation task's reads run inside the audience boundary it writes for. |
 | `submit_agent_task` | Hands in a claimed task's result, which passes the checks a server model's output would; a refusal returns findings and the retries left. |
 | `release_agent_task` | Gives a claimed task back to the queue with a reason. |
 | `get_agent_task` | Follows work the caller queued for an outside agent, such as an `ingest` that returned `waiting_for_agent`: status, findings and the draft it made. |
 | `revise_document` | Revises a generated document. `update_sources` briefs the run with the cited statements that changed. A delivered document's revision starts from GitHub edits; when both sides changed it is refused unless `start_from_destination` is passed. |
+| `request_documentation_plan` | Starts the same plan as **Documents → Plan** for a writing profile, on the server's model or as a `documentation_planning` agent task. An agent keeping documentation current needs to ask which documents are missing, not only write the ones it already knows. Writers and admins only. See [Documentation planning](DOCUMENTATION_PLANNING.md). |
+| `deliver_document` | Opens or updates the document's GitHub pull request, as **Create / update GitHub PR** does. Refused unless the document's writing profile lets agents deliver (off by default), so publishing outside the instance stays a person's decision until a writer hands it to agents for that profile. Merging stays with the destination repository. Writers and admins only. |
 
 ### Uploading media
 
@@ -130,7 +133,6 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | `list_generated_documents` | Document library browsing. |
 | `list_document_revisions` | Document history. |
 | `get_document_revision` | Document history. |
-| `deliver_document` | Opens or updates a GitHub pull request and tracks it. Publishing outside the instance stays a UI decision. |
 | `list_documentation_destinations` | Deployment configuration. |
 | `attach_draft_source` | Records CI pull request provenance. Pipeline steps call it over HTTP. |
 | `find_my_draft_by_source` | Looks up a draft by CI provenance. Pipeline steps call it over HTTP. |

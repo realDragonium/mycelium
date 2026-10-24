@@ -134,14 +134,20 @@ written until an item is approved (`docs/DOCUMENTATION_PLANNING.md`).
    document), `uncovered_statements` and `uncovered` (statements the
    audience may see that no document of the profile cites), and
    `replan_hint` when enough new knowledge became visible.
-2. To plan again, `POST /api/documentation/plans/{guideline_set}` (one model
-   call). Each plan is offered a batch of the uncovered statements and
+2. To plan again, call `request_documentation_plan(guideline_set)` over MCP
+   (or `POST /api/documentation/plans/{guideline_set}`): one model call, or
+   a `documentation_planning` task for an agent while planning is set to
+   External agent. Each plan is offered a batch of the uncovered statements and
    places them in updates of existing documents or in new ones; approving
    such an update briefs its revision with the statements to add. Re-planning
    is manual unless the profile's `planning` policy is `propose` or `write`
    (see Maintenance).
 3. Present the items to the operator with your view of each. Approving starts
-   a documentation run per item, so the operator decides which.
+   a documentation run per item, so the operator decides which. A profile
+   whose `plan_review` is `ai` has an AI reviewer decide them instead: each
+   item then carries `review` with the decision and reason, and approved
+   ones start within the limits. Do not approve or dismiss around it unless
+   the operator asks.
 4. Approve the chosen ones with `POST /api/documentation/plan-items/approve`
    and `{"item_ids": […]}`, at most `approve_batch` at a time; each result
    carries its run or the reason it could not start. Follow the runs as
@@ -171,9 +177,12 @@ limits.
 
 ## Not here
 
-- **Publishing** a document as a GitHub pull request is a UI decision
-  (open the document → **Create / update GitHub PR**). Tell the operator the
-  document is ready to publish there.
+- **Publishing** a document as a GitHub pull request: call
+  `deliver_document(document_id, destination, expected_revision)` only when
+  the operator asked and the document's writing profile has **Agents may
+  deliver** on; otherwise the call is refused, and the operator publishes from
+  the document (**Create / update GitHub PR**). Merging the pull request is
+  the destination repository's decision, never yours.
 - **Missing facts.** Fill them in the knowledge base, then run the request
   again.
 - **Server unavailable.** Report it. Do not write the document by hand.
