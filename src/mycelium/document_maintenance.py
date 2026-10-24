@@ -129,7 +129,7 @@ def sweep(now: datetime | None = None) -> list[str]:
         product_settings.ConcurrencySettings
     ).documentation_runs
     snapshot = documentation_profiles.capture()
-    _deliver_finished(drafts, snapshot, limits.retry_attempts)
+    _deliver_finished(drafts, snapshot, limits.delivery_retries)
     # Without credentials a revision would only fail, so the document waits
     # unclaimed and is revised once they are configured.
     can_revise = model_settings.credentials_error("docgen") is None
@@ -161,7 +161,7 @@ def sweep(now: datetime | None = None) -> list[str]:
                 and row["action"] == "auto-revise"
                 and row["run_id"] is None
                 and row["error"] is not None
-                and row["attempts"] <= limits.retry_attempts
+                and row["attempts"] <= limits.revision_start_retries
             ):
                 _record(drafts, document.id, document.revision, action=None)
             elif row["action"] is not None:
@@ -185,7 +185,7 @@ def sweep(now: datetime | None = None) -> list[str]:
         drafts, store.substrate_connection(), snapshot
     )
     started += documentation_plan_review.sweep(snapshot)
-    started += _retry_finished(drafts, snapshot, limits.retry_attempts, max_active)
+    started += _retry_finished(drafts, snapshot, limits.run_retries, max_active)
     return started
 
 
@@ -472,7 +472,9 @@ def _retry_finished(
                 run_id,
                 "gave_up",
                 f"Gave up after {row['attempt']} automatic "
-                f"retr{'y' if row['attempt'] == 1 else 'ies'}: {row['error']}",
+                f"retr{'y' if row['attempt'] == 1 else 'ies'}: {row['error']}"
+                if row["attempt"]
+                else f"Gave up without an automatic retry: {row['error']}",
             )
             continue
         if (not can_run and row["provider"] != "agent") or docs_store.count_active(

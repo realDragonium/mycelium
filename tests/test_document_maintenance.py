@@ -483,6 +483,74 @@ def test_a_refused_revision_is_retried_with_the_review_notes_then_given_up(clien
     assert docs_store.get_run(server._drafts_db(), first)["recovery"] == "retried"
 
 
+def test_each_kind_of_retry_has_its_own_limit(client):
+    from mycelium import product_settings, server
+    from product_settings_helpers import set_product
+
+    _profile("auto-revise", "external-technical")
+    _slot("recovery", "ai")
+    set_product(
+        product_settings.DocumentationMaintenanceSettings(
+            run_retries=1, delivery_retries=0
+        )
+    )
+    _document_id, statement = _document()
+    prompts: list[str] = []
+
+    def refuse(prompt, *, guideline_set, document_type):
+        prompts.append(prompt)
+        return REFUSAL
+
+    doc_runs.RUNNER = refuse
+    _edit(statement, "Admins can export invoices as CSV or PDF.")
+    _sweep(T0)
+    _sweep(T0 + timedelta(hours=1))
+    for minute in range(1, 4):
+        _sweep(T0 + timedelta(hours=1, minutes=minute))
+
+    assert len(prompts) == 2
+    (entry,) = client.get("/api/documentation/maintenance").json()["entries"]
+    last = docs_store.get_run(server._drafts_db(), entry["run_id"])
+    assert (last["attempt"], last["recovery"]) == (1, "gave_up")
+    assert last["recovery_note"].startswith("Gave up after 1 automatic retry")
+
+
+def test_delivery_with_no_retries_fails_once(client, monkeypatch):
+    from mycelium import product_settings, server
+    from product_settings_helpers import set_product
+
+    _profile(None, "external-technical")
+    _slot("delivery", "auto")
+    _slot("delivery_destination", "docs")
+    _slot("recovery", "ai")
+    set_product(product_settings.DocumentationMaintenanceSettings(delivery_retries=0))
+    _document()
+    attempts: list[str] = []
+
+    def fail(conn, document_id, destination, revision):
+        attempts.append(document_id)
+        raise RuntimeError("GitHub is unavailable")
+
+    monkeypatch.setattr(publication, "publish", fail)
+    run = doc_runs.start_run(
+        prompt="Export invoices",
+        guideline_set="public",
+        document_type="how-to",
+        created_by=None,
+        conn=server._drafts_db(),
+    )
+    doc_runs.wait_all()
+    for minute in range(3):
+        _sweep(T0 + timedelta(minutes=minute))
+
+    failed = docs_store.get_run(server._drafts_db(), run)
+    assert (failed["delivery"], failed["delivery_error"]) == (
+        "failed",
+        "GitHub is unavailable",
+    )
+    assert len(attempts) == 1
+
+
 def test_a_failed_run_is_left_for_a_person_without_ai_recovery(client):
     _profile("auto-revise", "external-technical")
     _document_id, statement = _document()
@@ -589,3 +657,42 @@ def test_an_interrupted_claim_is_tried_again_while_ai_recovers(client):
     _sweep(T0 + timedelta(hours=1, minutes=1))
 
     assert _revision(document) == 2
+
+
+def test_an_out_of_date_document_the_ai_reviewer_dismissed_is_not_proposed_again(
+    client, monkeypatch
+):
+    from mycelium import ai, documentation_plan_review, guidelines, prompt_store
+
+    _profile(None, "external-technical")
+    prompt_store.save(
+        prompt_store.connection(),
+        type=guidelines.TYPE,
+        name="public/plan_review",
+        text="ai",
+    )
+    _document_id, statement = _document()
+    _edit(statement, "Admins can export invoices as CSV or PDF.")
+    reviewed: list[str] = []
+
+    def dismiss(task, config):
+        (item,) = json.loads(task.prompt)["items"]
+        reviewed.append(item["item_id"])
+        decision = {
+            "item_id": item["item_id"],
+            "decision": "dismiss",
+            "reason": "This change does not affect readers.",
+        }
+        return documentation_plan_review.Verdicts(decisions=[decision]), ai.Usage()
+
+    monkeypatch.setattr(documentation_plan_review, "_call", dismiss)
+    _sweep(T0)
+    documentation_plan_review.wait_all()
+    for minute in range(1, 5):
+        _sweep(T0 + timedelta(minutes=minute))
+        documentation_plan_review.wait_all()
+
+    plan = client.get("/api/documentation/plans/public").json()
+    assert plan["items"] == []
+    assert plan["stale"] == []
+    assert len(reviewed) == 1

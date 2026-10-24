@@ -211,6 +211,12 @@ class DocumentationPlanningSettings(RequestLimits):
     #: remain, each offered the next batch of them and keeping up to
     #: `max_items`.
     max_calls: int = Field(default=1, gt=0, le=5)
+    #: Failed automatic plans retried for profiles whose recovery is `ai`.
+    plan_retries: int = Field(default=2, ge=0, le=5)
+    #: Failed plan reviews retried for profiles whose recovery is `ai`.
+    plan_review_retries: int = Field(default=2, ge=0, le=5)
+    #: Plan items retried after their run could not start under `ai` recovery.
+    item_start_retries: int = Field(default=2, ge=0, le=5)
 
 
 class DocumentationMaintenanceSettings(SettingsModel):
@@ -222,10 +228,12 @@ class DocumentationMaintenanceSettings(SettingsModel):
     quiet_minutes: int = Field(default=30, ge=0)
     #: Automatic revisions one profile may start in any 24 hours.
     revisions_per_day: int = Field(default=5, ge=0)
-    #: For a profile whose recovery is `ai`: how often failed AI work (a plan,
-    #: a plan review, a run that wrote nothing, an item that could not start,
-    #: a publication) is retried before it is given up with a reason.
-    retry_attempts: int = Field(default=2, gt=0, le=5)
+    #: Runs that wrote nothing retried for profiles whose recovery is `ai`.
+    run_retries: int = Field(default=2, ge=0, le=5)
+    #: Automatic revisions retried after their run could not start under `ai` recovery.
+    revision_start_retries: int = Field(default=2, ge=0, le=5)
+    #: Failed automatic publications retried under `ai` recovery.
+    delivery_retries: int = Field(default=2, ge=0, le=5)
 
 
 class ConnectSettings(LoopLimits):
