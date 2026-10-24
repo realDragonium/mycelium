@@ -142,6 +142,14 @@ multi-part input is headed `=== PART i OF n ===`):
   another name. Ask specific `questions`; they become a knowledge gap, and the
   draft is reviewed again with the answer.
 
+When `brief.alias_decisions` is true, also return `alias_decisions` in each
+part: for every pending `alias_suggestion` operation in it, `accept` only when
+the suggestion's source text establishes that the alias names the concept,
+otherwise `reject`, each with a `quote` copied exactly from that source text
+and a short `reason`. Every pending suggestion needs one decision unless you
+ask a person (`needs_context`). A suggestion whose names or source changed
+since stays for a person.
+
 `brief.earlier_review` is the previous review, with its corrections when it
 was held for a curator: check them, keep the right ones and drop the wrong
 ones. `brief.mode` and `brief.auto_apply` say what your verdict does: in

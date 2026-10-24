@@ -98,8 +98,9 @@ token, the operator clicks **Run review** or **Run again** on the draft.
      the current configuration has not reached with
      `GET /api/draft-review/backlog`.
    - **Alias suggestions** (drafts holding only `alias_suggestion`
-     operations) are never sent to the reviewer; each waits for an individual
-     decision under **Names & aliases**.
+     operations) are sent to the reviewer only while **Reviewer decides alias
+     suggestions** is on; otherwise each waits for an individual decision
+     under **Names & aliases**.
 4. Build the duplicate map across the queue: entity names upserted by more
    than one draft (spelling variants included; case variants already resolve
    to one entity), the same claim in several drafts, drafts sharing a domain.
