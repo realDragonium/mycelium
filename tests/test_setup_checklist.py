@@ -79,7 +79,7 @@ def test_steps_complete_from_saved_settings(client, monkeypatch):
 
     _profile(None, "external-technical")
     set_review_controls(mode="off")
-    set_product(product_settings.AIBudgetSettings(monthly_limit_usd=50.0))
+    set_product(product_settings.AIBudgetSettings(monthly_limit_tokens=5_000_000))
     for action in model_settings.ACTIONS:
         if action != "draft_review":
             save_model(action, claude_model="claude-sonnet-5-5")

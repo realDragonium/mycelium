@@ -169,10 +169,10 @@ def _review(controls: draft_review_settings.ControlSnapshot) -> tuple[Status, st
 def _budget(prompts: sqlite3.Connection) -> tuple[Status, str]:
     limit = product_settings.get(
         product_settings.AIBudgetSettings, conn=prompts
-    ).monthly_limit_usd
+    ).monthly_limit_tokens
     if limit > 0:
-        return "done", f"${limit:,.2f} a month."
-    return "todo", "Set a monthly limit to be warned before AI spend runs over."
+        return "done", f"{limit:,} tokens a month."
+    return "todo", "Set a monthly token limit to be warned before AI use runs over."
 
 
 def blocked(review_mode: str, prompts: sqlite3.Connection) -> list[Blocked]:

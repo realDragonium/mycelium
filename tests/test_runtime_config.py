@@ -48,15 +48,15 @@ def test_connect_adapts_its_saved_limits_for_the_ingest_loop(monkeypatch):
         max_retries=0,
         request_timeout_s=10.0,
         thinking=False,
-        max_cost_usd=0.2,
+        max_run_tokens=50_000,
     )
     monkeypatch.setattr(product_settings, "get", lambda _: limits)
     config = config_from_settings()
     assert config.limits.model_dump(exclude={"kind", "max_input_chars"}) == (
-        limits.model_dump(exclude={"kind", "batch_size", "max_cost_usd"})
+        limits.model_dump(exclude={"kind", "batch_size", "max_run_tokens"})
     )
     assert (
         config.limits.max_input_chars
         == product_settings.IngestSettings().max_input_chars
     )
-    assert config.max_cost_usd == limits.max_cost_usd
+    assert config.max_run_tokens == limits.max_run_tokens

@@ -25,8 +25,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .ai.pricing import Price
-from .ai.types import Usage
 from .product_settings import LoopLimits
 
 _TRACE_WRITE_LOCK = threading.Lock()
@@ -240,20 +238,6 @@ def add_usage(trace: Any, usage: Any) -> None:
     trace.tokens["cache_read"] += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
     trace.tokens["cache_creation"] += int(
         getattr(usage, "cache_creation_input_tokens", 0) or 0
-    )
-
-
-def cost_usd(tokens: Mapping[str, int], price: Price | None) -> float | None:
-    """The estimated cost of a trace's token counts; None for an unpriced model."""
-    if price is None:
-        return None
-    return price.cost_usd(
-        Usage(
-            input_tokens=tokens["input"],
-            output_tokens=tokens["output"],
-            cache_read_input_tokens=tokens["cache_read"],
-            cache_creation_input_tokens=tokens["cache_creation"],
-        )
     )
 
 

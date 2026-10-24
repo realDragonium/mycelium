@@ -24,14 +24,14 @@ router = APIRouter(route_class=TimedRoute)
 
 class Backlog(BaseModel):
     draft_ids: list[str]
-    #: What reviewing them all is likely to cost, from what a review has
-    #: cost over the last 30 days; None without a priced review on record.
-    estimated_cost_usd: float | None
+    #: The tokens reviewing them all is likely to use, from what a review
+    #: has used over the last 30 days; None without a review on record.
+    estimated_tokens: int | None
     job: BacklogJob | None
 
 
 class BacklogStart(BaseModel):
-    budget_usd: float | None = Field(default=None, gt=0)
+    budget_tokens: int | None = Field(default=None, gt=0)
 
 
 class BacklogJobBody(BaseModel):
@@ -51,10 +51,10 @@ def draft_review_backlog(request: Request) -> Backlog:
     except review_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
     since = timestamps.of(datetime.now(UTC) - timedelta(days=30))
-    mean = ai_usage.mean_run_cost(drafts_store.connection(), "draft_review", since)
+    mean = ai_usage.mean_run_tokens(drafts_store.connection(), "draft_review", since)
     return Backlog(
         draft_ids=draft_ids,
-        estimated_cost_usd=None if mean is None else len(draft_ids) * mean,
+        estimated_tokens=None if mean is None else len(draft_ids) * mean,
         job=draft_review_runs.backlog_job(),
     )
 
@@ -67,7 +67,7 @@ def review_draft_backlog(
     from .. import draft_review_runs
 
     _require_admin(request)
-    budget = None if body is None else body.budget_usd
+    budget = None if body is None else body.budget_tokens
     try:
         return BacklogJobBody(job=draft_review_runs.review_backlog(budget))
     except review_settings.Unavailable as exc:

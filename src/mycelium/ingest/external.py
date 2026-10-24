@@ -96,8 +96,8 @@ def _open(kind: Kind, state: LoopState, claimant: str) -> loop._RunContext:
     else:
         config = IngestConfig.from_env()
         task, _ = loop.ingest_task(state.text or "", config)
-    # No model runs, so the run has no price and no spending cap.
-    config = dataclasses.replace(config, model=f"agent:{claimant}", max_cost_usd=None)
+    # No model runs, so the run has no token cap.
+    config = dataclasses.replace(config, model=f"agent:{claimant}", max_run_tokens=None)
     return loop._open(task, None, InProcessSubstrate(), InProcessDraftEmitter(), config)
 
 

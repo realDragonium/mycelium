@@ -703,12 +703,7 @@ def test_a_model_id_of_the_other_provider_is_refused_and_an_unknown_one_warned(
     unknown = _model_body(client, "ask", provider="claude", claude_model="claude-9")
     saved = client.patch("/api/model-settings/ask", json=unknown)
     assert saved.status_code == 200
-    assert "claude-9" in saved.json()["model_warning"]
-    known = _model_body(client, "ask", claude_model="claude-sonnet-5-5")
-    assert (
-        client.patch("/api/model-settings/ask", json=known).json()["model_warning"]
-        is None
-    )
+    assert saved.json()["model_warning"] is None
 
 
 def test_empty_legacy_review_model_cannot_create_a_run(configured_app):

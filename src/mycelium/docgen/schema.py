@@ -127,7 +127,7 @@ class DocumentWritten(BaseModel):
     #: there precisely because a run can declare a gap at emit time that it
     #: never filed (a forced finalize has no turn left to file one in).
     gaps: list[str] = Field(default_factory=list)
-    #: tool calls + args, op count, latency, token/cost, grounding.
+    #: tool calls + args, op count, latency, tokens, grounding.
     trace: dict = Field(default_factory=dict)
 
 

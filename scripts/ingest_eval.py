@@ -53,7 +53,6 @@ import ingest_eval_scoring as scoring
 from pydantic import BaseModel, ConfigDict, JsonValue
 from typing_extensions import TypeIs
 
-from mycelium.ai import Usage, pricing
 from mycelium.ai.types import CLAUDE_EFFORT, ClaudeEffort
 
 if TYPE_CHECKING:
@@ -282,10 +281,10 @@ class _Stored(BaseModel):
 
 def judge(
     case: scoring.Case, graph: scoring.DraftGraph
-) -> tuple[dict[int, str | None], float]:
-    """The judge's statement mapping, and what it cost (0 when cached)."""
+) -> tuple[dict[int, str | None], int]:
+    """The judge's statement mapping, and the tokens it used (0 when cached)."""
     if not graph.statements:
-        return {}, 0.0
+        return {}, 0
     prompt = _judge_prompt(case, graph)
     digest = hashlib.sha256(
         f"{JUDGE_MODEL}\n{JUDGE_SYSTEM}\n{prompt}".encode()
@@ -293,7 +292,7 @@ def judge(
     cache = RESULTS / "judge-cache" / f"{digest}.json"
     if cache.exists():
         stored = _Stored.model_validate_json(cache.read_text(encoding="utf-8"))
-        spent = 0.0
+        spent = 0
     else:
         import anthropic
 
@@ -313,7 +312,7 @@ def judge(
                 output=response.usage.output_tokens,
             ),
         )
-        spent = cost(JUDGE_MODEL, stored.tokens)
+        spent = _used(stored.tokens)
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(stored.model_dump_json(indent=1), encoding="utf-8")
     mapping: dict[int, str | None] = {}
@@ -376,18 +375,8 @@ class _Record(_View):
     result: _Result
 
 
-def cost(model: str, tokens: _Tokens) -> float:
-    price = pricing.price("claude", model)
-    if price is None:
-        raise SystemExit(f"no list price for {model}")
-    return price.cost_usd(
-        Usage(
-            input_tokens=tokens.input,
-            output_tokens=tokens.output,
-            cache_read_input_tokens=tokens.cache_read,
-            cache_creation_input_tokens=tokens.cache_creation,
-        )
-    )
+def _used(tokens: _Tokens) -> int:
+    return tokens.input + tokens.output + tokens.cache_read + tokens.cache_creation
 
 
 def _graph(record: _Record) -> scoring.DraftGraph:
@@ -414,7 +403,7 @@ class CaseResult(BaseModel):
     tool_calls: int
     forced_finalize: str | None
     tokens: _Tokens
-    cost_usd: float
+    total_tokens: int
     metrics: dict[str, float | None]
     counts: dict[str, int]
     statements: list[dict[str, str]]
@@ -425,8 +414,8 @@ class RunResults(BaseModel):
     cases: int
     metrics: dict[str, float | None]
     counts: dict[str, int]
-    cost_usd: float
-    judge_cost_usd: float
+    total_tokens: int
+    judge_tokens: int
     latency_s_median: float | None
     latency_s_max: float | None
     per_case: list[CaseResult]
@@ -437,14 +426,14 @@ def score_run(label: str) -> RunResults:
     cases = RunSpec.load(run_dir).cases()
     total = scoring.Counts()
     per_case: list[CaseResult] = []
-    judge_cost = 0.0
+    judge_tokens = 0
     for path in sorted(run_dir.glob("*.raw.json")):
         record = _Record.model_validate_json(path.read_text(encoding="utf-8"))
         case = cases[record.case]
         graph = _graph(record)
         trace = record.result.trace
         judged, spent = judge(case, graph)
-        judge_cost += spent
+        judge_tokens += spent
         counts, outcomes = scoring.score_case(case, graph, judged, _ledger(trace))
         total.add(counts)
         per_case.append(
@@ -457,7 +446,7 @@ def score_run(label: str) -> RunResults:
                 tool_calls=len(trace.tool_calls),
                 forced_finalize=trace.forced_finalize,
                 tokens=trace.tokens,
-                cost_usd=round(cost(record.model, trace.tokens), 4),
+                total_tokens=_used(trace.tokens),
                 metrics=scoring.metrics(counts),
                 counts=dataclasses.asdict(counts),
                 statements=[
@@ -472,8 +461,8 @@ def score_run(label: str) -> RunResults:
         cases=len(per_case),
         metrics=scoring.metrics(total),
         counts=dataclasses.asdict(total),
-        cost_usd=round(sum(c.cost_usd for c in per_case), 3),
-        judge_cost_usd=round(judge_cost, 3),
+        total_tokens=sum(c.total_tokens for c in per_case),
+        judge_tokens=judge_tokens,
         latency_s_median=latencies[len(latencies) // 2] if latencies else None,
         latency_s_max=latencies[-1] if latencies else None,
         per_case=per_case,
@@ -493,8 +482,8 @@ def _summary(results: RunResults) -> str:
     lines = [
         f"# Ingest eval: {results.label}",
         "",
-        f"{results.cases} cases, ingest ${results.cost_usd:.2f}, judge "
-        f"${results.judge_cost_usd:.2f}, latency median "
+        f"{results.cases} cases, ingest {results.total_tokens:,} tokens, judge "
+        f"{results.judge_tokens:,}, latency median "
         f"{results.latency_s_median}s / max {results.latency_s_max}s",
         "",
         "| metric | value |",
@@ -502,7 +491,7 @@ def _summary(results: RunResults) -> str:
         *(f"| {k} | {_fmt(v)} |" for k, v in results.metrics.items()),
         "",
         "| case | outcome | forced | turns | recall | precision | reuse "
-        "| link typed | dup | extra | $ | s |",
+        "| link typed | dup | extra | tokens | s |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for c in results.per_case:
@@ -512,7 +501,7 @@ def _summary(results: RunResults) -> str:
             f"{c.model_turns} | {_fmt(m['statement_recall'])} | "
             f"{_fmt(m['statement_precision'])} | {_fmt(m['reuse_accuracy'])} | "
             f"{_fmt(m['link_recall_typed'])} | {n['duplicates_of_existing']} | "
-            f"{n['extras']} | {c.cost_usd:.2f} | {c.latency_s} |"
+            f"{n['extras']} | {c.total_tokens} | {c.latency_s} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -564,7 +553,7 @@ def _run(
         list(pool.map(one, pending))
     results = score_run(label)
     print((run_dir / "summary.md").read_text(encoding="utf-8"))
-    print(f"run cost ${results.cost_usd + results.judge_cost_usd:.2f}")
+    print(f"run used {results.total_tokens + results.judge_tokens:,} tokens")
 
 
 def main() -> None:

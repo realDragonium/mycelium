@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 from typing import Literal
 
@@ -11,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import auth, errors, prompt_store, store
 from .ai import Provider, ReasoningEffort
-from .ai.pricing import price, provider_of
 from .ai.types import ClaudeEffort
 from .model_credentials import claude_configuration_error
 
@@ -143,7 +143,7 @@ class ActionView(ModelSnapshot):
     #: Whether External agent may be chosen for this action.
     agent_supported: bool
     configuration_error: str | None = None
-    #: Set when the selected model id is not one this build knows.
+    #: Set when the selected model id belongs to the other provider.
     model_warning: str | None = None
     providers: list[ProviderAvailability]
 
@@ -151,9 +151,6 @@ class ActionView(ModelSnapshot):
 class CatalogModel(BaseModel):
     provider: Provider
     model: str
-    #: Whether the built-in price table knows the model; without a price its
-    #: runs record no cost.
-    priced: bool
 
 
 class SettingsView(BaseModel):
@@ -335,31 +332,40 @@ def provider_availability(provider: Provider) -> ProviderAvailability:
 _PROVIDER_NAMES: dict[Provider, str] = {"claude": "Claude", "openai": "OpenAI"}
 
 
-def check_model_id(provider: Provider, model: str) -> str | None:
-    """Refuse an id that belongs to the other provider. An id neither the
-    price table nor the providers' naming recognises is allowed, so a new
-    model works before this build knows it; the returned warning says so."""
-    if not model:
-        return None
-    owner = provider_of(model)
+# Bedrock and Vertex ids wrap the Claude name (`us.anthropic.claude-…`,
+# `claude-…@20250101`), so a Claude id is recognised anywhere after a separator.
+_CLAUDE_ID = re.compile(r"(^|[.:/])claude-")
+_OPENAI_ID = re.compile(r"^(ft:)?(gpt-|chatgpt-|codex-|o\d)")
+
+
+def provider_of(model: str) -> Provider | None:
+    """The provider a model id belongs to by its shape; None for an id
+    neither provider's naming recognises."""
+    if _CLAUDE_ID.search(model):
+        return "claude"
+    if _OPENAI_ID.match(model):
+        return "openai"
+    return None
+
+
+def check_model_id(provider: Provider, model: str) -> None:
+    """Refuse an id that belongs to the other provider. An id neither
+    provider's naming recognises is allowed, so a new model works before this
+    build knows it."""
+    owner = provider_of(model) if model else None
     if owner is not None and owner != provider:
         raise ValueError(
             f"'{model}' is a model ID for {_PROVIDER_NAMES[owner]}, "
             f"not {_PROVIDER_NAMES[provider]}."
         )
-    if price(provider, model) is None:
-        return (
-            f"'{model}' is not a {_PROVIDER_NAMES[provider]} model this version "
-            "knows. Check the ID; its cost cannot be estimated."
-        )
-    return None
 
 
 def model_warning(provider: Provider, model: str) -> str | None:
     try:
-        return check_model_id(provider, model)
+        check_model_id(provider, model)
     except ValueError as exc:
         return str(exc)
+    return None
 
 
 def _action_phrase(action: Action) -> str:
@@ -482,9 +488,7 @@ def action_view(action: Action) -> ActionView:
 
 def catalog_view() -> list[CatalogModel]:
     return [
-        CatalogModel(
-            provider=provider, model=model, priced=price(provider, model) is not None
-        )
+        CatalogModel(provider=provider, model=model)
         for provider, models in catalog().items()
         for model in models
     ]

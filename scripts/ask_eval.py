@@ -283,7 +283,7 @@ def _run(
                 list(pool.map(lambda c: run_case(c, run_dir, model, depth), pending))
     results = score_run(label)
     print((run_dir / "summary.md").read_text(encoding="utf-8"))
-    print(f"run cost ${results.cost_usd + results.judge_cost_usd:.2f}")
+    print(f"run used {results.total_tokens + results.judge_tokens:,} tokens")
 
 
 # --------------------------------------------------------------------------- #
@@ -297,10 +297,8 @@ class _Stored(BaseModel):
     output_tokens: int
 
 
-def judge(
-    case: scoring.Case, seen: scoring.Observed
-) -> tuple[scoring.Judgement, float]:
-    """The judge's verdict, and what it cost (0 when cached)."""
+def judge(case: scoring.Case, seen: scoring.Observed) -> tuple[scoring.Judgement, int]:
+    """The judge's verdict, and the tokens it used (0 when cached)."""
     prompt = scoring.judge_prompt(case, seen)
     digest = hashlib.sha256(
         f"{JUDGE_MODEL}\n{scoring.JUDGE_SYSTEM}\n{prompt}".encode()
@@ -308,7 +306,7 @@ def judge(
     cache = RESULTS / "judge-cache" / f"{digest}.json"
     if cache.exists():
         stored = _Stored.model_validate_json(cache.read_text(encoding="utf-8"))
-        return stored.judgement, 0.0
+        return stored.judgement, 0
     import anthropic
 
     response = anthropic.Anthropic().messages.parse(
@@ -327,10 +325,7 @@ def judge(
     )
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(stored.model_dump_json(indent=1), encoding="utf-8")
-    return stored.judgement, _cost(
-        JUDGE_MODEL,
-        _Tokens(input=stored.input_tokens, output=stored.output_tokens),
-    )
+    return stored.judgement, stored.input_tokens + stored.output_tokens
 
 
 # --------------------------------------------------------------------------- #
@@ -385,20 +380,8 @@ class _Record(_View):
     fact_texts: dict[str, str] = {}
 
 
-def _cost(model: str, tokens: _Tokens) -> float:
-    from mycelium.ai import Usage, pricing
-
-    price = pricing.price("claude", model)
-    if price is None:
-        raise SystemExit(f"no list price for {model}")
-    return price.cost_usd(
-        Usage(
-            input_tokens=tokens.input,
-            output_tokens=tokens.output,
-            cache_read_input_tokens=tokens.cache_read,
-            cache_creation_input_tokens=tokens.cache_creation,
-        )
-    )
+def _used(tokens: _Tokens) -> int:
+    return tokens.input + tokens.output + tokens.cache_read + tokens.cache_creation
 
 
 def _observed(record: _Record) -> scoring.Observed:
@@ -427,7 +410,7 @@ class CaseResult(BaseModel):
     ops: int
     forced_finalize: str | None
     tokens: _Tokens
-    cost_usd: float
+    total_tokens: int
     score: dict[str, float | int | bool | None]
     judgement: scoring.Judgement | None
 
@@ -440,8 +423,8 @@ class RunResults(BaseModel):
     errors: list[str]
     metrics: dict[str, float | None]
     by_category: dict[str, float | None]
-    cost_usd: float
-    judge_cost_usd: float
+    total_tokens: int
+    judge_tokens: int
     latency_s_median: float | None
     latency_s_max: float | None
     per_case: list[CaseResult]
@@ -454,7 +437,7 @@ def score_run(label: str) -> RunResults:
     per_case: list[CaseResult] = []
     scores: list[scoring.CaseScore] = []
     errors: list[str] = []
-    judge_cost = 0.0
+    judge_tokens = 0
     for path in sorted(run_dir.glob("*.raw.json")):
         record = _Record.model_validate_json(path.read_text(encoding="utf-8"))
         case = cases[record.case]
@@ -465,7 +448,7 @@ def score_run(label: str) -> RunResults:
         verdict = None
         if seen.outcome == "answered":
             verdict, spent = judge(case, seen)
-            judge_cost += spent
+            judge_tokens += spent
         score = scoring.score_case(case, seen, verdict)
         scores.append(score)
         trace = record.result.trace
@@ -480,7 +463,7 @@ def score_run(label: str) -> RunResults:
                 ops=trace.op_count,
                 forced_finalize=trace.forced_finalize,
                 tokens=trace.tokens,
-                cost_usd=round(_cost(record.model, trace.tokens), 4),
+                total_tokens=_used(trace.tokens),
                 score=dataclasses.asdict(score),
                 judgement=verdict,
             )
@@ -502,8 +485,8 @@ def score_run(label: str) -> RunResults:
         errors=errors,
         metrics=scoring.aggregate(scores),
         by_category=by_category,
-        cost_usd=round(sum(c.cost_usd for c in per_case), 3),
-        judge_cost_usd=round(judge_cost, 3),
+        total_tokens=sum(c.total_tokens for c in per_case),
+        judge_tokens=judge_tokens,
         latency_s_median=latencies[len(latencies) // 2] if latencies else None,
         latency_s_max=latencies[-1] if latencies else None,
         per_case=per_case,
@@ -528,7 +511,7 @@ def _summary(results: RunResults) -> str:
         f"# Ask eval: {results.label}",
         "",
         f"{results.cases} cases on {results.model} ({results.depth}), ask "
-        f"${results.cost_usd:.2f}, judge ${results.judge_cost_usd:.2f}, latency "
+        f"{results.total_tokens:,} tokens, judge {results.judge_tokens:,}, latency "
         f"median {results.latency_s_median}s / max {results.latency_s_max}s",
         *(f"- error: {e}" for e in results.errors),
         "",
@@ -538,7 +521,7 @@ def _summary(results: RunResults) -> str:
         *(f"| fact_recall:{k} | {_fmt(v)} |" for k, v in results.by_category.items()),
         "",
         "| case | outcome | conf | forced | turns | ops | recall | cited "
-        "| claims | unsup | cite prec | must-not | refusal | conflict | $ | s |",
+        "| claims | unsup | cite prec | must-not | refusal | conflict | tokens | s |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for c in results.per_case:
@@ -555,7 +538,7 @@ def _summary(results: RunResults) -> str:
             f"{s['claims']} | {s['unsupported_claims']} | "
             f"{_fmt(s['citation_precision'])} | {s['must_not_violations']} | "
             f"{_fmt(refusal)} | {_fmt(s['conflict_flagged'])} | "
-            f"{c.cost_usd:.3f} | {c.latency_s} |"
+            f"{c.total_tokens} | {c.latency_s} |"
         )
     return "\n".join(lines) + "\n"
 

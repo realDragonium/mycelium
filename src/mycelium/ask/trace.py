@@ -2,7 +2,7 @@
 
 This is the input to scoring Mycelium vs. the markdown baseline, so it must be
 complete — question, full outcome, every tool call + args + result size, op
-count, model, latency, token/cost, and the sub-question ledger.
+count, model, latency, tokens, and the sub-question ledger.
 
 The loop assembles a `TraceBuilder` as it runs and emits a dict; the framework
 layer (server wiring) appends it as one JSONL line. Keeping file IO out of the
@@ -19,7 +19,6 @@ from pydantic import JsonValue
 from .. import agentloop, ai_prompts
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
 from ..ai import Provider
-from ..ai.pricing import Price
 from ..tracing import SpanRecorder
 
 
@@ -42,7 +41,7 @@ class TraceBuilder:
             "cache_creation": 0,
         }
     )
-    #: Token usage per model turn, in order, so a cost can be attributed to
+    #: Token usage per model turn, in order, so usage can be attributed to
     #: the turn that spent it.
     turn_usage: list[dict[str, int]] = field(default_factory=list)
     sub_question_ledger: list[dict] = field(default_factory=list)
@@ -90,16 +89,12 @@ class TraceBuilder:
                 }
             )
 
-    def cost_usd(self, price: Price | None) -> float | None:
-        return agentloop.cost_usd(self.tokens, price)
-
     def build(
         self,
         *,
         outcome: str,
         latency_ms: float,
         floor: dict,
-        price: Price | None,
     ) -> dict:
         tokens = dict(self.tokens)
         tokens["total"] = tokens["input"] + tokens["output"]
@@ -132,7 +127,6 @@ class TraceBuilder:
             "combined_reads": self.combined_reads,
             "tokens": tokens,
             "turn_usage": self.turn_usage,
-            "cost_usd": self.cost_usd(price),
             "forced_finalize": self.forced_finalize,
             "degraded": self.degraded,
             "notes": self.notes,

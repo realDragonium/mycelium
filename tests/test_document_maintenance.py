@@ -376,7 +376,6 @@ def test_an_edit_waits_for_its_new_label_and_its_confirmation_instead_of_reading
             ["external-technical"],
             reason="ai",
             model="fixture",
-            cost_usd=None,
             hold={"external-technical"},
         )
     _sweep(T0 + timedelta(minutes=1))

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Final
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider, ReasoningEffort, pricing
+from ..ai import Provider, ReasoningEffort
 
 #: The reasoning doctrine the inner model reads, shipped beside this package.
 _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
@@ -38,19 +38,15 @@ class IngestConfig:
     )
     #: Path to the reasoning doctrine injected into the system prompt.
     doctrine_path: str = _DEFAULT_DOCTRINE_PATH
-    #: Spending cap per run, in USD. Needs a list price; without one the
-    #: op cap and wall clock are the only bounds.
-    max_cost_usd: float | None = None
+    #: Most tokens one run may use, cache reads included; None (or 0) leaves
+    #: the op cap and wall clock as the only bounds.
+    max_run_tokens: int | None = None
     #: JSONL sink for the trace. None → resolved by the caller to a default
     #: under the data dir (see server wiring).
     trace_log_path: str | None = None
     #: Directory for per-run speedscope timing files. Defaults under the data
     #: dir (shared with ask/find); empty string disables file writing.
     trace_dir: str | None = None
-
-    @property
-    def price(self) -> pricing.Price | None:
-        return pricing.price(self.provider, self.model)
 
     @classmethod
     def from_env(cls) -> IngestConfig:

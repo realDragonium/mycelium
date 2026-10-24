@@ -1259,6 +1259,7 @@ def _archive_product_settings(conn: sqlite3.Connection, path: Path) -> bool:
 
 
 def _archived_product_settings(staging: Path, required: bool) -> ProductArchive | None:
+    from . import product_settings
     from .product_settings import Archive
 
     path = staging / "product-settings.json"
@@ -1277,6 +1278,8 @@ def _archived_product_settings(staging: Path, required: bool) -> ProductArchive 
                     continue
                 if settings.get("kind") == "concurrency":
                     settings.pop("research_runs", None)
+                if note := product_settings.replace_dollar_limit(settings):
+                    logger.warning("Mycelium keeps no prices; %s", note)
             kept.append(section)
         if len(kept) != len(sections):
             logger.info("skipped product settings of removed sections from the archive")

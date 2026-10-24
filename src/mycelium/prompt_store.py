@@ -173,6 +173,7 @@ def initialize_settings(
     with _writing(conn):
         product_settings.initialize(conn, import_environment=import_environment)
         product_settings.raise_outgrown_defaults(conn)
+        product_settings.replace_dollar_limits(conn)
         fresh = (
             conn.execute(
                 "SELECT 1 FROM instance_settings_migrations WHERE name = 'environment-import-disabled'"

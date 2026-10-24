@@ -3,9 +3,8 @@
 The model is the one saved for the `ask` action in AI settings, picked from
 the admin's model catalog; there is no built-in default. The loop's latency is
 dominated by per-call model inference across its sequential retrieval turns,
-so a small, fast model keeps a multi-hop answer under ~40s. A model missing
-from the list-price table gets no cost estimate. Task budgets come from saved
-AI settings.
+so a small, fast model keeps a multi-hop answer under ~40s. Task budgets come
+from saved AI settings.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ import os
 from dataclasses import dataclass, field, replace
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider, ReasoningEffort, pricing
+from ..ai import Provider, ReasoningEffort
 
 #: The `quick` depth profile (see `for_depth`). A time-boxed caller — e.g.
 #: Intercom, which drops an MCP call at ~30s — cannot afford the floor's forced
@@ -47,10 +46,6 @@ class AskConfig:
     #: under the data dir so on Fargate it lands on the writable volume and the
     #: `/api/traces` endpoint can serve it. Empty string disables file writing.
     trace_dir: str | None = None
-
-    @property
-    def price(self) -> pricing.Price | None:
-        return pricing.price(self.provider, self.model)
 
     @classmethod
     def from_env(cls) -> AskConfig:

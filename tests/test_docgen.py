@@ -893,7 +893,6 @@ def test_progress_and_the_summary_describe_the_run(kb_set):
         "cache_creation": 0,
         "output": 10,
     }
-    assert summary["cost_usd"] == round((20 * 3 + 10 * 15) / 1_000_000, 6)
     assert (summary["statements_retrieved"], summary["statements_cited"]) == (1, 1)
     assert summary["cited_statement_ids"] == ["stm_1"]
     assert summary["gaps_filed"] == 0

@@ -1,4 +1,4 @@
-"""Metering of every model call: who asked, what it used, what it cost.
+"""Metering of every model call: who asked and the tokens it used.
 
 `turn` and `structured` report each call here, so an action is metered by
 calling the model at all. What the call was for comes from the attribution in
@@ -19,7 +19,6 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 
-from .pricing import price
 from .types import IncompleteTurn, ModelConfig, ModelError, Usage
 
 _LOG = logging.getLogger(__name__)
@@ -40,7 +39,6 @@ class Call:
     provider: str
     model: str
     usage: Usage
-    cost_usd: float | None
     duration_ms: int
     ok: bool
     run_id: str | None
@@ -144,13 +142,11 @@ def _record(
 ) -> None:
     if _recorder is None:
         return
-    rate = price(config.provider, config.model)
     call = Call(
         action=who.action,
         provider=config.provider,
         model=config.model,
         usage=used,
-        cost_usd=rate.cost_usd(used) if rate is not None else None,
         duration_ms=round((time.monotonic() - started) * 1000),
         ok=ok,
         run_id=who.run_id,

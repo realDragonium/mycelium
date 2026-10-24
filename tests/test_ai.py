@@ -750,20 +750,15 @@ def test_every_turn_is_metered_with_its_attribution(provider: ai.Provider) -> No
     calls: list[ai.usage.Call] = []
     ai.usage.install(calls.append)
     envelope = _envelope(provider, [])
-    config = replace(
-        _config(provider),
-        model="claude-opus-5-5" if provider == "claude" else "gpt-5.4",
-    )
     with httpx.Client(
         transport=httpx.MockTransport(lambda request: _reply(request, envelope))
     ) as client:
         with ai.usage.attributed("docgen", run_id="drn_1"):
-            ai.turn(_task(), config, client=client)
-        ai.turn(_task(), config, client=client)
+            ai.turn(_task(), _config(provider), client=client)
+        ai.turn(_task(), _config(provider), client=client)
     first, second = calls
     assert (first.action, first.run_id, first.ok) == ("docgen", "drn_1", True)
     assert first.usage.cache_read_input_tokens == 3
-    assert first.cost_usd is not None and first.cost_usd > 0
     assert (second.action, second.run_id) == ("other", None)
 
 
@@ -783,7 +778,6 @@ def test_a_failed_turn_is_metered_with_the_tokens_it_used(
             ai.turn(_task(), _config(provider), client=client)
     assert raised.value.usage.output_tokens == 5
     assert [(call.ok, call.usage.output_tokens) for call in calls] == [(False, 5)]
-    assert calls[0].cost_usd is None  # an unpriced model keeps its tokens only
 
 
 def test_a_recorder_failure_never_fails_the_call() -> None:

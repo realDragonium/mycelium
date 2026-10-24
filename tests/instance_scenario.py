@@ -318,7 +318,6 @@ def _ai_usage(conn: sqlite3.Connection, draft: str) -> None:
             provider="claude",
             model="claude-sonnet-5-5",
             usage=Usage(input_tokens=1200, output_tokens=300),
-            cost_usd=0.0054,
             duration_ms=4100,
             ok=True,
             run_id=None,

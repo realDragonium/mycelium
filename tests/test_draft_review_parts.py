@@ -1,5 +1,5 @@
 """Large drafts are reviewed in connected parts; stale drafts and drafts over
-the cost cap are refused without a model call; the backlog review runs
+the token cap are refused without a model call; the backlog review runs
 oldest first and stops on request or at its budget."""
 
 import json
@@ -292,10 +292,10 @@ def test_a_part_cannot_correct_another_parts_operation(monkeypatch, small_parts)
     assert "operation of another part" in result["detail"]
 
 
-def test_a_draft_over_the_cost_cap_is_refused_without_a_model_call(monkeypatch):
+def test_a_draft_over_the_token_cap_is_refused_without_a_model_call(monkeypatch):
     contexts = _recording(monkeypatch)
     save_model("draft_review", openai_model="gpt-5.4")
-    set_product(product_settings.ReviewSettings(max_cost_usd=0.0001))
+    set_product(product_settings.ReviewSettings(max_draft_tokens=100))
     _automatic()
     draft_id = _submitted(_entity("Workspace"))
 
@@ -303,7 +303,7 @@ def test_a_draft_over_the_cost_cap_is_refused_without_a_model_call(monkeypatch):
 
     assert contexts == []
     assert result["application"] == "rejected"
-    assert "could cost up to" in result["rationale"]
+    assert "could use up to" in result["rationale"]
 
 
 def _replace(statement_id, text):
@@ -430,8 +430,7 @@ def test_the_backlog_review_stops_at_its_budget(monkeypatch):
                     action="draft_review",
                     provider="openai",
                     model="gpt-fixture",
-                    usage=ai.Usage(),
-                    cost_usd=1.0,
+                    usage=ai.Usage(input_tokens=1000),
                     duration_ms=1,
                     ok=True,
                     run_id="drv_fixture",
@@ -444,12 +443,12 @@ def test_the_backlog_review_stops_at_its_budget(monkeypatch):
     oldest, *rest = _waiting("Workspace", "Invoice", "Export")
     _automatic()
 
-    draft_review_runs.review_backlog(budget_usd=1.5)
+    draft_review_runs.review_backlog(budget_tokens=1500)
     draft_review_runs.wait_backlog()
 
     job = draft_review_runs.backlog_job()
     assert job is not None
-    assert (job.status, job.reviewed, job.spent_usd) == ("paused", 1, 1.0)
+    assert (job.status, job.reviewed, job.used_tokens) == ("paused", 1, 1000)
     assert "backlog budget" in (job.detail or "")
     assert server.get_draft(oldest)["status"] == "approved"
     assert [server.get_draft(item)["status"] for item in rest] == ["submitted"] * 2

@@ -1,6 +1,6 @@
 """Run documentation-generation cases against a copy of a real data directory.
 
-For evaluating docgen quality and cost after a change, by hand. It is not a
+For evaluating docgen quality and token use after a change, by hand. It is not a
 test and never runs in the test suite: it calls a live model and spends money.
 
     MYCELIUM_DATA_DIR=/path/to/data ANTHROPIC_API_KEY=... \
@@ -22,7 +22,7 @@ delivered anywhere.
 
 Per case it writes `<name>.md` (the document, or the refused draft) and
 `<name>.json` (run row plus the run's full trace), then `summary.md` with
-outcome, latency, tokens and cost for every case.
+outcome, latency and tokens for every case.
 """
 
 from __future__ import annotations
@@ -179,7 +179,6 @@ def summary_row(name: str, result: dict[str, object]) -> list[str]:
     assert isinstance(run, dict) and isinstance(trace, dict)
     tokens = trace["tokens"]
     grounding = trace.get("grounding") or {}
-    cost = trace.get("cost_usd")
     return [
         name,
         str(run["document_type"]),
@@ -191,7 +190,6 @@ def summary_row(name: str, result: dict[str, object]) -> list[str]:
         str(tokens["cache_read"]),
         str(tokens["cache_creation"]),
         str(tokens["output"]),
-        "—" if cost is None else f"{float(cost):.3f}",
         f"{grounding.get('cited_ids', 0)}/{grounding.get('retrieved_ids', 0)}",
         str(len(trace.get("declared_gaps") or [])),
     ]
@@ -256,7 +254,6 @@ def main() -> None:
         "cache read",
         "cache write",
         "output",
-        "cost USD",
         "cited/retrieved",
         "gaps",
     ]

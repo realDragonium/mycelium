@@ -11,15 +11,19 @@ from functools import partial
 import pytest
 
 from mycelium import (
+    agent_tasks,
     ai,
+    ai_usage,
     audience_labelling,
     audiences,
     auth,
+    drafts_store,
     product_settings,
     prompt_store,
     server,
     store,
 )
+from mycelium.ai import usage
 from mycelium.audiences import Audience
 from product_settings_helpers import connection as product_connection
 from product_settings_helpers import set_product
@@ -242,7 +246,7 @@ def test_the_ai_never_overwrites_a_curator(db):
     sid = store.create_statement(db, "state", "sso uses saml")
     store.audience_labels.set_label(db, sid, [], source="curator", reason="no")
     assert not store.audience_labels.apply_ai_label(
-        db, sid, [EXTERNAL.id], reason="yes", model="m", cost_usd=None
+        db, sid, [EXTERNAL.id], reason="yes", model="m"
     )
     assert (
         store.audience_labels.label_audiences(store.audience_labels.get_label(db, sid))
@@ -275,7 +279,18 @@ def test_backfill_queues_unlabelled_and_optionally_ai_labels_never_curated(db):
     assert _queued(db) == {unlabelled, ai_id}
 
 
-def test_backfill_progress_is_read_from_the_queue(db, prompts):
+@pytest.fixture
+def ledger():
+    conn = drafts_store.connect(":memory:")
+    drafts_store.migrate(conn)
+    agent_tasks.migrate(conn)
+    drafts_store.use_connection(conn)
+    yield conn
+    drafts_store.reset()
+    conn.close()
+
+
+def test_backfill_progress_is_read_from_the_queue(db, prompts, ledger):
     """Nothing is held in memory, so a restarted server shows the same run."""
     first, second = (
         store.create_statement(db, "state", text)
@@ -284,13 +299,26 @@ def test_backfill_progress_is_read_from_the_queue(db, prompts):
     db.execute("DELETE FROM audience_label_queue")
     assert audience_labelling.status(db).backfill is None
     store.audience_labels.enqueue_backfill(db, relabel_ai=False)
-    store.audience_labels.apply_ai_label(
-        db, first, [], reason="r", model="m", cost_usd=0.01
+    store.audience_labels.apply_ai_label(db, first, [], reason="r", model="m")
+    ai_usage.record(
+        ledger,
+        usage.Call(
+            action="audience_labelling",
+            provider="claude",
+            model="m",
+            usage=ai.Usage(input_tokens=300, output_tokens=20),
+            duration_ms=1,
+            ok=True,
+            run_id=None,
+            draft_id=None,
+        ),
     )
 
-    progress = audience_labelling.status(db).backfill
+    status = audience_labelling.status(db)
+    progress = status.backfill
     assert progress is not None
-    assert (progress.queued, progress.labelled, progress.cost_usd) == (2, 1, 0.01)
+    assert (progress.queued, progress.labelled, progress.tokens) == (2, 1, 320)
+    assert status.tokens == 320
     assert _queued(db) == {second}
 
 
@@ -625,9 +653,7 @@ def test_curators_override_labels_and_the_filter_finds_them(tmp_path, monkeypatc
 def test_an_edit_keeps_the_previous_audiences_unless_the_labeller_says_why(db, prompts):
     labels = store.audience_labels
     sid = store.create_statement(db, "rule", "an export holds 100 rows")
-    labels.apply_ai_label(
-        db, sid, ["external-non-technical"], reason="r", model="m", cost_usd=None
-    )
+    labels.apply_ai_label(db, sid, ["external-non-technical"], reason="r", model="m")
     store.update_statement_text(db, sid, "an export holds 500 rows")
     store.update_statement_text(db, sid, "an export holds 1000 rows")
     narrower = (sid, ["internal-non-technical"])

@@ -96,6 +96,54 @@ def test_an_outgrown_default_is_raised_once_from_the_old_value(db, model, field,
     assert getattr(settings.get(model), field) == old
 
 
+@pytest.mark.parametrize(
+    ("model", "saved", "field", "expected", "logged"),
+    [
+        (
+            settings.ReviewSettings,
+            {"max_cost_usd": 1.0},
+            "max_draft_tokens",
+            300_000,
+            False,
+        ),
+        (settings.ReviewSettings, {"max_cost_usd": 3.0}, "max_draft_tokens", 0, True),
+        (
+            settings.ConnectSettings,
+            {"max_cost_usd": 0.5},
+            "max_run_tokens",
+            2_000_000,
+            False,
+        ),
+        (
+            settings.AIBudgetSettings,
+            {"monthly_limit_usd": 0.0},
+            "monthly_limit_tokens",
+            0,
+            False,
+        ),
+        (
+            settings.AIBudgetSettings,
+            {"monthly_limit_usd": 50.0},
+            "monthly_limit_tokens",
+            0,
+            True,
+        ),
+    ],
+)
+def test_a_saved_dollar_limit_takes_the_token_default_or_no_limit(
+    db, caplog, model, saved, field, expected, logged
+):
+    body = model().model_dump(mode="json", exclude={field}) | saved
+    db.execute(
+        "INSERT INTO product_settings VALUES (?, 1, ?)",
+        (model().kind, json.dumps(body)),
+    )
+    with prompt_store._writing(db):
+        settings.replace_dollar_limits(db)
+    assert getattr(settings.get(model), field) == expected
+    assert ("keeps no prices" in caplog.text) is logged
+
+
 def test_independent_cas_and_unchanged_save(db):
     one = save(settings.AskSettings(max_tokens=1000))
     save(settings.IngestSettings(max_tokens=2000))

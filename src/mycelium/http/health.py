@@ -20,7 +20,6 @@ from .. import (
     server,
     store,
 )
-from ..ai.pricing import price
 from ..request_timing import TimedRoute
 from ..server import runtime
 from .access import _require_admin, _require_principal
@@ -30,12 +29,10 @@ router = APIRouter(route_class=TimedRoute)
 
 class ConnectLimits(BaseModel):
     batch_size: int
-    max_cost_usd: float
+    #: Most tokens one run may use; 0 for no cap.
+    max_run_tokens: int
     provider: str
     model: str
-    #: False when the model has no known price, so neither cost nor the
-    #: spending cap can be applied; the op cap and wall clock still bound it.
-    priced: bool
     #: Runs are queued for an outside agent instead of a server model.
     external_agent: bool = False
 
@@ -105,10 +102,9 @@ def knowledge_health_http(request: Request) -> HealthView:
         curation=work,
         connect=ConnectLimits(
             batch_size=limits.batch_size,
-            max_cost_usd=limits.max_cost_usd,
+            max_run_tokens=limits.max_run_tokens,
             provider=selected.provider,
             model=selected.model,
-            priced=price(selected.provider, selected.model) is not None,
             external_agent=selected.external_agent,
         ),
         connect_error=None,

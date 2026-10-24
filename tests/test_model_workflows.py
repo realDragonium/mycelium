@@ -88,7 +88,6 @@ def test_openai_question_batches_reads_and_retains_grounded_answer(monkeypatch):
     assert isinstance(result, Answered)
     assert result.trace["floor"]["satisfied"] is True
     assert result.trace["provider"] == "openai"
-    assert result.trace["cost_usd"] is None
     assert all(request["model"] == "question-model" for request in requests)
     assert requests[0]["parallel_tool_calls"] is True
     history = TypeAdapter(list[dict[str, JsonValue]]).validate_python(

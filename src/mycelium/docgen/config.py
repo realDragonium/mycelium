@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Final, Literal, TypedDict
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider, ReasoningEffort, pricing
+from ..ai import Provider, ReasoningEffort
 from ..guidelines import SET_NAME
 
 #: The generation doctrine the inner model reads, shipped beside this package.
@@ -108,10 +108,6 @@ class DocgenConfig:
     #: Directory for per-run speedscope timing files. Defaults under the data
     #: dir (shared with ask/ingest); empty string disables writing.
     trace_dir: str | None = None
-
-    @property
-    def price(self) -> pricing.Price | None:
-        return pricing.price(self.provider, self.model)
 
     @classmethod
     def from_env(cls, *, provider: Provider | None = None) -> DocgenConfig:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import sqlite3
 from typing import TYPE_CHECKING, Annotated, Literal, TypeVar
@@ -29,6 +31,8 @@ from . import (
 from .ai import Provider
 from .github_connections import Connection as GitHubConnection
 from .model_settings import Conflict, Unavailable
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .docgen.destinations import DestinationConfig
@@ -134,10 +138,10 @@ class ReviewSettings(RequestLimits):
     max_tokens: int = Field(default=6000, gt=0)
     max_retries: int = Field(default=0, ge=0)
     request_timeout_s: float = Field(default=90.0, gt=0)
-    #: Most one draft's review may cost, estimated before any model call
-    #: from its parts' context and max_tokens; a costlier draft is refused.
-    #: An unpriced model has no cap.
-    max_cost_usd: float = Field(default=1.0, gt=0)
+    #: Most tokens one draft's review may use, estimated before any model
+    #: call from its parts' context and max_tokens; a larger draft is
+    #: refused. 0 sets no cap.
+    max_draft_tokens: int = Field(default=300_000, ge=0)
 
 
 class AliasDiscoverySettings(RequestLimits):
@@ -201,7 +205,8 @@ class ConnectSettings(LoopLimits):
     kind: Literal["connect"] = "connect"
     #: Most statements one connect run takes; each run is one draft.
     batch_size: int = Field(default=5, gt=0, le=25)
-    max_cost_usd: float = Field(default=0.5, gt=0)
+    #: Most tokens one run may use, cache reads included; 0 sets no cap.
+    max_run_tokens: int = Field(default=2_000_000, ge=0)
     max_tokens: int = Field(default=32000, gt=0)
     op_cap: int = Field(default=60, gt=0)
     wall_clock_s: float = Field(default=300.0, gt=0)
@@ -216,8 +221,9 @@ class ConcurrencySettings(SettingsModel):
 
 class AIBudgetSettings(SettingsModel):
     kind: Literal["ai_budget"] = "ai_budget"
-    #: Estimated USD per UTC calendar month; 0 sets no budget.
-    monthly_limit_usd: float = Field(default=0.0, ge=0)
+    #: Tokens per UTC calendar month, as `ai_usage` counts them; 0 sets no
+    #: budget.
+    monthly_limit_tokens: int = Field(default=0, ge=0)
     warn_percent: int = Field(default=80, gt=0, le=100)
     #: At 100%, refuse model calls from background actions until the month
     #: ends or the budget is raised. Interactive actions are never paused.
@@ -707,6 +713,57 @@ def raise_outgrown_defaults(conn: sqlite3.Connection) -> None:
             (field, current[section][field], section, field, old),
         )
         conn.execute("INSERT INTO instance_settings_migrations VALUES (?)", (marker,))
+
+
+#: Dollar limits earlier versions saved, per section: the field, its shipped
+#: default and the token field that replaced it.
+_DOLLAR_LIMITS = {
+    "ai_budget": ("monthly_limit_usd", 0.0, "monthly_limit_tokens"),
+    "draft_review": ("max_cost_usd", 1.0, "max_draft_tokens"),
+    "connect": ("max_cost_usd", 0.5, "max_run_tokens"),
+}
+
+
+def replace_dollar_limit(settings: dict[str, object]) -> str | None:
+    """Swap a saved dollar limit for its token field, in place. A dollar
+    amount has no token equivalent that holds across models, so only a value
+    still at the shipped default takes the token default; any other becomes
+    no limit, and the returned line says so for the log."""
+    kind = settings.get("kind")
+    if not isinstance(kind, str) or kind not in _DOLLAR_LIMITS:
+        return None
+    old, shipped, new = _DOLLAR_LIMITS[kind]
+    if old not in settings:
+        return None
+    dollars = settings.pop(old)
+    default = next(d for d in DEFAULTS if d.kind == kind)
+    if dollars == shipped:
+        settings[new] = getattr(default, new)
+        return None
+    settings[new] = 0
+    return f"{kind}: the ${dollars} {old} became no {new} limit"
+
+
+def replace_dollar_limits(conn: sqlite3.Connection) -> None:
+    for kind in _DOLLAR_LIMITS:
+        row = conn.execute(
+            "SELECT body_json FROM product_settings WHERE section = ?", (kind,)
+        ).fetchone()
+        if row is None:
+            continue
+        try:
+            settings = json.loads(row["body_json"])
+        except ValueError:
+            continue  # unreadable settings stay disabled until an admin saves
+        if not isinstance(settings, dict) or _DOLLAR_LIMITS[kind][0] not in settings:
+            continue
+        if note := replace_dollar_limit(settings):
+            logger.warning("Mycelium keeps no prices; %s", note)
+        conn.execute(
+            "UPDATE product_settings SET revision = revision + 1, body_json = ? "
+            "WHERE section = ?",
+            (json.dumps(settings), kind),
+        )
 
 
 class ArchivedSection(SettingsModel):

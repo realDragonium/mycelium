@@ -143,9 +143,7 @@ def test_switching_confirmation_off_applies_external_grants_at_once(
 
 def test_a_relabel_keeps_a_visible_grant_and_holds_only_new_ones(db):
     sid = store.create_statement(db, "capability", "workspaces have owners")
-    labels.apply_ai_label(
-        db, sid, [EXTERNAL], reason="r", model="m", cost_usd=None, hold={EXTERNAL}
-    )
+    labels.apply_ai_label(db, sid, [EXTERNAL], reason="r", model="m", hold={EXTERNAL})
     labels.decide_pending(db, sid, EXTERNAL, confirm=True, by="curator-1")
 
     labels.apply_ai_label(
@@ -154,7 +152,6 @@ def test_a_relabel_keeps_a_visible_grant_and_holds_only_new_ones(db):
         [EXTERNAL, OTHER_EXTERNAL],
         reason="r2",
         model="m",
-        cost_usd=None,
         hold={EXTERNAL, OTHER_EXTERNAL},
     )
 
@@ -163,7 +160,7 @@ def test_a_relabel_keeps_a_visible_grant_and_holds_only_new_ones(db):
     assert labels.label_pending(row) == [OTHER_EXTERNAL]
     assert labels.label_decisions(row)[EXTERNAL]["by"] == "curator-1"
 
-    labels.apply_ai_label(db, sid, [], reason="r3", model="m", cost_usd=None)
+    labels.apply_ai_label(db, sid, [], reason="r3", model="m")
     row = _label(db, sid)
     assert labels.label_audiences(row) == []
     assert labels.label_pending(row) == []
@@ -177,7 +174,7 @@ def test_confirming_grants_and_rejecting_becomes_a_curator_decision(db, prompts)
     )
     for sid in (kept, refused):
         labels.apply_ai_label(
-            db, sid, [EXTERNAL], reason="r", model="m", cost_usd=None, hold={EXTERNAL}
+            db, sid, [EXTERNAL], reason="r", model="m", hold={EXTERNAL}
         )
 
     assert grant_confirmation.decide(EXTERNAL, [kept], confirm=True, curator="c1") == 1
@@ -191,24 +188,18 @@ def test_confirming_grants_and_rejecting_becomes_a_curator_decision(db, prompts)
     assert (confirmed["decision"], confirmed["by"]) == ("confirmed", "c1")
     rejected = _label(db, refused)
     assert (rejected["source"], rejected["labelled_by"]) == ("curator", "c1")
-    assert not labels.apply_ai_label(
-        db, refused, [EXTERNAL], reason="again", model="m", cost_usd=None
-    )
+    assert not labels.apply_ai_label(db, refused, [EXTERNAL], reason="again", model="m")
     assert refused not in _visible(db, EXTERNAL)
 
 
 def test_a_text_change_withdraws_the_grant_until_it_is_confirmed_again(db):
     sid = store.create_statement(db, "state", "exports are csv")
-    labels.apply_ai_label(
-        db, sid, [EXTERNAL], reason="r", model="m", cost_usd=None, hold={EXTERNAL}
-    )
+    labels.apply_ai_label(db, sid, [EXTERNAL], reason="r", model="m", hold={EXTERNAL})
     labels.decide_pending(db, sid, EXTERNAL, confirm=True, by="c1")
     store.update_statement_text(db, sid, "exports are csv or json")
 
     assert sid not in _visible(db, EXTERNAL)
-    labels.apply_ai_label(
-        db, sid, [EXTERNAL], reason="r", model="m", cost_usd=None, hold={EXTERNAL}
-    )
+    labels.apply_ai_label(db, sid, [EXTERNAL], reason="r", model="m", hold={EXTERNAL})
     assert labels.label_pending(_label(db, sid)) == [EXTERNAL]
 
 
@@ -233,7 +224,6 @@ def _pending_under_concepts(db, count: dict[str, int]) -> list[str]:
                 [EXTERNAL],
                 reason="r",
                 model="m",
-                cost_usd=None,
                 hold={EXTERNAL},
             )
             ids.append(sid)
@@ -284,7 +274,7 @@ def test_a_pending_statement_reaches_an_external_audience_only_once_confirmed(
     with store.transaction(conn):
         sid = store.create_statement(conn, "capability", "admins can export invoices")
         labels.apply_ai_label(
-            conn, sid, [EXTERNAL], reason="r", model="m", cost_usd=None, hold={EXTERNAL}
+            conn, sid, [EXTERNAL], reason="r", model="m", hold={EXTERNAL}
         )
 
     def seen() -> bool:

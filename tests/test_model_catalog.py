@@ -113,11 +113,16 @@ def test_the_catalog_refuses_ids_it_could_not_offer(models, message):
         product_settings.ModelCatalogSettings(**models)
 
 
-def test_the_catalog_marks_models_without_a_list_price(settings_db):
-    offer_models("openai", "gpt-5.4", "acme-large")
-
-    assert [
-        (entry.model, entry.priced)
-        for entry in model_settings.catalog_view()
-        if entry.provider == "openai"
-    ] == [("gpt-5.4", True), ("acme-large", False)]
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        ("claude-opus-5-5", "claude"),
+        ("us.anthropic.claude-sonnet-5-5", "claude"),
+        ("gpt-5.4", "openai"),
+        ("o3", "openai"),
+        ("ft:gpt-4.1:acme::abc", "openai"),
+        ("llama-4", None),
+    ],
+)
+def test_a_model_id_names_its_provider_by_its_shape(model, provider):
+    assert model_settings.provider_of(model) == provider

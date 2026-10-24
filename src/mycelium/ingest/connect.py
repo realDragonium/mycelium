@@ -364,7 +364,7 @@ def config_from_settings() -> IngestConfig:
         limits=product_settings.IngestSettings.model_validate(
             limits.model_dump(include=set(product_settings.LoopLimits.model_fields))
         ),
-        max_cost_usd=limits.max_cost_usd,
+        max_run_tokens=limits.max_run_tokens,
         trace_dir=str(tracing.default_trace_dir()),
     )
 
