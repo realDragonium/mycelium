@@ -1,5 +1,5 @@
 // Model choice per AI action, and the automatic draft review.
-import { useCallback, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Card, LoadError, Loading, Notice } from './lib';
 import { HttpError, errorMessage, getJSON, patchJSON, postJSON } from './api';
 import { usd } from './ai-usage';
@@ -161,6 +161,12 @@ function reviewForm(d: ReviewConfig): ReviewForm {
 }
 const MODE_LABEL: Record<ReviewMode, string> = { off: 'Off', 'review-only': 'Review only', 'review-and-apply': 'Review and apply' };
 
+interface BacklogJob {
+  status: 'running' | 'paused' | 'finished'; budget_usd: number | null; spent_usd: number; reviewed: number; remaining: number;
+  detail: string | null; started_at: string; finished_at: string | null;
+}
+interface Backlog { draft_ids: string[]; estimated_cost_usd: number | null; job: BacklogJob | null }
+
 export function DraftReviewSettings() {
   const { state, reload } = useAsync(useCallback(() => getJSON<ReviewConfig>('/api/draft-review/settings'), []));
   useOnSettingsSaved(reload);
@@ -169,29 +175,68 @@ export function DraftReviewSettings() {
   return <DraftReviewForm initial={data} onReload={reload} />;
 }
 
-// Drafts submitted while review was off are not reviewed retroactively. When
-// review is on, an admin is offered to review them once.
+// Drafts submitted while review was off are not reviewed retroactively. An
+// admin can run their sequential review as a pausable, budget-aware job.
 function BacklogOffer() {
-  const load = useCallback(() => getJSON<{ draft_ids: string[]; estimated_cost_usd: number | null }>('/api/draft-review/backlog'), []);
-  const { state, reload } = useAsync(load);
-  const [started, setStarted] = useState<number | null>(null);
+  const load = useCallback((signal: AbortSignal) => getJSON<Backlog>('/api/draft-review/backlog', signal), []);
+  const { state, reload, update } = useAsync(load);
+  const [budget, setBudget] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  if (started !== null) return <Notice tone="success">Started reviewing {started} waiting draft{started === 1 ? '' : 's'}. Progress shows under Drafts.</Notice>;
-  if (state.status !== 'ready' || state.data.draft_ids.length === 0) return null;
-  const n = state.data.draft_ids.length, cost = state.data.estimated_cost_usd;
-  const start = async () => {
+  const data = dataOf(state);
+  const job = data?.job;
+  const running = job?.status === 'running';
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(reload, 5000);
+    return () => clearInterval(timer);
+  }, [running, reload]);
+
+  const start = async (event: FormEvent) => {
+    event.preventDefault();
     setBusy(true); setError(null);
-    try { setStarted((await postJSON<{ draft_ids: string[] }>('/api/draft-review/backlog', {})).draft_ids.length); }
+    try {
+      const result = await postJSON<{ job: BacklogJob }>('/api/draft-review/backlog', { budget_usd: budget === '' ? null : Number(budget) });
+      update(current => ({ ...current, job: result.job }));
+    }
     catch (e) { setError(errorMessage(e)); reload(); }
     finally { setBusy(false); }
   };
+  const pause = async () => {
+    setBusy(true); setError(null);
+    try {
+      const result = await postJSON<{ job: BacklogJob }>('/api/draft-review/backlog/pause');
+      update(current => ({ ...current, job: result.job }));
+    } catch (e) { setError(errorMessage(e)); reload(); }
+    finally { setBusy(false); }
+  };
+  const resume = async () => {
+    setBusy(true); setError(null);
+    try {
+      const result = await postJSON<{ job: BacklogJob }>('/api/draft-review/backlog/resume');
+      update(current => ({ ...current, job: result.job }));
+    } catch (e) { setError(errorMessage(e)); reload(); }
+    finally { setBusy(false); }
+  };
+
+  if (!data) return null;
+  const progress = job && `${job.status === 'paused' ? 'Backlog review paused' : 'Reviewing the backlog oldest-first'}: ${job.reviewed} reviewed, ${job.remaining} remaining, about ${usd(job.spent_usd)} spent${job.budget_usd === null ? '' : ` of ${usd(job.budget_usd)}`}.`;
+  if (job?.status === 'running') return <Notice><div className="stack-sm"><div>{progress}</div><div><button className="btn sm" disabled={busy} onClick={() => void pause()}>{busy ? 'Pausing…' : 'Pause'}</button></div>{error && <p className="form-error">{error}</p>}</div></Notice>;
+  if (job?.status === 'paused') return <Notice tone="warn"><div className="stack-sm"><div>{progress}</div>{job.detail && <div>{job.detail}</div>}<div><button className="btn primary sm" disabled={busy} onClick={() => void resume()}>{busy ? 'Resuming…' : 'Resume'}</button></div>{error && <p className="form-error">{error}</p>}</div></Notice>;
+
+  const n = data.draft_ids.length, cost = data.estimated_cost_usd;
+  const lastResult = job?.status === 'finished' && <p className="muted small">Last backlog review: reviewed {job.reviewed} draft{job.reviewed === 1 ? '' : 's'}, spent about {usd(job.spent_usd)}.{job.detail && <> {job.detail}</>}</p>;
+  if (n === 0) return lastResult || null;
   return (
     <Notice tone="warn">
       <div className="stack-sm">
+        {lastResult}
         <div><b>{n} submitted draft{n === 1 ? ' is' : 's are'} waiting from before review was on.</b> {n === 1 ? 'It is' : 'They are'} not reviewed automatically. Review {n === 1 ? 'it' : 'them'} now under these settings?</div>
-        <div className="row gap-sm"><button className="btn primary sm" disabled={busy} onClick={() => void start()}>{busy ? 'Starting…' : `Review ${n} waiting draft${n === 1 ? '' : 's'}${cost === null ? '' : ` (about ${usd(cost)})`}`}</button>{cost === null && <span className="hint">Cost not estimated: no priced review in the last 30 days.</span>}</div>
-        {error && <p className="form-error">{error}</p>}
+        <form className="stack-sm" onSubmit={start}>
+          <label className="field"><span>Stop after spending (USD)</span><input className="input" type="number" min="0.01" step="any" value={budget} onChange={e => setBudget(e.target.value)} /></label>
+          <div className="row gap-sm"><button type="submit" className="btn primary sm" disabled={busy}>{busy ? 'Starting…' : `Review ${n} waiting draft${n === 1 ? '' : 's'}${cost === null ? '' : ` (about ${usd(cost)})`}`}</button>{cost === null && <span className="hint">Cost not estimated: no priced review in the last 30 days.</span>}</div>
+          {error && <p className="form-error">{error}</p>}
+        </form>
       </div>
     </Notice>
   );
