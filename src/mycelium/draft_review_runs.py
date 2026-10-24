@@ -1676,6 +1676,16 @@ def _validate_corrections(
         for op in ops
         if isinstance(op, dict) and isinstance(op.get("operation_ref"), str)
     }
+    struck = {c.operation_ref for c in corrections if c.action == "strike"}
+    if (
+        originals
+        and struck >= originals.keys()
+        and all(c.action == "strike" for c in corrections)
+    ):
+        raise ValueError(
+            "the corrections strike every operation, so nothing would land; "
+            "a draft that should not land is a reject"
+        )
     tools_by_name = {wrapper.__name__: wrapper for wrapper in server.TOOLS}
     changed: set[str] = set()
     for correction in corrections:

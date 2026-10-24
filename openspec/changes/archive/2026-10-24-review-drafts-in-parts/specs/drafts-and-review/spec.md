@@ -37,6 +37,13 @@ The system SHALL let an admin list through `GET /api/draft-review/backlog` the s
 
 ## ADDED Requirements
 
+### Requirement: Corrections that remove the whole draft
+The system SHALL fail an attempt whose corrections strike every operation of the draft and append none, saying that a draft which should not land is a reject.
+
+#### Scenario: Only operation struck
+- **WHEN** the reviewer returns `changes_suggested` striking the one operation of a draft
+- **THEN** the attempt fails and nothing is applied
+
 ### Requirement: Rerun and rejection after a failed attempt
 The system SHALL, in `review-and-apply` mode with the gate on, start one more attempt (`attempt: 2`) when an attempt fails without recording a review, passing the failure to the reviewer; when that second attempt also fails, the draft SHALL be rejected with an authoritative `rejected` review and a knowledge gap, unless the failure came from the model provider, which SHALL leave the draft `submitted`.
 

@@ -321,6 +321,13 @@ The system SHALL fail an attempt whose correction uses a bare `@N` outside an `u
 - **WHEN** the model appends an `add_links` correction whose target is `@0` instead of `@3:0`
 - **THEN** the attempt fails saying that outside a batch the statement is named as `@<seq>:<index>`
 
+### Requirement: Corrections that remove the whole draft
+The system SHALL fail an attempt whose corrections strike every operation of the draft and append none, saying that a draft which should not land is a reject.
+
+#### Scenario: Only operation struck
+- **WHEN** the reviewer returns `changes_suggested` striking the one operation of a draft
+- **THEN** the attempt fails and nothing is applied
+
 ### Requirement: Redundant tool names on corrections
 The system SHALL accept a `revise` or `strike` correction that also names the tool of the operation it targets, dropping the redundant tool name instead of failing the attempt.
 

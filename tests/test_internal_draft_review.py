@@ -773,6 +773,29 @@ def test_correction_without_an_object_payload_says_so(
     assert "payload_json" in result["detail"]
 
 
+def test_corrections_striking_every_operation_are_not_an_accepted_draft(
+    running_app, monkeypatch
+):
+    draft_id = _draft()
+    strike = Correction(
+        action="strike",
+        operation_ref=server.get_draft(draft_id)["ops"][0]["operation_ref"],
+        tool_name=None,
+        payload_json=None,
+        reason="A duplicate of live knowledge.",
+    )
+    monkeypatch.setattr(
+        draft_review_runs,
+        "RUNNER",
+        lambda context: _assessment("changes_suggested", [strike]),
+    )
+    _set_review_controls(mode="review-only")
+    _request(draft_id)
+    result = _result(draft_id)
+    assert result["status"] == "failed"
+    assert "strike every operation" in result["detail"]
+
+
 @pytest.mark.parametrize(
     ("links", "valid"),
     [
