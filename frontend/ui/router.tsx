@@ -127,7 +127,7 @@ function canonicalHash(hash: string, route: Route): string {
   return base;
 }
 
-export interface Router { route: Route; go: (next: Route) => void }
+export interface Router { route: Route; go: (next: Route, options?: { replace?: boolean }) => void }
 
 // Parses the current hash and rewrites an alias to its canonical form in
 // place, without adding a history entry.
@@ -146,9 +146,10 @@ export function useHashRouter(): Router {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
-  const go = (next: Route) => {
+  const go = (next: Route, options?: { replace?: boolean }) => {
     const hash = routeToHash(next);
     if (hash === window.location.hash) setRoute(next);
+    else if (options?.replace) { window.history.replaceState(null, '', hash); setRoute(next); }
     else window.location.hash = hash;
     window.scrollTo({ top: 0, behavior: 'instant' });
   };

@@ -265,6 +265,7 @@ main.page.home { padding-top: 56px; }
 .home-blurb b { color: var(--ink-2); font-weight: 500; }
 .home-cmd, .tier-cards, .home-section { max-width: 760px; margin-left: auto; margin-right: auto; }
 .tier-cards { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.tier-cards.find-only { grid-template-columns: 1fr; }
 .tier-card { border: 1px solid var(--line); border-radius: var(--r-md); padding: 13px 15px; background: var(--bg-1); }
 .tier-card p { font-size: var(--fs-sm); color: var(--ink-3); line-height: 1.5; margin: 0; }
 .tier-card .tc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }

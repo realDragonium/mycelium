@@ -1,8 +1,9 @@
 // Shared primitives: icons, tags, statement text, page chrome, error boundary.
 import { Component, createContext, useContext, useState, type ErrorInfo, type ReactNode, type SVGProps } from 'react';
-import { editStatement, errorMessage, isAuthError, isScoped, type Me } from './api';
+import { editStatement, errorMessage, getAskExternal, isAuthError, isScoped, type Me } from './api';
 import { layerOf, refreshStatement, substrate, type Entity, type Statement } from './data';
 import { Link, useRouter } from './router';
+import { dataOf, useAsync, useOnSettingsSaved } from './use-async';
 
 /* ---------------- Substrate reload ----------------
    After a write that changes the dump, `refresh` reloads it and bumps
@@ -13,6 +14,12 @@ export const useDataCtx = () => useContext(DataCtx);
 /* ---------------- Who is signed in (null until /api/me answers) ---------------- */
 export const MeCtx = createContext<Me | null>(null);
 export const useMe = () => useContext(MeCtx);
+
+export function useAskExternal(): boolean | undefined {
+  const { state, reload } = useAsync(getAskExternal);
+  useOnSettingsSaved(reload);
+  return dataOf(state);
+}
 
 /* ---------------- Ingest launcher ----------------
    The shell owns the nonce that remounts Ingest when it is opened from Ingest. */

@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 42 of its 81 registered tools over MCP. Every
+question. Mycelium therefore advertises 47 of its 86 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -11,11 +11,13 @@ The list lives in `server.MCP_TOOLS`. `tests/test_mcp_surface.py` keeps this fil
 that set, and the registered tools in agreement.
 
 Role filtering still applies: `tools/list` shows a caller only the tools their role
-can invoke. An asker sees only `ask`, and a reader sees 19 tools. A drafter sees 39
+can invoke. An asker sees only `ask`, and a reader sees 19 tools. A drafter sees 40
 because their writes are queued on a draft, but they do not see `list_drafts`,
-`request_documentation` or `revise_document`. A writer sees 39 and does not see
-the admin-only `delete_statement`, `merge_statements` or `merge_entities`. An admin
-sees all 42.
+`request_documentation`, `revise_document` or the tools that claim and do
+agent tasks. A writer sees 44 and does not see the admin-only
+`delete_statement`, `merge_statements` or `merge_entities`. An admin sees all
+47. While Ask is set to External agent, `ask` is listed to no one, so each
+count is one lower and an asker sees no tools.
 
 A principal scoped to an audience is a reader whatever its role, and sees only
 the read tools in `principal_audience.TOOLS`; see
@@ -42,8 +44,8 @@ decision, and the rest runs in-process.
 | `list_link_types` | Lists the statement link vocabulary and its direction rules, which writers need. |
 | `list_statement_kinds` | Lists the statement kind vocabulary. |
 | `list_entity_link_types` | Lists the entity link vocabulary that appears in `get_entity`. |
-| `ask` | Runs the server's answer loop. It is the only tool an `asker` sees. |
-| `ingest` | Turns prose into a reviewable draft, submitted at once while internal draft review is on. |
+| `ask` | Runs the server's answer loop. It is the only tool an `asker` sees. Hidden while Ask is set to External agent. |
+| `ingest` | Turns prose into a reviewable draft, submitted at once while internal draft review is on. While Ingest is set to External agent it queues the work for an outside agent instead. |
 | `upsert_entity` | Creates or describes the entity a statement names. |
 | `upsert_name` | Adds an alias so mentions resolve. |
 | `upsert_statement` | Creates or replaces one statement. Its description holds the statement-kind definitions that the authoring skills refer to. When embedding is unavailable, the response has `embedding_pending: true` and `near_duplicates: []`. |
@@ -71,6 +73,11 @@ decision, and the rest runs in-process.
 | `request_documentation` | Starts a documentation run. `anchor_entity_id`, with a guideline set and document type, names the entity the document is about, so a repeat request revises that document; without one, the run creates a document. |
 | `get_documentation_run` | Polls a run that `request_documentation` or `revise_document` returns. A run the review refused lists the failed findings in `summary.review_findings`; a retry briefed with them lists them in `review_notes`. `retryable` says whether the run can be started again as it was (it wrote nothing and was not a manual edit). |
 | `get_generated_document` | Reads the written document and the revision that `revise_document` needs, the state of its pull request (open, merged or closed), refreshed from GitHub at most once a minute, and `stale`: whether a statement it cites was edited, deleted or merged away since, or is no longer visible to the document's audience, with old and new text. |
+| `claim_agent_task` | Leases work an action set to External agent would otherwise give a server model (writing, reviewing or planning documentation, labelling audiences, ingest, the connect pass, alias discovery) for 30 minutes, with a brief holding the model's instructions, input and result schema. Writers and admins only. See [Agent tasks](AGENT_TASKS.md). |
+| `read_for_agent_task` | Runs one of a task's read tools for it and records the read; a documentation task's reads run inside the audience boundary it writes for. |
+| `submit_agent_task` | Hands in a claimed task's result, which passes the checks a server model's output would; a refusal returns findings and the retries left. |
+| `release_agent_task` | Gives a claimed task back to the queue with a reason. |
+| `get_agent_task` | Follows work the caller queued for an outside agent, such as an `ingest` that returned `waiting_for_agent`: status, findings and the draft it made. |
 | `revise_document` | Revises a generated document. `update_sources` briefs the run with the cited statements that changed. A delivered document's revision starts from GitHub edits; when both sides changed it is refused unless `start_from_destination` is passed. |
 
 ### Uploading media

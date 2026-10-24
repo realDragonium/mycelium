@@ -379,6 +379,21 @@ def _documentation(data_dir: Path) -> None:
         )
         _documentation_plans(conn, run)
         _document_maintenance(conn, document, run)
+        _agent_tasks(conn, run)
+
+
+def _agent_tasks(conn, run: str) -> None:
+    try:
+        from mycelium import agent_tasks
+    except ImportError:
+        return
+    agent_tasks.create(
+        conn,
+        "documentation",
+        subject_id=run,
+        state={"reader": "ada"},
+        brief={"instructions": "Write the page.", "input": "Sign-in"},
+    )
 
 
 def _document_maintenance(conn, document: str, run: str) -> None:

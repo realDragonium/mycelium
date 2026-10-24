@@ -425,3 +425,56 @@ def test_an_approved_item_that_wrote_nothing_is_retried_from_the_plan(
 
     followed = client.get("/api/documentation/plans/public").json()["items"][0]["run"]
     assert followed["id"] == retry.json()["id"] != refused["id"]
+
+
+def test_an_agent_plans_a_profile_and_its_proposal_is_kept_as_a_models(client):
+    from mycelium import server
+
+    _profile()
+    conn = server._db()
+    with store.transaction(conn):
+        sid = store.create_statement(conn, "capability", "admins can export invoices")
+    selected = next(
+        action
+        for action in client.get("/api/model-settings").json()["actions"]
+        if action["action"] == "documentation_planning"
+    )
+    saved = client.patch(
+        "/api/model-settings/documentation_planning",
+        json={
+            **{
+                key: selected[key]
+                for key in (
+                    "provider",
+                    "claude_model",
+                    "openai_model",
+                    "claude_reasoning_effort",
+                    "openai_reasoning_effort",
+                    "revision",
+                )
+            },
+            "external_agent": True,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert client.post("/api/documentation/plans/public").status_code == 200
+    assert (
+        client.get("/api/documentation/plans/public").json()["latest"]["agent_task"][
+            "status"
+        ]
+        == "waiting"
+    )
+
+    [task] = server.claim_agent_task("documentation_planning").tasks
+    assert sid in str(task.brief)
+    malformed = server.submit_agent_task(task.id, {"items": [{"title": "x"}]})
+    assert malformed.status == "refused"
+    kept = server.submit_agent_task(
+        task.id,
+        {"items": [json.loads(_item(statement_ids=[sid]).model_dump_json())]},
+    )
+    assert kept.status == "accepted"
+
+    plan = client.get("/api/documentation/plans/public").json()
+    assert plan["latest"]["outcome"] == "planned"
+    assert [item["title"] for item in plan["items"]] == ["Export invoices"]

@@ -35,7 +35,7 @@ class DocumentationRequestBody(BaseModel):
     prompt: str
     guideline_set: str | None = None
     document_type: str | None = None
-    provider: Literal["claude", "openai"] | None = None
+    provider: Literal["claude", "openai", "agent"] | None = None
     anchor_entity_id: str | None = None
 
 
@@ -163,7 +163,7 @@ def edit_document_draft_http(
 class DocumentRevisionBody(BaseModel):
     prompt: str = ""
     expected_revision: int = PydField(ge=1, strict=True)
-    provider: Literal["claude", "openai"] | None = None
+    provider: Literal["claude", "openai", "agent"] | None = None
     start_from_destination: bool = False
     update_sources: bool = False
 

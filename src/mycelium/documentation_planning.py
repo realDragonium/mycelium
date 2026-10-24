@@ -24,9 +24,17 @@ from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+)
 
 from . import (
+    agent_tasks,
     ai,
     ai_prompts,
     audience_scope,
@@ -45,6 +53,7 @@ from .audiences import Audience
 from .doc_plans import Item
 
 logger = logging.getLogger(__name__)
+_json = TypeAdapter(dict[str, JsonValue])
 
 DEFAULT_INSTRUCTIONS = """Plan the documentation one writing profile should have for its audience.
 Propose the documents a real reader of that audience would look for: the tasks
@@ -538,6 +547,83 @@ def target(
     return Target(guideline_set, audience, profile.templates)
 
 
+@dataclass(frozen=True)
+class _Inputs:
+    """What one planning call reads, for a model or an outside agent."""
+
+    scope: audience_scope.Scope
+    overview: Overview
+    documents: list[ExistingDocument]
+    dismissed: list[sqlite3.Row]
+    task: ai.StructuredTask[Proposal]
+    max_items: int
+
+
+def _inputs(
+    drafts: sqlite3.Connection,
+    substrate: sqlite3.Connection,
+    planned: Target,
+    limits: product_settings.DocumentationPlanningSettings,
+) -> _Inputs:
+    scope = audience_scope.capture(substrate, planned.audience)
+    overview = read_overview(
+        substrate,
+        scope,
+        max_entities=limits.max_entities,
+        max_capabilities=limits.max_capabilities,
+    )
+    documents = profile_documents(drafts, lambda: substrate, planned.guideline_set)
+    dismissed = doc_plans.dismissed(drafts, planned.guideline_set)
+    instructions = ai_prompts.resolve("documentation_planning")
+    task = ai.StructuredTask(
+        system=build_system_prompt(instructions.text),
+        prompt=prompt_for(
+            guideline_set=planned.guideline_set,
+            audience=planned.audience,
+            templates=planned.templates,
+            overview=overview,
+            documents=documents,
+            dismissed=dismissed,
+            max_items=limits.max_items,
+        ),
+        output_type=Proposal,
+    )
+    return _Inputs(scope, overview, documents, dismissed, task, limits.max_items)
+
+
+def _keep(
+    drafts: sqlite3.Connection,
+    plan_id: str,
+    planned: Target,
+    inputs: _Inputs,
+    proposal: Proposal,
+    **spent: object,
+) -> Accepted:
+    """Record the items of `proposal` that survive `accept`."""
+    kept = accept(
+        proposal,
+        overview=inputs.overview,
+        document_types=[item.name for item in planned.templates],
+        documents=inputs.documents,
+        dismissed={str(row["key"]) for row in inputs.dismissed},
+        max_items=inputs.max_items,
+    )
+    doc_plans.finish_plan(
+        drafts,
+        plan_id,
+        items=kept.items,
+        summary={
+            "visible_statements": len(inputs.scope.statement_ids),
+            "concepts": len(inputs.overview.concepts),
+            "key_statements": len(inputs.overview.key_statements),
+            "proposed": len(proposal.items),
+            "dropped": dict(kept.dropped),
+            **spent,
+        },
+    )
+    return kept
+
+
 @request_timing.tracked("background documentation plan")
 def plan(
     drafts: sqlite3.Connection,
@@ -553,30 +639,8 @@ def plan(
     try:
         limits = product_settings.get(product_settings.DocumentationPlanningSettings)
         doc_plans.record_activity(drafts, plan_id, "Reading what the audience may see")
-        scope = audience_scope.capture(substrate, planned.audience)
-        overview = read_overview(
-            substrate,
-            scope,
-            max_entities=limits.max_entities,
-            max_capabilities=limits.max_capabilities,
-        )
-        documents = profile_documents(drafts, lambda: substrate, planned.guideline_set)
-        dismissed = doc_plans.dismissed(drafts, planned.guideline_set)
+        inputs = _inputs(drafts, substrate, planned, limits)
         selected = model_settings.get("documentation_planning")
-        instructions = ai_prompts.resolve("documentation_planning")
-        task = ai.StructuredTask(
-            system=build_system_prompt(instructions.text),
-            prompt=prompt_for(
-                guideline_set=planned.guideline_set,
-                audience=planned.audience,
-                templates=planned.templates,
-                overview=overview,
-                documents=documents,
-                dismissed=dismissed,
-                max_items=limits.max_items,
-            ),
-            output_type=Proposal,
-        )
         config = ai.ModelConfig(
             provider=selected.provider,
             model=selected.model,
@@ -593,32 +657,16 @@ def plan(
             ai.usage.attributed("documentation_planning", run_id=plan_id),
         ):
             doc_plans.record_activity(drafts, plan_id, "Proposing documents")
-            proposal, usage = call(task, config)
-        kept = accept(
-            proposal,
-            overview=overview,
-            document_types=[item.name for item in planned.templates],
-            documents=documents,
-            dismissed={str(row["key"]) for row in dismissed},
-            max_items=limits.max_items,
-        )
+            proposal, usage = call(inputs.task, config)
         cost = price(selected.provider, selected.model)
-        doc_plans.finish_plan(
+        _keep(
             drafts,
             plan_id,
-            items=kept.items,
-            summary={
-                "visible_statements": len(scope.statement_ids),
-                "concepts": len(overview.concepts),
-                "key_statements": len(overview.key_statements),
-                "proposed": len(proposal.items),
-                "dropped": dict(kept.dropped),
-                "tokens": {
-                    "input": usage.input_tokens,
-                    "output": usage.output_tokens,
-                },
-                "cost_usd": cost.cost_usd(usage) if cost is not None else None,
-            },
+            planned,
+            inputs,
+            proposal,
+            tokens={"input": usage.input_tokens, "output": usage.output_tokens},
+            cost_usd=cost.cost_usd(usage) if cost is not None else None,
         )
     except Exception as exc:
         logger.exception("documentation planning failed: %s", plan_id)
@@ -627,15 +675,18 @@ def plan(
 
 _threads: dict[str, threading.Thread] = {}
 _start_lock = threading.Lock()
+WAITING_FOR_AGENT = "Waiting for an agent"
 
 
 def start(guideline_set: str, *, created_by: str | None) -> str:
-    """Admit a planning call for the profile and run it in the background."""
+    """Admit a planning call for the profile and run it in the background,
+    or queue it for an outside agent while planning is set to External
+    agent."""
     import contextvars
 
     planned = target(guideline_set, documentation_profiles.capture())
     selected = model_settings.get("documentation_planning")
-    if not selected.model:
+    if not selected.external_agent and not selected.model:
         raise Unavailable("Choose a documentation planning model in AI settings.")
     drafts = drafts_store.connection()
     with _start_lock:
@@ -646,9 +697,18 @@ def start(guideline_set: str, *, created_by: str | None) -> str:
             guideline_set=guideline_set,
             audience_id=planned.audience.id,
             created_by=created_by,
-            provider=selected.provider,
-            model=selected.model,
+            provider=doc_plans.AGENT if selected.external_agent else selected.provider,
+            model="" if selected.external_agent else selected.model,
         )
+        if selected.external_agent:
+            doc_plans.record_activity(drafts, plan_id, WAITING_FOR_AGENT)
+            agent_tasks.create(
+                drafts,
+                "documentation_planning",
+                subject_id=plan_id,
+                state={"guideline_set": guideline_set},
+            )
+            return plan_id
     context = contextvars.copy_context()
 
     def run() -> None:
@@ -668,6 +728,88 @@ def start(guideline_set: str, *, created_by: str | None) -> str:
     _threads[plan_id] = thread
     thread.start()
     return plan_id
+
+
+def _agent_target(task: agent_tasks.Task) -> Target:
+    guideline_set = task.state["guideline_set"]
+    assert isinstance(guideline_set, str)
+    return target(guideline_set, documentation_profiles.capture())
+
+
+def _prepare_agent_task(
+    task: agent_tasks.Task, _claimant: str
+) -> agent_tasks.Task | None:
+    """Brief a just-claimed planning task with the planner's input, read
+    through the profile's audience boundary when it is first claimed. None
+    when the profile can no longer be planned; the plan records why."""
+    drafts = drafts_store.connection()
+    if task.brief is not None:
+        return task
+    try:
+        inputs = _inputs(
+            drafts,
+            store.substrate_connection(),
+            _agent_target(task),
+            product_settings.get(product_settings.DocumentationPlanningSettings),
+        )
+    except Unavailable as exc:
+        doc_plans.finish_plan(drafts, str(task.subject_id), error=str(exc))
+        agent_tasks.finish(drafts, task.id, "failed", error=str(exc))
+        return None
+    agent_tasks.save(
+        drafts,
+        task.id,
+        brief=agent_tasks.structured_brief(
+            instructions=inputs.task.system,
+            input=inputs.task.prompt,
+            result="The documents to propose, most valuable first.",
+            schema=Proposal,
+        ),
+    )
+    return agent_tasks.get(drafts, task.id)
+
+
+def _submit_agent_task(
+    task: agent_tasks.Task, _claimant: str, result: dict[str, JsonValue]
+) -> agent_tasks.Submitted:
+    """Keep an agent's proposal as a model's is kept: only items naming what
+    the audience may see, templates the profile has and documents it owns
+    survive. The overview is read again, so what a label hid since is not
+    kept either."""
+    drafts = drafts_store.connection()
+    plan_id = str(task.subject_id)
+    try:
+        proposal = Proposal.model_validate(result)
+    except ValidationError as exc:
+        findings = [agent_tasks.Finding(check="shape", problem=str(exc))]
+        if task.failures >= agent_tasks.RETRIES:
+            doc_plans.finish_plan(
+                drafts, plan_id, error="The agent's proposal was malformed."
+            )
+            return agent_tasks.closed(
+                drafts,
+                task,
+                "Refused too often; the plan failed.",
+                failed=True,
+                findings=findings,
+            )
+        return agent_tasks.refused(
+            drafts, task, findings, agent_tasks.RETRIES - task.failures
+        )
+    planned = _agent_target(task)
+    limits = product_settings.get(product_settings.DocumentationPlanningSettings)
+    inputs = _inputs(drafts, store.substrate_connection(), planned, limits)
+    kept = _keep(drafts, plan_id, planned, inputs, proposal, agent=task.claimed_by)
+    dropped = ", ".join(f"{count} {why}" for why, count in kept.dropped.items())
+    return agent_tasks.closed(
+        drafts,
+        task,
+        f"Kept {len(kept.items)} of {len(proposal.items)} items"
+        + (f"; dropped: {dropped}." if dropped else "."),
+    )
+
+
+AGENT_TASK = agent_tasks.Handler(prepare=_prepare_agent_task, submit=_submit_agent_task)
 
 
 def wait_all(timeout: float = 10.0) -> None:
@@ -870,6 +1012,8 @@ class PlanSummary(BaseModel):
     cost_usd: float | None
     proposed: int | None
     dropped: dict[str, int]
+    #: The task an outside agent makes the plan through, when one does.
+    agent_task: agent_tasks.View | None = None
 
 
 class AudienceRef(BaseModel):
@@ -893,7 +1037,7 @@ class PlanView(BaseModel):
     approve_batch: int
 
 
-def _summary(row: sqlite3.Row) -> PlanSummary:
+def _summary(row: sqlite3.Row, drafts: sqlite3.Connection) -> PlanSummary:
     summary = json.loads(row["summary"]) if row["summary"] else {}
     cost = summary.get("cost_usd")
     proposed = summary.get("proposed")
@@ -909,6 +1053,9 @@ def _summary(row: sqlite3.Row) -> PlanSummary:
         cost_usd=float(cost) if cost is not None else None,
         proposed=int(proposed) if proposed is not None else None,
         dropped={str(k): int(v) for k, v in summary.get("dropped", {}).items()},
+        agent_task=None
+        if (task := agent_tasks.latest_for(drafts, str(row["id"]))) is None
+        else agent_tasks.view(task),
     )
 
 
@@ -988,7 +1135,7 @@ def view(guideline_set: str) -> PlanView:
         if planned is not None
         else None,
         unavailable=unavailable,
-        latest=_summary(latest) if latest is not None else None,
+        latest=_summary(latest, drafts) if latest is not None else None,
         items=[
             *(_item(drafts, row, counts) for row in items),
             *(

@@ -36,6 +36,8 @@ class ConnectLimits(BaseModel):
     #: False when the model has no known price, so neither cost nor the
     #: spending cap can be applied; the op cap and wall clock still bound it.
     priced: bool
+    #: Runs are queued for an outside agent instead of a server model.
+    external_agent: bool = False
 
 
 class Holder(curation.Holder):
@@ -107,6 +109,7 @@ def knowledge_health_http(request: Request) -> HealthView:
             provider=selected.provider,
             model=selected.model,
             priced=price(selected.provider, selected.model) is not None,
+            external_agent=selected.external_agent,
         ),
         connect_error=None,
     )

@@ -2,8 +2,8 @@
 // (answered or needs clarification), real errors with retry, and a way to
 // report what the knowledge base could not answer.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { I, useMe } from './lib';
-import { Link } from './router';
+import { I, useAskExternal, useMe } from './lib';
+import { Link, useRouter } from './router';
 import { ask, errorMessage, isAuthError, isScoped, knowledgeGaps, type AskEvent, type AskTrace, type Confidence, type RawAnswered, type RawClarification } from './api';
 import { substrate } from './data';
 
@@ -235,6 +235,8 @@ type Phase =
   | { phase: 'error'; detail: string; cancelled: boolean };
 
 export function AskSurface({ query }: { query: string }) {
+  const external = useAskExternal();
+  const { go } = useRouter();
   const [asked, setAsked] = useState(query);
   const [state, setState] = useState<Phase>(() => ({ phase: 'working', startedAt: Date.now() }));
   const [attempt, setAttempt] = useState(0);
@@ -243,9 +245,14 @@ export function AskSurface({ query }: { query: string }) {
   const [now, setNow] = useState(Date.now);
   const active = useRef<AbortController | null>(null);
 
+  useEffect(() => {
+    if (external === true) go({ view: 'find', query, mode: 'semantic' }, { replace: true });
+  }, [external, go, query]);
+
   // A new run starts whenever the question or attempt changes; its state is
   // reset by the handlers that trigger it, so the effect only subscribes.
   useEffect(() => {
+    if (external !== false) return;
     const controller = new AbortController();
     active.current = controller;
     const onEvent = (event: AskEvent) => {
@@ -271,13 +278,14 @@ export function AskSurface({ query }: { query: string }) {
       });
     });
     return () => { clearInterval(tick); controller.abort(); };
-  }, [asked, attempt]);
+  }, [asked, attempt, external]);
 
   const restart = (question: string) => {
     setProgress(''); setPartial(''); setState({ phase: 'working', startedAt: Date.now() });
     if (question === asked) setAttempt(a => a + 1); else setAsked(question);
   };
   const working = state.phase === 'working';
+  if (external !== false) return null;
 
   return (
     <main className="page">

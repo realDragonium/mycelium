@@ -92,6 +92,28 @@ export const uploadRaw = <T>(method: 'POST' | 'PUT', path: string, body: Blob, s
 
 export const enc = encodeURIComponent;
 
+/* -------------------------- model settings --------------------------- */
+export type Provider = 'claude' | 'openai';
+export type Effort = string | null;
+export interface ProviderStatus { provider: Provider; available: boolean; reason?: string | null }
+export interface ActionSettings {
+  action: string; provider: Provider; model: string; source: string; revision: number | string;
+  claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
+  external_agent?: boolean; agent_review?: 'server' | 'agent'; agent_supported?: boolean;
+  configuration_error?: string | null; model_warning?: string | null; providers: ProviderStatus[];
+}
+export interface ModelSettings { can_configure: boolean; actions: ActionSettings[] }
+
+export async function getAskExternal(signal?: AbortSignal): Promise<boolean> {
+  try {
+    const settings = await getJSON<ModelSettings>('/api/model-settings', signal);
+    return settings.actions.some(action => action.action === 'ask' && action.external_agent === true);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    return false;
+  }
+}
+
 /* ------------------------------ identity ------------------------------ */
 export type Role = 'reader' | 'drafter' | 'writer' | 'admin';
 export interface Me {
@@ -221,7 +243,8 @@ export const upsertName = (text: string, entityId: string) => postJSON<unknown>(
 // can produce two drafts.
 export type IngestResult =
   | { outcome: 'draft_created'; draft_id: string; alias_draft_id?: string | null; submitted_for_review?: boolean; ops?: unknown[] }
-  | { outcome: 'nothing_to_ingest'; reason?: string };
+  | { outcome: 'nothing_to_ingest'; reason?: string }
+  | { outcome: 'waiting_for_agent'; agent_task: string; message: string };
 
 /* ---------------------------- review mode ----------------------------- */
 // Whether drafts from ingest go straight to the AI reviewer, and
@@ -429,7 +452,7 @@ export interface HealthCounts {
 }
 // `priced` is false when the model has no known price: then neither the
 // cost nor the spending cap applies.
-export interface ConnectLimits { batch_size: number; max_cost_usd: number; provider: string; model: string; priced: boolean }
+export interface ConnectLimits { batch_size: number; max_cost_usd: number; provider: string; model: string; priced: boolean; external_agent: boolean }
 export type CurationKind = 'isolated' | 'unnamed' | 'rephrase' | 'gap';
 // `name` is null once the holder is no longer a known user. Outcome `looked`
 // is the server's connect pass; the rest come from outside agents.
@@ -445,7 +468,9 @@ export interface HealthStatement {
 }
 export interface HealthEntity { id: string; name: string | null; description: string | null }
 export interface Page<T> { items: T[]; next_after: string | null }
-export type ConnectResult = IngestResult & { cost_usd: number | null; flagged?: string[]; gaps_filed?: string[] };
+export type ConnectResult =
+  | Extract<IngestResult, { outcome: 'waiting_for_agent' }>
+  | (Exclude<IngestResult, { outcome: 'waiting_for_agent' }> & { cost_usd: number | null; flagged?: string[]; gaps_filed?: string[] });
 
 export const knowledgeHealth = {
   view: () => getJSON<HealthView>('/api/knowledge-health'),

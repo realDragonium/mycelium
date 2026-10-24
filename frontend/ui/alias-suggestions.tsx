@@ -67,9 +67,11 @@ function AliasSuggestions({ canWrite, onChanged }: AliasSuggestionsProps) {
   };
   const scan = () => act(async () => {
     setSkipped([]);
-    const value = await postJSON<{ suggestions: AliasEntry[]; skipped: SkippedAlias[] }>('/api/alias-suggestions/scan', { statement_ids: selected.map(item => item.id) });
+    const value = await postJSON<{ suggestions: AliasEntry[]; skipped: SkippedAlias[]; agent_task?: string | null }>('/api/alias-suggestions/scan', { statement_ids: selected.map(item => item.id) });
     setSkipped(value.skipped || []);
-    setNotice(value.suggestions.length ? `${value.suggestions.length} alias suggestion${value.suggestions.length === 1 ? '' : 's'} created for human review.` : 'No supported new aliases were found in the selected statements.');
+    setNotice(value.agent_task
+      ? `Queued for an outside agent (task ${value.agent_task}). Its suggestions appear here for review once the agent submits them.`
+      : value.suggestions.length ? `${value.suggestions.length} alias suggestion${value.suggestions.length === 1 ? '' : 's'} created for human review.` : 'No supported new aliases were found in the selected statements.');
     setStatus('pending');
     const pending = await getJSON<{ suggestions: AliasEntry[] }>('/api/alias-suggestions?status=pending'); setEntries(pending.suggestions);
   });

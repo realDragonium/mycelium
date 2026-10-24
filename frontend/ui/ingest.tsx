@@ -27,6 +27,7 @@ type Phase =
   | { phase: 'compose' }
   | { phase: 'two-drafts'; draftId: string; aliasDraftId: string; submitted: boolean }
   | { phase: 'processing'; startedAt: number }
+  | { phase: 'waiting'; agentTask: string }
   | { phase: 'nothing'; reason: string }
   | { phase: 'error'; message: string };
 
@@ -58,6 +59,7 @@ export function IngestSurface() {
       if (res.outcome === 'draft_created' && res.alias_draft_id && res.alias_draft_id !== res.draft_id) {
         setState({ phase: 'two-drafts', draftId: res.draft_id, aliasDraftId: res.alias_draft_id, submitted: !!res.submitted_for_review });
       } else if (res.outcome === 'draft_created') go({ view: 'draft', id: res.draft_id });
+      else if (res.outcome === 'waiting_for_agent') setState({ phase: 'waiting', agentTask: res.agent_task });
       else setState({ phase: 'nothing', reason: res.reason || 'The librarian found nothing worth drafting from this text.' });
     }, (err: unknown) => {
       if (mine !== runId.current) return;
@@ -87,11 +89,14 @@ export function IngestSurface() {
     );
   }
 
-  if (state.phase === 'nothing' || state.phase === 'error') {
+  if (state.phase === 'waiting' || state.phase === 'nothing' || state.phase === 'error') {
     return (
       <main className="page"><div className="ingest-stage">
         <div className="ingest-proc">
-          <EmptyState title={state.phase === 'nothing' ? 'Nothing to ingest' : 'Ingest failed'} blurb={state.phase === 'nothing' ? state.reason : state.message}>
+          <EmptyState
+            title={state.phase === 'waiting' ? 'Queued for an outside agent' : state.phase === 'nothing' ? 'Nothing to ingest' : 'Ingest failed'}
+            blurb={state.phase === 'waiting' ? <>An agent connected to this server will do the ingest, and its draft will appear in Drafts for review.<br /><small className="mono">Task {state.agentTask}</small></> : state.phase === 'nothing' ? state.reason : state.message}
+          >
             <button className="btn" onClick={back}>Back to your text</button>
           </EmptyState>
         </div>

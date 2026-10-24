@@ -44,7 +44,7 @@ import uuid as _uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from . import doc_plans, errors, timestamps
+from . import agent_tasks, doc_plans, errors, timestamps
 
 DOCUMENTATION_RUNS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS documentation_runs (
@@ -95,6 +95,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS generated_documents_identity
 """
 
 OUTCOMES = ("document_written", "nothing_written", "failed")
+#: The provider of a run an outside agent writes (`docgen.external`). It
+#: never starts a worker, so it neither waits in nor counts against the
+#: active-run limit, and a restart leaves it to its agent.
+AGENT = "agent"
 
 
 def body_digest(body: str) -> str:
@@ -123,6 +127,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _add_cited_statements(conn)
     _add_run_summary(conn)
     doc_plans.migrate(conn)
+    agent_tasks.migrate(conn)
     from . import document_maintenance  # local import: it builds on this module
 
     document_maintenance.migrate(conn)
@@ -596,6 +601,7 @@ def status_for(row: sqlite3.Row | dict) -> str:
         "document_id",
         "document_exists",
         "document_last_run_id",
+        "provider",
     )
     missing_columns = [
         column for column in required_columns if column not in row.keys()
@@ -610,6 +616,8 @@ def status_for(row: sqlite3.Row | dict) -> str:
         if _document_superseded(row):
             return "document_superseded"
         return row["outcome"] or "failed"
+    if row["provider"] == AGENT:
+        return "waiting_for_agent"
     if row["started_at"]:
         return "running"
     return "queued"
@@ -760,10 +768,14 @@ def finish_run(
 _RUN_COLUMNS = (
     "SELECT r.*, d.id IS NOT NULL AS document_exists, "
     "d.last_run_id AS document_last_run_id, "
-    "CASE WHEN r.started_at IS NULL AND r.finished_at IS NULL THEN ("
+    "CASE WHEN r.started_at IS NULL AND r.finished_at IS NULL "
+    "AND r.provider IS NOT 'agent' THEN ("
     "SELECT COUNT(*) FROM documentation_runs AS q "
-    "WHERE q.started_at IS NULL AND q.finished_at IS NULL AND q.rowid <= r.rowid"
-    ") END AS queue_position "
+    "WHERE q.started_at IS NULL AND q.finished_at IS NULL "
+    "AND q.provider IS NOT 'agent' AND q.rowid <= r.rowid"
+    ") END AS queue_position, "
+    + agent_tasks.VIEW_SQL.format(subject="r.id")
+    + " AS agent_task "
 )
 
 
@@ -806,7 +818,7 @@ def mark_orphaned(conn: sqlite3.Connection) -> int:
         "UPDATE documentation_runs "
         "SET finished_at = ?, outcome = 'failed', error = 'orphaned by restart', "
         "summary = json_set(summary, '$.activity', NULL) "
-        "WHERE finished_at IS NULL",
+        "WHERE finished_at IS NULL AND provider IS NOT 'agent'",
         (_now(),),
     )
     conn.commit()
@@ -849,6 +861,9 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "draft_chars": len(row["draft_body"] or ""),
         "summary": None if row["summary"] is None else json.loads(row["summary"]),
         "review_notes": json.loads(row["review_notes"]) if row["review_notes"] else [],
+        "agent_task": None
+        if (task := agent_tasks.parse_view(row["agent_task"])) is None
+        else task.model_dump(),
     }
 
 

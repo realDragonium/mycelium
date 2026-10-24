@@ -120,16 +120,7 @@ def run_ingest(
     substrate, the in-process draft emitter, and effective saved configuration.
     """
     config = config or IngestConfig.from_env()
-    instructions = ai_prompts.resolve(DOCTRINE_NAME, default_path=config.doctrine_path)
-    text, input_note = _guard_input(text, config)
-    guarded = text
-    task = Task(
-        text=text,
-        system_prompt=prompts.build_system_prompt(instructions.text),
-        first_message=lambda vocab: prompts.initial_user_message(guarded, vocab),
-        title=_draft_title(text),
-        notes=tuple(n for n in (instructions.note, input_note) if n),
-    )
+    task, instructions = ingest_task(text, config)
     return run(
         task,
         instructions,
@@ -139,6 +130,20 @@ def run_ingest(
         config=config,
         label="ingest",
     )
+
+
+def ingest_task(text: str, config: IngestConfig) -> tuple[Task, ai_prompts.Snapshot]:
+    """The loop's task for ingesting `text`, and the instructions it runs under."""
+    instructions = ai_prompts.resolve(DOCTRINE_NAME, default_path=config.doctrine_path)
+    guarded, input_note = _guard_input(text, config)
+    task = Task(
+        text=guarded,
+        system_prompt=prompts.build_system_prompt(instructions.text),
+        first_message=lambda vocab: prompts.initial_user_message(guarded, vocab),
+        title=_draft_title(guarded),
+        notes=tuple(n for n in (instructions.note, input_note) if n),
+    )
+    return task, instructions
 
 
 def run(
@@ -235,15 +240,19 @@ class _RunContext:
     largest_turn_usd: float = 0.0
     largest_output_tokens: int = 0
     history_tokens: int = 0
+    #: An outside agent's emit_draft input, standing in for the model's turns
+    #: (see `external`): a forced finalize keeps it instead of forcing a turn.
+    submitted: dict[str, Any] | None = None
 
 
-def _execute(
+def _open(
     task: Task,
     client: Any,
     substrate: SubstrateReader,
     emitter: DraftEmitter,
     config: IngestConfig,
-) -> IngestResult:
+) -> _RunContext:
+    """Start a run: fetch the vocabulary and build the opening message."""
     start = time.monotonic()
 
     trace = TraceBuilder(
@@ -265,9 +274,8 @@ def _execute(
     ]
 
     reads_after_vocab: list[str] = []  # successful read names, for the floor
-    max_turns = config.limits.op_cap + _TURN_HEADROOM
 
-    ctx = _RunContext(
+    return _RunContext(
         task=task,
         client=client,
         substrate=substrate,
@@ -284,6 +292,19 @@ def _execute(
         floor_blocks=0,
         malformed_retries=0,
     )
+
+
+def _execute(
+    task: Task,
+    client: Any,
+    substrate: SubstrateReader,
+    emitter: DraftEmitter,
+    config: IngestConfig,
+) -> IngestResult:
+    ctx = _open(task, client, substrate, emitter, config)
+    trace, messages, tools = ctx.trace, ctx.messages, ctx.tools
+    start, reads_after_vocab = ctx.start, ctx.reads_after_vocab
+    max_turns = config.limits.op_cap + _TURN_HEADROOM
 
     while True:
         # ---- Budget gates first — forced finalize bypasses the floor ----
@@ -573,6 +594,9 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> IngestResult:
     trace: TraceBuilder = ctx.trace
     trace.forced_finalize = reason
     trace.degraded = True
+    if ctx.submitted is not None:
+        ops, ledger, flagged, skipped = parse_emit_input(ctx.submitted)
+        return _assemble_draft(ops, ledger, flagged, skipped, ctx, degraded=True)
     ctx.messages.append(
         {"role": "user", "content": prompts.forced_finalize_message(reason)}
     )

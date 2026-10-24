@@ -69,7 +69,7 @@ def request_documentation(
     prompt: str,
     guideline_set: str | None = None,
     document_type: str | None = None,
-    provider: Literal["claude", "openai"] | None = None,
+    provider: Literal["claude", "openai", "agent"] | None = None,
     anchor_entity_id: str | None = None,
 ) -> dict[str, Any]:
     """Request a background documentation run: generate one document from
@@ -89,7 +89,8 @@ def request_documentation(
     the row and the run resolves them. Raises when `guideline_set` is
     unknown, when `document_type` is not one that set can write, or when
     `prompt` is blank or longer than the saved prompt length limit.
-    `provider` selects claude or openai; omitted uses saved documentation settings
+    `provider` selects claude, openai or agent (an external agent claims the
+    run with claim_agent_task); omitted uses saved documentation settings
     (default claude). The configured model is captured for writing and review.
     Use list_documentation_models for available choices.
     `anchor_entity_id` names the entity the document is about. With
@@ -145,7 +146,7 @@ def revise_document(
     document_id: str,
     expected_revision: int,
     prompt: str = "",
-    provider: Literal["claude", "openai"] | None = None,
+    provider: Literal["claude", "openai", "agent"] | None = None,
     start_from_destination: bool = False,
     update_sources: bool = False,
 ) -> dict[str, object]:
@@ -305,9 +306,14 @@ def get_document_revision(document_id: str, revision: int) -> dict[str, object]:
 @tool
 def list_documentation_models() -> dict[str, object]:
     """List configured documentation providers and safe availability reasons."""
+    from .. import model_settings
     from ..docgen.config import model_choices, resolve_provider
 
-    return {"default_provider": resolve_provider(), "models": model_choices()}
+    agent = model_settings.get("docgen").external_agent
+    return {
+        "default_provider": "agent" if agent else resolve_provider(),
+        "models": model_choices(),
+    }
 
 
 @tool

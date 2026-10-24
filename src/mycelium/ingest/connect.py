@@ -369,17 +369,11 @@ def config_from_settings() -> IngestConfig:
     )
 
 
-def run_connect(
-    targets: Sequence[Target],
-    *,
-    known_name: Callable[[str], bool],
-    client: Any | None = None,
-    substrate: SubstrateReader | None = None,
-    emitter: DraftEmitter | None = None,
-    config: IngestConfig | None = None,
-) -> IngestResult:
-    """Propose links and concept mentions for `targets` as one draft."""
-    config = config or config_from_settings()
+def connect_task(
+    targets: Sequence[Target], known_name: Callable[[str], bool]
+) -> tuple[Task, ai_prompts.Snapshot]:
+    """The loop's task for connecting `targets`, and the instructions it runs
+    under."""
     instructions = ai_prompts.resolve(ACTION)
     batch = tuple(targets)
     task = Task(
@@ -392,6 +386,21 @@ def run_connect(
         edge_check=link_rules.kind_error,
         quotable={t.id: t.text for t in batch},
     )
+    return task, instructions
+
+
+def run_connect(
+    targets: Sequence[Target],
+    *,
+    known_name: Callable[[str], bool],
+    client: Any | None = None,
+    substrate: SubstrateReader | None = None,
+    emitter: DraftEmitter | None = None,
+    config: IngestConfig | None = None,
+) -> IngestResult:
+    """Propose links and concept mentions for `targets` as one draft."""
+    config = config or config_from_settings()
+    task, instructions = connect_task(targets, known_name)
     return run(
         task,
         instructions,

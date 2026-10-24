@@ -17,12 +17,18 @@ interface DocumentationOptions {
   profile_audiences: Record<string, AudienceRef | null>;
   max_prompt_chars: number;
 }
+interface AgentTask {
+  id: string; kind: string; status: 'waiting' | 'claimed' | 'in_review' | 'done' | 'failed';
+  claimed_by: string | null; expires_at: string | null; failures: number;
+  findings: { check: string; where: string | null; problem: string }[];
+  release_reason: string | null; updated_at: string; error: string | null;
+}
 interface DocumentationRun {
   id: string; prompt: string; provider: string; model: string | null; reasoning_effort: string | null;
   status: string; queue_position: number | null; created_at: string; document_id: string | null; result_revision: number | null;
   target_document_id: string | null; target_revision: number | null;
   revision_base: string | null; error: string | null; draft_title?: string | null; draft_body?: string | null;
-  summary: RunSummary | null; review_notes: ReviewNote[]; retryable?: boolean;
+  summary: RunSummary | null; review_notes: ReviewNote[]; retryable?: boolean; agent_task?: AgentTask | null;
 }
 interface RunSummary {
   activity: string | null; turns: number; duration_s: number;
@@ -68,7 +74,7 @@ interface PlanItem {
 }
 interface PlanSummary {
   id: string; created_at: string; finished_at: string | null; outcome: 'planned' | 'failed' | null; error: string | null; activity: string | null;
-  provider: string | null; model: string | null; cost_usd: number | null; proposed: number | null; dropped: Record<string, number>;
+  provider: string | null; model: string | null; cost_usd: number | null; proposed: number | null; dropped: Record<string, number>; agent_task?: AgentTask | null;
 }
 interface DocumentationPlan {
   guideline_set: string; audience: AudienceRef | null; unavailable: string | null; latest: PlanSummary | null; items: PlanItem[];
@@ -89,7 +95,7 @@ const docGet = <T,>(path: string, signal?: AbortSignal) => getJSON<T>('/api/docu
 const docPost = <T,>(path: string, body: unknown) => postJSON<T>('/api/documentation/' + path, body);
 const isBothSidesEdited = (error: unknown) => error instanceof HttpError
   && !!error.body && typeof error.body === 'object' && 'code' in error.body && error.body.code === 'both_sides_edited';
-const RUN_STATUSES: Record<string, string> = { queued: 'Queued', running: 'Generating and reviewing', document_written: 'Saved', document_superseded: 'Saved · newer revision exists', nothing_written: 'No document saved', failed: 'Failed' };
+const RUN_STATUSES: Record<string, string> = { queued: 'Queued', waiting_for_agent: 'Waiting for an agent', running: 'Generating and reviewing', document_written: 'Saved', document_superseded: 'Saved · newer revision exists', nothing_written: 'No document saved', failed: 'Failed' };
 const DELIVERY_STATUSES: Record<string, string> = { unpublished: 'Internal only', published: 'Published to GitHub', changes_pending: 'Changes awaiting publication', merged: 'Pull request merged', closed: 'Pull request closed without merging' };
 const PULL_REQUEST_STATES: Record<string, string> = { open: 'Open for review', merged: 'Merged', closed: 'Closed without merging' };
 
@@ -105,7 +111,7 @@ function docNavigate(next: Record<string, string | number | null | undefined>) {
   window.location.hash = '/documentation' + (query ? '?' + query : '');
 }
 
-const docActive = (run: DocumentationRun) => ['queued', 'running'].includes(run.status);
+const docActive = (run: DocumentationRun) => ['queued', 'waiting_for_agent', 'running'].includes(run.status);
 const docStatus = ({ status, queue_position }: { status: string; queue_position: number | null }) =>
   status === 'queued' && queue_position ? `Queued · ${queue_position === 1 ? 'next to start' : `${queue_position} in line`}` : RUN_STATUSES[status] || status;
 const docDeliveryStatus = (status: string) => DELIVERY_STATUSES[status] || status;
@@ -122,6 +128,20 @@ const docTokens = (count: number) => count >= 1000 ? `${(count / 1000).toFixed(c
 const docDuration = (seconds: number) => seconds >= 60 ? `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} s` : `${Math.round(seconds)} s`;
 const docCost = (summary: RunSummary) => summary.cost_usd === null ? 'cost not estimated' : `about $${summary.cost_usd.toFixed(2)}`;
 const docRunLine = (summary: RunSummary) => `${summary.turns} turns · ${docDuration(summary.duration_s)} · ${docCost(summary)} · ${summary.statements_cited} of ${summary.statements_retrieved} retrieved statements cited`;
+
+function agentRunStatus(task: AgentTask) {
+  if (task.status === 'waiting') return <>Waiting for an agent to claim it.{task.release_reason && <> Last released: {task.release_reason}.</>}</>;
+  if (task.status === 'claimed') return <>Claimed by {task.claimed_by || 'an agent'} until {docDate(task.expires_at)}.</>;
+  if (task.status === 'in_review') return <>Written; waiting for another agent's review.</>;
+  if (task.status === 'failed') return <>The agent task failed{task.error ? `: ${task.error}` : '.'}</>;
+  return <>The agent finished this task.</>;
+}
+
+function agentPlanStatus(task: AgentTask) {
+  if (task.status === 'waiting') return <>Waiting for an agent to claim it…{task.release_reason && <> Last released: {task.release_reason}.</>}</>;
+  if (task.status === 'claimed') return <>Claimed by {task.claimed_by || 'an agent'} until {docDate(task.expires_at)}…</>;
+  return <>Finishing the external agent's plan…</>;
+}
 
 function DocumentationSources({ ids }: { ids: string[] }) {
   return <ol className="docw-sources">{ids.map(id => {
@@ -145,11 +165,12 @@ function DocumentationRunSummary({ summary }: { summary: RunSummary }) {
   </dl>;
 }
 
-function DocumentationModel({ options, value, onChange, disabled }: {
+function DocumentationModel({ options, value, onChange, disabled, filter }: {
   options: DocumentationOptions; value: string; onChange: (provider: string) => void; disabled?: boolean;
+  filter?: (model: DocumentationModelOption) => boolean;
 }) {
   return <label>Model for this run<select value={value} onChange={event => onChange(event.target.value)} disabled={disabled}>
-    {options.models.map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.label} · {model.model} · {model.reasoning_effort ?? 'Model default'} effort{model.available ? '' : ' (unavailable)'}</option>)}
+    {options.models.filter(model => !filter || filter(model)).map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.provider === 'agent' ? model.label : `${model.label} · ${model.model} · ${model.reasoning_effort ?? 'Model default'} effort${model.available ? '' : ' (unavailable)'}`}</option>)}
   </select></label>;
 }
 
@@ -228,7 +249,10 @@ function DocumentationEditor({ title: initialTitle, body: initialBody, path, exp
   const [title, setTitle] = React.useState(() => docPendingEdits.get(path)?.title ?? initialTitle ?? '');
   const [body, setBody] = React.useState(() => docPendingEdits.get(path)?.body ?? initialBody);
   const [baseRevision] = React.useState(() => docPendingEdits.get(path)?.expectedRevision ?? expectedRevision);
-  const [provider, setProvider] = React.useState(options.default_provider);
+  const serverModel = (model: DocumentationModelOption) => model.provider !== 'agent';
+  const [provider, setProvider] = React.useState(() => options.default_provider === 'agent'
+    ? options.models.find(model => serverModel(model) && model.available)?.provider ?? 'claude'
+    : options.default_provider);
   const [preview, setPreview] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -238,7 +262,7 @@ function DocumentationEditor({ title: initialTitle, body: initialBody, path, exp
     if (dirty) docPendingEdits.set(path, { title, body, expectedRevision: baseRevision });
     else docPendingEdits.delete(path);
   }, [path, title, body, baseRevision, dirty]);
-  const allowed = options.can_generate && options.models.some(model => model.provider === provider && model.available);
+  const allowed = options.can_generate && options.models.some(model => serverModel(model) && model.provider === provider && model.available);
   const request = async (save: boolean) => {
     if (submitting.current || !title.trim() || !body.trim()) return;
     submitting.current = true; setBusy(true); setError(null);
@@ -261,7 +285,7 @@ function DocumentationEditor({ title: initialTitle, body: initialBody, path, exp
     <fieldset disabled={busy}>
       <label>Document title<input required maxLength={300} value={title} onChange={event => setTitle(event.target.value)} /></label>
       <label>Markdown body<textarea className="docw-editor" required maxLength={200000} rows={24} value={body} onChange={event => { setBody(event.target.value); setPreview(null); }} /></label>
-      <DocumentationModel options={options} value={provider} onChange={setProvider} />
+      <DocumentationModel options={options} value={provider} onChange={setProvider} filter={serverModel} />
       <div className="docw-actions"><button type="button" onClick={() => request(false)} disabled={!title.trim() || !body.trim()}>Preview</button><button type="submit" disabled={!allowed || !title.trim() || !body.trim()}>{busy ? 'Working…' : 'Review and save'}</button><button type="button" onClick={() => { if (!dirty || window.confirm('Discard your unsaved edits?')) { docPendingEdits.delete(path); onCancel(); } }}>Cancel</button></div>
     </fieldset>
     {error && <p role="alert">{error} Your edits are still here.</p>}
@@ -425,11 +449,14 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
   if (error) return <p role="alert">{error} <button onClick={() => setRetry(value => value + 1)}>Reload run</button></p>;
   if (!run) return <p role="status">Loading run…</p>;
   if (editing) return <DocumentationEditor title={run.draft_title} body={run.draft_body || ''} path={`runs/${encodeURIComponent(id)}/edits`} options={options} onStarted={onStarted} onCancel={() => setEditing(false)} />;
-  return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run)}</h2><p className="docw-meta">{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
+  return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run)}</h2><p className="docw-meta">{run.provider === 'agent'
+    ? <>External agent{run.model !== null && <> · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'}</>}</>
+    : <>{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'}</>} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
     {run.target_document_id && <p>Revises <a href={'#/documentation?document=' + encodeURIComponent(run.target_document_id)}>an existing document</a>, starting from its revision {run.target_revision}.</p>}
     {run.revision_base === 'destination' && <p>This revision started from the published copy on GitHub.</p>}
     {run.review_notes.length > 0 && <details><summary>Writer briefed with notes from an earlier review</summary><ul>{run.review_notes.map((note, index) => <li key={index}><strong>{REVIEW_CHECKS[note.check]}</strong> · {note.where}: {note.problem}</li>)}</ul></details>}
-    {docActive(run) && <p role="status">{run.summary?.activity ? `${run.summary.activity}. ` : ''}You can leave this screen while generation and review finish.</p>}
+    {docActive(run) && <p role="status">{run.agent_task ? agentRunStatus(run.agent_task) : <>{run.summary?.activity ? `${run.summary.activity}. ` : ''}You can leave this screen while generation and review finish.</>}</p>}
+    {docActive(run) && !!run.agent_task?.findings.length && <details><summary>Last submission refused</summary><ul>{run.agent_task.findings.map((finding, index) => <li key={index}><strong>{finding.check}</strong>{finding.where ? ` · ${finding.where}` : ''}: {finding.problem}</li>)}</ul></details>}
     {run.summary && <DocumentationRunSummary summary={run.summary} />}
     {run.summary?.cited_statement_ids?.length ? <details><summary>Cited statements</summary><DocumentationSources ids={run.summary.cited_statement_ids} /></details> : null}
     {run.summary?.review_findings?.length ? <DocumentationReviewNotes notes={run.summary.review_findings} /> : run.error && <p role="alert">{run.error}</p>}
@@ -468,7 +495,7 @@ function DocumentationRetry({ run, onStarted }: { run: DocumentationRun; onStart
 const PRIORITIES: Record<PlanItem['priority'], string> = { high: 'High priority', medium: 'Medium priority', low: 'Low priority' };
 const planActive = (plan: DocumentationPlan) => !!plan.latest && !plan.latest.finished_at;
 const WROTE_NOTHING = ['nothing_written', 'failed'];
-const planRunning = (plan: DocumentationPlan) => planActive(plan) || plan.items.some(item => item.run && ['queued', 'running'].includes(item.run.status));
+const planRunning = (plan: DocumentationPlan) => planActive(plan) || plan.items.some(item => item.run && ['queued', 'waiting_for_agent', 'running'].includes(item.run.status));
 
 function DocumentationPlanner({ options, profile }: { options: DocumentationOptions; profile: string | null }) {
   const profiles = Object.keys(options.guideline_sets);
@@ -520,9 +547,11 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
       {plan?.unavailable && <p role="alert">{plan.unavailable}</p>}
       {plan && <div className="docw-actions">
         <button type="button" disabled={!canAct || active || !!plan.unavailable} onClick={() => act(() => docPost('plans/' + encodeURIComponent(selected), {}))}>{active ? 'Planning…' : latest ? 'Plan again' : 'Plan documentation'}</button>
-        {latest?.finished_at && latest.cost_usd !== null && <span className="docw-meta">Last plan cost about ${latest.cost_usd.toFixed(2)} · {latest.model}</span>}
+        {latest?.finished_at && (latest.provider === 'agent'
+          ? <span className="docw-meta">Last plan made by an external agent</span>
+          : latest.cost_usd !== null && <span className="docw-meta">Last plan cost about ${latest.cost_usd.toFixed(2)} · {latest.model}</span>)}
       </div>}
-      {active && latest && <p role="status">{latest.activity || 'Planning'}… started {docDate(latest.created_at)}. You can leave this screen; the plan keeps running.</p>}
+      {active && latest && <p role="status">{latest.agent_task ? agentPlanStatus(latest.agent_task) : <>{latest.activity || 'Planning'}… started {docDate(latest.created_at)}.</>} You can leave this screen; the plan keeps running.</p>}
       {plan?.replan_hint && <p role="status">{plan.new_since_plan} statements became visible to this audience since the last plan. Plan again to consider them.</p>}
       {latest?.outcome === 'failed' && <p role="alert">The last plan failed: {latest.error}</p>}
       {!options.can_generate && <p>Writer or admin access is required to plan and approve documents.</p>}

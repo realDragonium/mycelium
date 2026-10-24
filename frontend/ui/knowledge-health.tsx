@@ -77,6 +77,7 @@ function RunStatus({ run }: { run: Run }) {
   if (run.phase === 'running') return <Notice>Looking for connections for {run.count} statement{run.count === 1 ? '' : 's'}… <Elapsed since={run.startedAt} />. This takes a minute or two; the draft will be under <Link to={{ view: 'drafts' }}>Drafts</Link>.</Notice>;
   if (run.phase === 'error') return <Notice tone="error">{run.message}</Notice>;
   const { result } = run;
+  if (result.outcome === 'waiting_for_agent') return <Notice>Queued for an outside agent (task {result.agent_task}). Its draft appears in Drafts when the agent submits it.</Notice>;
   const cost = result.cost_usd === null ? 'cost unknown for this model' : `cost ${usd(result.cost_usd)}`;
   const gaps = result.gaps_filed?.length || 0;
   const filed = gaps ? <>; asked for {gaps} statement{gaps === 1 ? '' : 's'} to be rephrased in <Link to={{ view: 'gaps' }}>Knowledge gaps</Link></> : null;
@@ -126,7 +127,9 @@ function ConnectPanel({ limits, onDone }: { limits: ConnectLimits; onDone: () =>
         <button className="btn write" disabled={run.phase === 'running'} onClick={() => { void next(); }}>Connect next {n}</button>
       </div>
       <p className="hint">
-        {limits.model} · at most {limits.batch_size} statements a run · {limits.priced ? `stops at ${usd(limits.max_cost_usd)} a run` : 'no known price for this model, so cost is not shown and the spending cap cannot apply'}.
+        {limits.external_agent
+          ? `Runs are queued for an outside agent; at most ${limits.batch_size} statements a run.`
+          : <>{limits.model} · at most {limits.batch_size} statements a run · {limits.priced ? `stops at ${usd(limits.max_cost_usd)} a run` : 'no known price for this model, so cost is not shown and the spending cap cannot apply'}.</>}
         {' '}Statements in a pending draft, and those it already looked at, are skipped until they or the statements around them change. <Link to={{ view: 'settings', section: 'limits' }}>Limits</Link> · <Link to={{ view: 'settings', section: 'models' }}>Model</Link>
       </p>
       {empty && <Notice>No {scope === 'isolated' ? 'isolated statements' : 'statements naming no concept'} left that the AI has not already looked at.</Notice>}

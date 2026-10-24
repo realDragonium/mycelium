@@ -39,7 +39,7 @@ import re
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, ParamSpec, Protocol
 
 from .. import ai, ai_prompts, media, tracing
 from ..agentloop import (
@@ -85,6 +85,7 @@ from .tools import (
 from .trace import ReviewNote, RunSummary, TraceBuilder
 
 _LOG = logging.getLogger(__name__)
+P = ParamSpec("P")
 
 #: Safety stops so a stubborn model can't spin forever without consuming ops.
 _MAX_EMIT_BLOCKS = 3
@@ -330,7 +331,7 @@ class _RunContext:
     opening_media: list[str] = field(default_factory=list)
 
 
-def _execute(
+def _open(
     prompt: str,
     *,
     requested_set: str | None,
@@ -353,7 +354,11 @@ def _execute(
     scope_reader: ScopeReader | None = None,
     review_notes: Sequence[ReviewNote] = (),
     media_lookup: MediaLookup | None = None,
-) -> DocgenResult:
+) -> _RunContext | NothingWritten:
+    """Everything before the first writing turn: settle the guideline set
+    and document type, scope the reader to the profile's audience, build the
+    system prompt and read the anchor and recon into the opening message.
+    An outside agent's task starts from the same context."""
     start = time.monotonic()
     trace = TraceBuilder(
         model=config.model,
@@ -505,7 +510,17 @@ def _execute(
                 ),
             }
         ]
-    return _write(ctx)
+    return ctx
+
+
+def _then_write(
+    open_run: Callable[P, _RunContext | NothingWritten],
+) -> Callable[P, DocgenResult]:
+    def execute(*args: P.args, **kwargs: P.kwargs) -> DocgenResult:
+        opened = open_run(*args, **kwargs)
+        return opened if isinstance(opened, NothingWritten) else _write(opened)
+
+    return execute
 
 
 def _write(ctx: _RunContext) -> DocgenResult:
@@ -549,6 +564,9 @@ def _write(ctx: _RunContext) -> DocgenResult:
             _handle_gap(tool_use, ctx)
             continue
         _dispatch_read(tool_use.name, dict(tool_use.input or {}), tool_use.id, ctx)
+
+
+_execute = _then_write(_open)
 
 
 # --------------------------------------------------------------------------- #

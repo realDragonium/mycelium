@@ -24,9 +24,17 @@ from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+)
 
 from . import (
+    agent_tasks,
     ai,
     ai_prompts,
     audiences,
@@ -37,10 +45,12 @@ from . import (
     timestamps,
     workers,
 )
+from .agent_tasks import View as AgentTaskView
 from .ai.pricing import price
 from .audiences import Audience
 
 logger = logging.getLogger(__name__)
+_json = TypeAdapter(dict[str, JsonValue])
 
 DEFAULT_INSTRUCTIONS = """Decide, for each statement, the most restricted documentation audiences that may see it.
 Each audience has a description of who the reader is, what they need and what
@@ -145,6 +155,17 @@ def prompt_for(
     )
 
 
+def _task(
+    conn: sqlite3.Connection, rows: list[sqlite3.Row], live: tuple[Audience, ...]
+) -> ai.StructuredTask[Labelling]:
+    instructions = ai_prompts.resolve("audience_labelling")
+    return ai.StructuredTask(
+        system=build_system_prompt(instructions.text),
+        prompt=prompt_for(conn, rows, live),
+        output_type=Labelling,
+    )
+
+
 def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
     """Label one batch of due statements. Returns how many were labelled, or
     None when nothing was due. Raises when the batch failed, after recording
@@ -159,12 +180,7 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
         if not live:
             raise ValueError("No audiences are configured.")
         selected = model_settings.get("audience_labelling")
-        instructions = ai_prompts.resolve("audience_labelling")
-        task = ai.StructuredTask(
-            system=build_system_prompt(instructions.text),
-            prompt=prompt_for(conn, rows, live),
-            output_type=Labelling,
-        )
+        task = _task(conn, rows, live)
         config = ai.ModelConfig(
             provider=selected.provider,
             model=selected.model,
@@ -185,17 +201,41 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
         raise
     cost = price(selected.provider, selected.model)
     share = cost.cost_usd(usage) / len(rows) if cost is not None else None
-    known = {item.id for item in live}
-    graph = audiences.graph(live)
+    return _apply(
+        conn,
+        rows,
+        result,
+        live=live,
+        model=selected.model,
+        share=share,
+        confirm_external_grants=limits.confirm_external_grants,
+    )
+
+
+def _apply(
+    conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+    result: Labelling,
+    *,
+    live: tuple[Audience, ...],
+    model: str,
+    share: float | None,
+    confirm_external_grants: bool,
+) -> int:
+    """Store what the labeller decided for the queued statements in `rows`
+    (`due_batch`'s), as long as their text is still what it was given.
+    Returns how many were labelled."""
+    texts = {str(row["id"]): str(row["text"]) for row in rows}
     previous = {
         str(row["id"]): store.audience_labels.queued_previous(row) for row in rows
     }
+    known = {item.id for item in live}
+    graph = audiences.graph(live)
     hold = (
         {item.id for item in live if not item.internal}
-        if limits.confirm_external_grants
+        if confirm_external_grants
         else set()
     )
-    texts = {str(row["id"]): str(row["text"]) for row in rows}
     labelled = 0
     with store.transaction(conn):
         decided: set[str] = set()
@@ -214,7 +254,7 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
                 statement_id,
                 granted,
                 reason=reason,
-                model=selected.model,
+                model=model,
                 cost_usd=share,
                 hold=hold,
                 graph=graph,
@@ -223,7 +263,7 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
                 confirmed_text=before["confirmed_text"] if before else "",
             ):
                 labelled += 1
-        missing = [item for item in ids if item not in decided]
+        missing = [item for item in texts if item not in decided]
         if missing:
             store.audience_labels.record_failure(
                 conn, missing, "The model returned no label for this statement."
@@ -277,12 +317,185 @@ def _carried(
     return confirmed
 
 
+# --- outside agents -------------------------------------------------------------
+
+
+class AgentBatch(BaseModel):
+    """A labelling task's statements, by the text the agent was given."""
+
+    texts: dict[str, str]
+
+
+def _external() -> bool:
+    try:
+        return model_settings.get("audience_labelling").external_agent
+    except model_settings.Unavailable:
+        return False
+
+
+def _queue_agent_tasks(limit: int) -> int:
+    """Queue up to `limit` batches of due statements no open task holds, for
+    outside agents, while labelling is set to External agent. A batch is
+    made when an agent asks for work, so it holds what is due then."""
+    from . import drafts_store
+
+    if not _external() or not (live := audiences.live()):
+        return 0
+    drafts = drafts_store.connection()
+    conn = store.substrate_connection()
+    size = product_settings.get(product_settings.AudienceLabellingSettings).batch_size
+    held = {
+        statement_id
+        for task in agent_tasks.open_tasks(drafts, "audience_labelling")
+        for statement_id in AgentBatch.model_validate(task.state).texts
+    }
+    queued = 0
+    for _ in range(limit):
+        rows = [
+            row
+            for row in store.audience_labels.due_batch(conn, size + len(held))
+            if str(row["id"]) not in held
+        ][:size]
+        if not rows:
+            break
+        task = _task(conn, rows, live)
+        batch = AgentBatch(texts={str(row["id"]): str(row["text"]) for row in rows})
+        agent_tasks.create(
+            drafts,
+            "audience_labelling",
+            subject_id=None,
+            brief=agent_tasks.structured_brief(
+                instructions=task.system,
+                input=task.prompt,
+                result="One label per supplied statement_id.",
+                schema=Labelling,
+            ),
+            state=_json.validate_python(batch.model_dump()),
+        )
+        held.update(batch.texts)
+        queued += 1
+    return queued
+
+
+def _labels_problems(
+    result: Labelling, batch: AgentBatch, known: set[str]
+) -> list[agent_tasks.Finding]:
+    """What makes a submitted labelling unusable as it stands. The internal
+    labeller's output is trusted to drop what it gets wrong; an agent is
+    told, so it can fix it."""
+    findings: list[agent_tasks.Finding] = []
+    seen: set[str] = set()
+    for decision in result.labels:
+        where = decision.statement_id
+        if where not in batch.texts:
+            findings.append(
+                agent_tasks.Finding(
+                    check="labels", where=where, problem="not a statement of this task"
+                )
+            )
+        elif where in seen:
+            findings.append(
+                agent_tasks.Finding(
+                    check="labels", where=where, problem="labelled twice"
+                )
+            )
+        seen.add(where)
+        if unknown := sorted(set(decision.audiences) - known):
+            findings.append(
+                agent_tasks.Finding(
+                    check="labels",
+                    where=where,
+                    problem="unknown audience ids: " + ", ".join(unknown),
+                )
+            )
+        if not decision.reason.strip():
+            findings.append(
+                agent_tasks.Finding(
+                    check="labels", where=where, problem="give a short reason"
+                )
+            )
+    findings.extend(
+        agent_tasks.Finding(check="labels", where=missing, problem="no label given")
+        for missing in sorted(set(batch.texts) - seen)
+    )
+    return findings
+
+
+def _submit_agent_task(
+    task: agent_tasks.Task, claimant: str, result: dict[str, JsonValue]
+) -> agent_tasks.Submitted:
+    """Store an agent's labels as the internal labeller's are stored, once
+    they name only this task's statements and live audiences."""
+    from . import drafts_store
+
+    drafts = drafts_store.connection()
+    conn = store.substrate_connection()
+    batch = AgentBatch.model_validate(task.state)
+    live = audiences.live()
+    try:
+        labelling = Labelling.model_validate(result)
+        findings = _labels_problems(labelling, batch, {item.id for item in live})
+    except ValidationError as exc:
+        findings = [agent_tasks.Finding(check="shape", problem=str(exc))]
+    if findings:
+        if task.failures >= agent_tasks.RETRIES:
+            with store.transaction(conn):
+                store.audience_labels.record_failure(
+                    conn, list(batch.texts), "An agent's labels were refused."
+                )
+            return agent_tasks.closed(
+                drafts,
+                task,
+                "Refused too often; the statements wait to be labelled again.",
+                failed=True,
+                findings=findings,
+            )
+        return agent_tasks.refused(
+            drafts, task, findings, agent_tasks.RETRIES - task.failures
+        )
+    limits = product_settings.get(product_settings.AudienceLabellingSettings)
+    labelled = _apply(
+        conn,
+        [
+            row
+            for row in _queued(conn, list(batch.texts))
+            if batch.texts.get(str(row["id"])) == str(row["text"])
+        ],
+        labelling,
+        live=live,
+        model=f"agent:{claimant}",
+        share=None,
+        confirm_external_grants=limits.confirm_external_grants,
+    )
+    return agent_tasks.closed(
+        drafts,
+        task,
+        f"Labelled {labelled} of {len(batch.texts)} statements; a "
+        "statement edited meanwhile stays queued.",
+    )
+
+
+AGENT_TASK = agent_tasks.Handler(submit=_submit_agent_task, queue=_queue_agent_tasks)
+
+
+def _queued(conn: sqlite3.Connection, ids: list[str]) -> list[sqlite3.Row]:
+    marks = ", ".join("?" for _ in ids)
+    return list(
+        conn.execute(
+            "SELECT s.id, s.kind, s.text, q.previous FROM audience_label_queue q "
+            f"JOIN statements s ON s.id = q.statement_id WHERE s.id IN ({marks})",
+            ids,
+        )
+    )
+
+
 @request_timing.tracked("background audience labelling")
 def drain(conn: sqlite3.Connection, *, call: Call = _call) -> int:
     """Label due batches until none is due or one fails. Returns how many
     statements were labelled. Without provider credentials nothing is tried,
-    so the queue keeps its statements due instead of recording failures."""
-    if model_settings.credentials_error("audience_labelling"):
+    so the queue keeps its statements due instead of recording failures;
+    while labelling is set to External agent, agents label them."""
+    if _external() or model_settings.credentials_error("audience_labelling"):
         return 0
     total = 0
     while True:
@@ -440,10 +653,16 @@ class Status(BaseModel):
     confirm_external_grants: bool
     model: str
     provider: str
+    #: Statements are labelled by outside agents (`AGENT_TASK`).
+    external_agent: bool = False
+    #: The batches agents are labelling.
+    agent_tasks: list[AgentTaskView] = []
     backfill: BackfillProgress | None = None
 
 
 def status(conn: sqlite3.Connection) -> Status:
+    from . import drafts_store
+
     total, ai, curator, cost = store.audience_labels.label_counts(conn)
     queued, failed, error = store.audience_labels.queue_counts(conn)
     selected = model_settings.get("audience_labelling")
@@ -468,6 +687,13 @@ def status(conn: sqlite3.Connection) -> Status:
         confirm_external_grants=_confirming(),
         model=selected.model,
         provider=selected.provider,
+        external_agent=selected.external_agent,
+        agent_tasks=[
+            agent_tasks.view(task)
+            for task in agent_tasks.open_tasks(
+                drafts_store.connection(), "audience_labelling"
+            )
+        ],
         backfill=BackfillProgress(
             started_at=started,
             queued=queued + progress[0],

@@ -7,9 +7,10 @@ import json
 import sqlite3
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from . import (
+    agent_tasks,
     ai,
     ai_prompts,
     auth,
@@ -106,6 +107,9 @@ class ScanResult(BaseModel):
     prompt: ai_prompts.Reference | None = None
     suggestions: list[Entry]
     skipped: list[SkippedProposal]
+    #: While alias discovery is set to External agent: the task an outside
+    #: agent does the scan in. Its suggestions arrive in a draft later.
+    agent_task: str | None = None
 
 
 class Acceptance(BaseModel):
@@ -282,19 +286,18 @@ def build_system_prompt(instructions: str) -> str:
     return instructions + "\n\n=== FIXED DISCOVERY CONTRACT ===\n" + FIXED_PROTOCOL
 
 
-def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
-    from . import server  # local import: server owns AI admission
+class _Inputs(BaseModel):
+    revision: str
+    statements: dict[str, str]
+    prompt: str
 
-    if not principal.can_write:
-        raise auth.RoleRequired("writer role required")
+
+def _inputs(conn: sqlite3.Connection, statement_ids: list[str]) -> _Inputs:
     limits = product_settings.get(product_settings.AliasDiscoverySettings)
-    selected = model_settings.get("alias_discovery")
-    instructions = ai_prompts.resolve("alias_discovery")
-    conn = store.substrate_connection()
     with store.write_lock():
         revision = vocabulary_revision(conn)
         statements: dict[str, str] = {}
-        for statement_id in dict.fromkeys(request.statement_ids):
+        for statement_id in dict.fromkeys(statement_ids):
             row = store.get_statement(conn, statement_id)
             if row is None:
                 raise ValueError(f"Statement {statement_id} does not exist.")
@@ -312,11 +315,26 @@ def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
         raise ValueError(
             "The selected statements and vocabulary exceed the alias discovery input limit."
         )
+    return _Inputs(revision=revision, statements=statements, prompt=prompt)
+
+
+def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
+    from . import server  # local import: server owns AI admission
+
+    if not principal.can_write:
+        raise auth.RoleRequired("writer role required")
+    limits = product_settings.get(product_settings.AliasDiscoverySettings)
+    selected = model_settings.get("alias_discovery")
+    instructions = ai_prompts.resolve("alias_discovery")
+    conn = store.substrate_connection()
+    inputs = _inputs(conn, request.statement_ids)
+    if selected.external_agent:
+        return _queue(inputs, instructions, principal)
     with server.model_loop_slot(), ai.usage.attributed("alias_discovery"):
         result = ai.structured(
             ai.StructuredTask(
                 system=build_system_prompt(instructions.text),
-                prompt=prompt,
+                prompt=inputs.prompt,
                 output_type=Discovery,
             ),
             ai.ModelConfig(
@@ -328,17 +346,55 @@ def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
                 max_retries=limits.max_retries,
             ),
         )
+    if outside := _outside(result, inputs):
+        raise ValueError(outside)
+    return _keep(
+        conn,
+        result,
+        inputs,
+        Provenance(
+            prompt=instructions.reference(),
+            provider=selected.provider,
+            model=selected.model,
+            reasoning_effort=selected.reasoning_effort,
+        ),
+        created_by=principal.id,
+    )
+
+
+def _outside(result: Discovery, inputs: _Inputs) -> str | None:
+    if any(p.statement_id not in inputs.statements for p in result.suggestions):
+        return "AI returned evidence outside the selected statements."
+    return None
+
+
+class Provenance(BaseModel):
+    """Which prompt and model proposed a suggestion."""
+
+    prompt: ai_prompts.Reference
+    provider: ai.Provider | None
+    model: str
+    reasoning_effort: ai.ReasoningEffort | None
+
+
+def _keep(
+    conn: sqlite3.Connection,
+    result: Discovery,
+    inputs: _Inputs,
+    provenance: Provenance,
+    *,
+    created_by: str,
+) -> ScanResult:
+    """Put the discovered aliases that still hold in a submitted draft."""
+    prompt = provenance.prompt
     prepared: list[Suggestion] = []
     skipped: list[SkippedProposal] = []
     with store.write_lock():
-        if vocabulary_revision(conn) != revision:
+        if vocabulary_revision(conn) != inputs.revision:
             raise Conflict("Names changed during discovery; scan again.")
         seen: set[tuple[str, str]] = set()
         for proposal in result.suggestions:
-            if proposal.statement_id not in statements:
-                raise ValueError(
-                    "AI returned evidence outside the selected statements."
-                )
+            assert proposal.statement_id is not None
             key = proposal.entity_id, proposal.alias.casefold()
             if key in seen:
                 skipped.append(
@@ -349,30 +405,21 @@ def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
                 )
                 continue
             try:
-                suggestion = prepare(conn, proposal, statements[proposal.statement_id])
+                suggestion = prepare(
+                    conn, proposal, inputs.statements[proposal.statement_id]
+                )
             except ValueError as exc:
                 skipped.append(SkippedProposal(proposal=proposal, reason=str(exc)))
                 continue
             seen.add(key)
-            prepared.append(
-                suggestion.model_copy(
-                    update={
-                        "prompt": instructions.reference(),
-                        "provider": selected.provider,
-                        "model": selected.model,
-                        "reasoning_effort": selected.reasoning_effort,
-                    }
-                )
-            )
+            prepared.append(suggestion.model_copy(update=dict(provenance)))
         if not prepared:
-            return ScanResult(
-                prompt=instructions.reference(), suggestions=[], skipped=skipped
-            )
+            return ScanResult(prompt=prompt, suggestions=[], skipped=skipped)
         drafts = drafts_store.connection()
         with store.transaction(drafts):
             draft_id = drafts_store.create_draft(
                 drafts,
-                created_by=principal.id,
+                created_by=created_by,
                 session_id=None,
                 title="Alias suggestions from selected statements",
             )
@@ -382,18 +429,116 @@ def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
                     draft_id=draft_id,
                     kind=KIND,
                     payload=suggestion.model_dump(mode="json"),
-                    created_by=principal.id,
+                    created_by=created_by,
                 )
             drafts_store.set_submitted(drafts, draft_id)
         draft = require(drafts_store.get_draft(drafts, draft_id), "created alias draft")
         return ScanResult(
-            prompt=instructions.reference(),
+            prompt=prompt,
             suggestions=[
                 _entry(conn, draft, op)
                 for op in drafts_store.list_ops(drafts, draft_id)
             ],
             skipped=skipped,
         )
+
+
+# --- outside agents -------------------------------------------------------------
+
+
+class _AgentScan(BaseModel):
+    statement_ids: list[str]
+    revision: str
+
+
+def _queue(
+    inputs: _Inputs, instructions: ai_prompts.Snapshot, principal: auth.Principal
+) -> ScanResult:
+    task_id = agent_tasks.create(
+        drafts_store.connection(),
+        "alias_discovery",
+        subject_id=None,
+        brief=agent_tasks.structured_brief(
+            instructions=build_system_prompt(instructions.text),
+            input=inputs.prompt,
+            result="The new aliases the statements show, with their evidence.",
+            schema=Discovery,
+        ),
+        state=_AgentScan(
+            statement_ids=list(inputs.statements), revision=inputs.revision
+        ).model_dump(),
+        requested_by=principal.id,
+    )
+    return ScanResult(
+        prompt=instructions.reference(), suggestions=[], skipped=[], agent_task=task_id
+    )
+
+
+def _submit_agent_task(
+    task: agent_tasks.Task, claimant: str, result: dict[str, JsonValue]
+) -> agent_tasks.Submitted:
+    """Keep an agent's aliases as the model's are kept, once their evidence
+    lies inside the selected statements."""
+    drafts = drafts_store.connection()
+    scan_state = _AgentScan.model_validate(task.state)
+    conn = store.substrate_connection()
+    try:
+        inputs = _inputs(conn, scan_state.statement_ids)
+    except ValueError as exc:
+        return agent_tasks.closed(drafts, task, str(exc), failed=True)
+    if inputs.revision != scan_state.revision:
+        return agent_tasks.closed(
+            drafts, task, "Names changed during discovery; scan again.", failed=True
+        )
+    try:
+        discovery = Discovery.model_validate(result)
+        outside = _outside(discovery, inputs)
+        findings = (
+            []
+            if outside is None
+            else [agent_tasks.Finding(check="evidence", problem=outside)]
+        )
+    except ValidationError as exc:
+        findings = [agent_tasks.Finding(check="shape", problem=str(exc))]
+    if findings:
+        if task.failures >= agent_tasks.RETRIES:
+            return agent_tasks.closed(
+                drafts, task, "Refused too often.", failed=True, findings=findings
+            )
+        return agent_tasks.refused(
+            drafts, task, findings, agent_tasks.RETRIES - task.failures
+        )
+    try:
+        kept = _keep(
+            conn,
+            discovery,
+            inputs,
+            Provenance(
+                prompt=ai_prompts.resolve("alias_discovery").reference(),
+                provider=None,
+                model=f"agent:{claimant}",
+                reasoning_effort=None,
+            ),
+            created_by=task.requested_by or auth.LOCAL_ADMIN_ID,
+        )
+    except Conflict as exc:
+        return agent_tasks.closed(drafts, task, str(exc), failed=True)
+    draft_id = kept.suggestions[0].draft_id if kept.suggestions else None
+    return agent_tasks.closed(
+        drafts,
+        task,
+        f"Kept {len(kept.suggestions)} suggestions"
+        + (f" in draft {draft_id}" if draft_id else "")
+        + f"; skipped {len(kept.skipped)}.",
+        result={
+            "draft_id": draft_id,
+            "suggestions": len(kept.suggestions),
+            "skipped": len(kept.skipped),
+        },
+    )
+
+
+AGENT_TASK = agent_tasks.Handler(submit=_submit_agent_task)
 
 
 def _require_human(principal: auth.Principal) -> None:

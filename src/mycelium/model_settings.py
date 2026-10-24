@@ -34,6 +34,23 @@ ACTIONS: tuple[Action, ...] = (
     "documentation_planning",
     "connect",
 )
+#: Actions whose work an outside agent may do instead of a server model. For
+#: Ask that agent is the caller itself: the `ask` tool runs no model and the
+#: caller researches with the read tools.
+AGENT_ACTIONS: frozenset[Action] = frozenset(
+    {
+        "ask",
+        "docgen",
+        "documentation_planning",
+        "audience_labelling",
+        "ingest",
+        "connect",
+        "alias_discovery",
+    }
+)
+#: Who reviews a document an outside agent wrote: the server's reviewer on
+#: the action's provider, or an agent other than the writer.
+AgentReview = Literal["server", "agent"]
 #: Labelling reads every statement, so it defaults to a small model.
 AUDIENCE_LABELLING_MODEL = "claude-haiku-5-5"
 SCHEMA = """
@@ -54,6 +71,10 @@ class Selection(BaseModel):
     openai_model: str = Field(max_length=200)
     claude_reasoning_effort: ClaudeEffort | None = None
     openai_reasoning_effort: ReasoningEffort | None = None
+    #: Queue the action's work for outside agents (`agent_tasks`) instead of
+    #: calling `provider`, which then only reviews documents agents wrote.
+    external_agent: bool = False
+    agent_review: AgentReview = "server"
 
     def effort_for(self, provider: Provider) -> ReasoningEffort | None:
         return (
@@ -65,6 +86,13 @@ class Selection(BaseModel):
     @property
     def reasoning_effort(self) -> ReasoningEffort | None:
         return self.effort_for(self.provider)
+
+    def needs_provider(self, action: Action) -> bool:
+        """Whether `action` calls `provider` at all: only documentation's
+        server reviewer does while an agent does the work."""
+        return not self.external_agent or (
+            action == "docgen" and self.agent_review == "server"
+        )
 
 
 class ModelSnapshot(Selection):
@@ -85,6 +113,8 @@ class ProviderAvailability(BaseModel):
 
 
 class ActionView(ModelSnapshot):
+    #: Whether External agent may be chosen for this action.
+    agent_supported: bool
     configuration_error: str | None = None
     #: Set when the selected model id is not one this build knows.
     model_warning: str | None = None
@@ -233,6 +263,8 @@ def credentials_error(action: Action) -> str | None:
         selected = get(action)
     except Unavailable as exc:
         return str(exc)
+    if not selected.needs_provider(action):
+        return None
     return provider_availability(selected.provider).reason
 
 
@@ -264,6 +296,7 @@ def action_view(action: Action) -> ActionView:
     selected, error = editable(action)
     return ActionView(
         **selected.model_dump(),
+        agent_supported=action in AGENT_ACTIONS,
         configuration_error=error,
         model_warning=model_warning(selected.provider, selected.model),
         providers=[provider_availability("claude"), provider_availability("openai")],
@@ -307,10 +340,14 @@ def save(
 ) -> ModelSnapshot:
     if not principal.is_admin:
         raise auth.RoleRequired("admin role required")
+    if request.external_agent and action not in AGENT_ACTIONS:
+        raise ValueError("This action cannot be done by an external agent.")
+    if request.agent_review == "agent" and action != "docgen":
+        raise ValueError("Only documentation has an agent review.")
     selected_model = (
         request.claude_model if request.provider == "claude" else request.openai_model
     )
-    if not selected_model:
+    if not selected_model and request.needs_provider(action):
         raise ValueError("Choose a model ID for the selected provider.")
     check_model_id("claude", request.claude_model)
     check_model_id("openai", request.openai_model)
