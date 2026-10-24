@@ -18,7 +18,7 @@ from pydantic import (
     ValidationError,
 )
 
-from . import agent_tasks, ai, audiences, model_settings, product_settings, store
+from . import agent_tasks, ai, audiences, auth, model_settings, product_settings, store
 from .audiences import Audience
 
 logger = logging.getLogger(__name__)
@@ -332,6 +332,8 @@ def _submit_agent_task(
     }
     live = {item.id: item for item in audiences.live()}
     graph = audiences.graph(tuple(live.values()))
+    principal = auth.current_principal.get()
+    reviewer_name = principal.name if principal is not None else claimant
     conn = store.substrate_connection()
     confirmed = rejected = skipped = 0
     with store.transaction(conn):
@@ -360,7 +362,7 @@ def _submit_agent_task(
                     ""
                     if confirm
                     else _reject_reason(
-                        claimant,
+                        reviewer_name,
                         audience,
                         reviewer_reason,
                         str(label["reason"]),

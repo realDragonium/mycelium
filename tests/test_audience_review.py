@@ -70,7 +70,9 @@ T = TypeVar("T")
 
 def _as(principal: str, call: Callable[[], T]) -> T:
     token = auth.current_principal.set(
-        auth.Principal(id=principal, name=principal, role="writer", type="human")
+        auth.Principal(
+            id=principal, name=principal.title(), role="writer", type="human"
+        )
     )
     try:
         return call()
@@ -178,7 +180,7 @@ def test_an_agent_cannot_review_its_grants_and_another_agent_decides_them(
     assert store.audience_labels.label_pending(refused) == []
     assert refused["source"] == "curator"
     assert refused["reason"] == (
-        "reviewer rejected the AI's grant to External technical: "
+        "Reviewer rejected the AI's grant to External technical: "
         "This exposes internals. The labeller said: "
         "The first labeller considered this customer-facing."
     )
