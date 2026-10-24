@@ -7,17 +7,17 @@ wrapper inside the mounted transport read the same identity.
 
 from __future__ import annotations
 
+import functools
 import os
 import secrets
 from urllib.parse import urlsplit
 
-import anyio.to_thread
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .. import auth, hosts, principal_audience, store
+from .. import auth, hosts, principal_audience, request_timing, store
 from ..server import runtime
 
 # Resolves a `Principal` for every request and stashes it on
@@ -36,6 +36,11 @@ from ..server import runtime
 _AUTH_EXEMPT_PREFIXES = (
     "/auth/",  # login / callback / logout
     "/static/",
+    # The UI's build output and fonts carry no data, and serving them
+    # without a session is what lets a shared cache keep them. The public
+    # /connect page uses the fonts too.
+    "/ui/assets/",
+    "/ui/fonts/",
     "/favicon",
     "/docs",  # FastAPI swagger
     "/openapi.json",
@@ -121,7 +126,11 @@ def _is_cross_origin(request: Request) -> bool:
 def _is_exempt(path: str) -> bool:
     if path in _AUTH_EXEMPT_PATHS:
         return True
-    return any(path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES)
+    # `/ui/assets/../index.html` would otherwise reach a gated file through
+    # an exempt prefix.
+    return ".." not in path and any(
+        path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES
+    )
 
 
 def _is_browser_navigation(request: Request) -> bool:
@@ -290,9 +299,9 @@ class AuthMiddleware:
 
     @staticmethod
     def _lookup(raw: str | None, user_id: str | None) -> auth.Principal | None:
-        """Resolve credentials against the auth DB. Blocking: a token hit also
-        WRITES (last_used_at), so under concurrent traffic this waits on the
-        single writer — which is why `_resolve` keeps it off the event loop."""
+        """Resolve credentials against the auth DB. Blocking, and a token hit
+        now and then writes its `last_used_at`, which is why `_resolve` keeps
+        it off the event loop."""
         try:
             conn = runtime._auth_db()
         except RuntimeError:
@@ -301,11 +310,9 @@ class AuthMiddleware:
             # configured yet. Treat as no credentials.
             return None
         if raw is not None:
-            # resolve_token bumps last_used_at; own that write here since
-            # the auth layer is the unit of work for the token lookup.
-            with store.transaction(conn):
-                principal = auth.resolve_token(conn, raw)
+            principal = auth.resolve_token(conn, raw)
             if principal is not None:
+                auth.record_token_use(conn, raw)
                 return principal
         return auth.resolve_session_user(conn, user_id)
 
@@ -318,7 +325,9 @@ class AuthMiddleware:
         probe cheap even while every thread is busy serving tool calls."""
         if raw is None and not user_id:
             return None
-        return await anyio.to_thread.run_sync(cls._lookup, raw, user_id)
+        return await request_timing.run_sync(
+            functools.partial(cls._lookup, raw, user_id)
+        )
 
 
 # Nothing Mycelium serves is meant to be embedded. Framed by another page, the

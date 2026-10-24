@@ -20,7 +20,7 @@ import httpx
 import ollama
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from . import vector
+from . import request_timing, vector
 from .ai import usage
 from .ai.types import ModelConfig, Usage
 
@@ -336,14 +336,15 @@ def _available(texts: list[str]) -> list[list[float]]:
         raise EmbeddingError("The embedding provider failed recently; retrying later")
     configured = settings()
     try:
-        if configured.provider == "ollama":
-            return [_ollama_embed(text, configured) for text in texts]
-        vectors: list[list[float]] = []
-        for start in range(0, len(texts), OPENAI_BATCH):
-            vectors.extend(
-                _openai_batch(texts[start : start + OPENAI_BATCH], configured)
-            )
-        return vectors
+        with request_timing.phase("embed"):
+            if configured.provider == "ollama":
+                return [_ollama_embed(text, configured) for text in texts]
+            vectors: list[list[float]] = []
+            for start in range(0, len(texts), OPENAI_BATCH):
+                vectors.extend(
+                    _openai_batch(texts[start : start + OPENAI_BATCH], configured)
+                )
+            return vectors
     except EmbeddingError:
         _unavailable_until = _clock() + UNAVAILABLE_S
         raise

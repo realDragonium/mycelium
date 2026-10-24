@@ -13,9 +13,10 @@ from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import audience_labelling, audiences, server, store
+from ..request_timing import TimedRoute
 from .access import _enforce_role, _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 class AudiencesResponse(audiences.AudiencesView):

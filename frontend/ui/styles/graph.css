@@ -297,3 +297,16 @@
 }
 .ent-edit-remove:disabled { opacity: 0.5; cursor: not-allowed; }
 
+
+/* ---------- What a graph is showing, and the way out ---------- */
+.graph-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.graph-scope span { color: var(--ink); font-weight: 500; flex-basis: 100%; }
+.concept-row { grid-template-columns: minmax(0, 1fr) auto; }

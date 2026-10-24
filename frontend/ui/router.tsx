@@ -18,8 +18,8 @@ export type Route =
   | { view: 'ask'; query: string }
   | { view: 'find'; query: string; mode: FindMode }
   | { view: 'browse' }
-  | { view: 'graph'; focus: string | null }
-  | { view: 'entities'; focus: string | null }
+  | { view: 'graph'; focus: string | null; all: boolean }
+  | { view: 'entities'; focus: string | null; all: boolean }
   | { view: 'statement'; id: string }
   | { view: 'entity'; id: string }
   | { view: 'documentation' }
@@ -53,8 +53,8 @@ export function parseHash(hash: string): Route {
     // The former /ui search was a literal match over records.
     case 'search': return { view: 'find', query: param('q'), mode: 'grep' };
     case 'browse': return { view: 'browse' };
-    case 'graph': return { view: 'graph', focus: p.get('focus') };
-    case 'entities': return { view: 'entities', focus: p.get('focus') };
+    case 'graph': return { view: 'graph', focus: p.get('focus'), all: p.get('all') === '1' };
+    case 'entities': return { view: 'entities', focus: p.get('focus'), all: p.get('all') === '1' };
     case 's': case 'b': return arg ? { view: 'statement', id: arg } : { view: 'browse' };
     case 'e': return arg ? { view: 'entity', id: arg } : { view: 'browse' };
     case 'documentation': {
@@ -94,8 +94,8 @@ export function routeToHash(route: Route): string {
     case 'ask': return `#/ask${query({ q: route.query })}`;
     case 'find': return `#/find${query({ q: route.query, mode: route.mode })}`;
     case 'browse': return '#/browse';
-    case 'graph': return `#/graph${query({ focus: route.focus })}`;
-    case 'entities': return `#/entities${query({ focus: route.focus })}`;
+    case 'graph': return `#/graph${query({ focus: route.focus, all: route.all ? '1' : null })}`;
+    case 'entities': return `#/entities${query({ focus: route.focus, all: route.all ? '1' : null })}`;
     case 'statement': return `#/s/${e(route.id)}`;
     case 'entity': return `#/e/${e(route.id)}`;
     case 'documentation': return '#/documentation';

@@ -36,7 +36,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from . import timestamps
+from . import request_timing, timestamps
 from .connections import ConnectionProvider
 
 PROMPT_TEXTS_SCHEMA = """
@@ -57,7 +57,12 @@ CREATE TABLE IF NOT EXISTS prompt_texts (
 def connect(db_path: Path | str) -> sqlite3.Connection:
     # isolation_level=None: `_writing` owns every transaction explicitly, and
     # the driver's legacy auto-BEGIN would leave one open underneath it.
-    conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    conn = sqlite3.connect(
+        str(db_path),
+        check_same_thread=False,
+        isolation_level=None,
+        factory=request_timing.TimedConnection,
+    )
     conn.row_factory = sqlite3.Row
     # WAL + busy timeout, as every other DB in this process: a run thread
     # reading its doctrine can overlap an HTTP thread saving a new version.

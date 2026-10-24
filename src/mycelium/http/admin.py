@@ -8,19 +8,22 @@ log in through OIDC.
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import asdict
 from typing import Any
 
+import anyio.to_thread
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
-from .. import auth, principal_audience, store
+from .. import auth, principal_audience, request_timing, store
+from ..request_timing import TimedRoute
 from ..server import runtime
 from .access import _require_admin
 from .account import _serialize_token_row
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 def _serialize_user_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -239,3 +242,21 @@ def accept_invite(token: str) -> RedirectResponse:
     Passing the token here was redundant.
     """
     return RedirectResponse(url="/auth/login?next=/connect")
+
+
+@router.get("/api/admin/performance")
+async def performance(request: Request) -> dict[str, Any]:
+    """Request timings over the recent window, per route. Async so it answers
+    while every worker thread is busy, which is when it is wanted."""
+    _require_admin(request)
+    pool = anyio.to_thread.current_default_thread_limiter().statistics()
+    return {
+        "window_seconds": request_timing.recorder.window_s,
+        "slow_request_ms": request_timing.slow_threshold_ms(),
+        "worker_threads": {
+            "limit": pool.total_tokens,
+            "busy": pool.borrowed_tokens,
+            "waiting": pool.tasks_waiting,
+        },
+        "routes": [asdict(route) for route in request_timing.recorder.summary()],
+    }

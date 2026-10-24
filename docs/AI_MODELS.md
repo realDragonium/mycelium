@@ -198,8 +198,11 @@ Shared model concurrency and the documentation active-run limit are
 editable. Lowering shared concurrency lets current work finish and holds new
 work until capacity becomes available. Increasing it wakes waiting workers.
 There is one shared counting gate; changing its limit does not create a second
-pool. The active-run limit counts admitted unfinished runs, including
-those waiting for shared capacity.
+pool. The active-run limit counts started unfinished runs, including
+those waiting for shared capacity. A run admitted over it is queued, with its
+place in line (`queue_position`), and starts in admission order as running
+ones finish. The queue is held in the server process, so a restart fails
+queued runs as it fails running ones.
 
 Documentation settings selects the default guideline set and configures named
 GitHub destinations using an owner, repository, base branch, and path template.

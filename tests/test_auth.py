@@ -5,6 +5,8 @@ Phase 3 adds OIDC callback tests; the substrate-level pieces tested here
 underpin both.
 """
 
+from datetime import datetime
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -58,6 +60,29 @@ def test_auth_on_exempts_ui_routes(tmp_path, monkeypatch):
         # response itself goes through.
         r = client.get("/", follow_redirects=False)
         assert r.status_code in (200, 307)
+
+
+def test_the_ui_build_is_public_and_cached_but_its_page_is_not(tmp_path, monkeypatch):
+    from mycelium.http import webui
+    from mycelium.http.authentication import _is_exempt
+
+    bundle = next(webui._ASSETS_DIR.glob("*.js")).name
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        asset = client.get(f"/ui/assets/{bundle}")
+        assert asset.status_code == 200
+        assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
+        assert client.get("/ui/fonts/fonts.css").status_code == 200
+        assert client.get("/ui/").status_code == 401
+        assert not _is_exempt("/ui/assets/../index.html")
+
+        conn = runtime._auth_db()
+        user_id = auth.create_user(conn, name="Reader", role="reader", type="service")
+        raw, _ = auth.issue_token(conn, user_id=user_id, name="t", scope="reader")
+        conn.commit()
+        page = client.get("/ui/", headers={"Authorization": f"Bearer {raw}"})
+        assert page.status_code == 200
+        assert page.headers["cache-control"] == "no-cache, private"
 
 
 def test_auth_on_accepts_valid_bearer(tmp_path, monkeypatch):
@@ -209,11 +234,7 @@ def test_token_lifecycle_via_http(tmp_path, monkeypatch):
         # data dir. We can't easily restart the app here; instead, prove
         # the bearer path resolves the token directly.
         conn = runtime._auth_db()
-        # resolve_token bumps last_used_at; own that write in a transaction
-        # (as the middleware does) so this thread's connection commits and
-        # releases the lock before the delete request writes on another.
-        with store.transaction(conn):
-            principal = auth.resolve_token(conn, raw)
+        principal = auth.resolve_token(conn, raw)
         assert principal is not None
         assert principal.role == "writer"
 
@@ -730,3 +751,32 @@ def test_oversized_request_body_is_refused(tmp_path, monkeypatch):
             headers={"Content-Type": "application/json"},
         )
         assert r.status_code == 413
+
+
+def test_token_use_is_recorded_at_most_once_a_minute():
+    conn = auth_store.connect(":memory:")
+    auth_store.migrate(conn)
+    user_id = auth.create_user(conn, name="Bot", role="reader", type="service")
+    raw, token_id = auth.issue_token(conn, user_id=user_id, name="bot", scope="reader")
+    conn.commit()
+
+    def last_used() -> str | None:
+        return conn.execute(
+            "SELECT last_used_at FROM mcp_tokens WHERE id = ?", (token_id,)
+        ).fetchone()[0]
+
+    auth.resolve_token(conn, raw)
+    assert last_used() is None
+
+    auth.record_token_use(conn, raw)
+    first = last_used()
+    auth.record_token_use(conn, raw)
+    assert first is not None and last_used() == first
+
+    stale = datetime.fromisoformat(first) - auth.TOKEN_USE_RESOLUTION
+    conn.execute(
+        "UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?",
+        (stale.isoformat(), token_id),
+    )
+    auth.record_token_use(conn, raw)
+    assert last_used() > first

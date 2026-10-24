@@ -21,7 +21,6 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from mcp.server.transport_security import RequestBodyLimitMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import BaseRoute
@@ -35,6 +34,7 @@ from .. import (
     oauth_server,
     oidc,
     quarantine,
+    request_timing,
     server,
     tracing,
 )
@@ -176,6 +176,8 @@ def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastA
     app.add_middleware(StartupGate)
     # Outermost, so error responses from the layers inside get the headers too.
     app.add_middleware(SecurityHeadersMiddleware)
+    # Outside everything, so a request's time includes every layer's.
+    app.add_middleware(request_timing.RequestTimingMiddleware)
 
     app.router.routes.extend(_routes())
 
@@ -228,7 +230,7 @@ def _routes() -> tuple[BaseRoute, ...]:
     ):
         combined.include_router(router)
     combined.mount(
-        "/ui", StaticFiles(directory=str(webui._UI_DIR), html=True), name="ui"
+        "/ui", webui.UIFiles(directory=str(webui._UI_DIR), html=True), name="ui"
     )
     return tuple(combined.routes)
 

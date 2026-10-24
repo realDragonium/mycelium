@@ -15,10 +15,11 @@ from pydantic import BaseModel
 from pydantic import Field as PydField
 
 from .. import audiences, auth, principal_audience, quarantine, store
+from ..request_timing import TimedRoute
 from ..server import runtime
 from .access import _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 def _serialize_token_row(row: sqlite3.Row) -> dict[str, Any]:

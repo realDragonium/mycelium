@@ -24,8 +24,9 @@ code or from memory: a missing fact is a knowledge gap to fill first.
   same action is a button in **Documents** (`#/documentation`); tell the
   operator which.
 - Every run costs model spend on the server and counts against its
-  active-run limit. A refusal for that limit is an answer, not a transient
-  error: tell the operator rather than retrying in a loop.
+  active-run limit. A run over that limit is `queued` with a
+  `queue_position` and starts by itself when one finishes; do not start it
+  again.
 
 ## Choose profile, type and anchor
 

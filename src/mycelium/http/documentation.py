@@ -25,9 +25,10 @@ from .. import (
     server,
 )
 from ..docgen.schema import ManualDocument
+from ..request_timing import TimedRoute
 from .access import _enforce_role, _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 class DocumentationRequestBody(BaseModel):

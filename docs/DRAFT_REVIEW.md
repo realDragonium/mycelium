@@ -185,8 +185,10 @@ current server configuration. After changing from `review-only` to
 `review-and-apply`, **Run again** can review and apply the draft; the old advisory
 result does not itself authorize application.
 
-`get_draft_review_run(run_id)` retrieves an attempt. `get_draft`, draft lists, and
-both browser interfaces expose the latest `review_assessment`, including:
+`get_draft_review_run(run_id)` retrieves an attempt. `get_draft` and both browser
+interfaces expose the latest `review_assessment`, including the items below.
+`GET /api/drafts` lists only each assessment's `run_id`, status, label,
+application outcome and staleness, and the `list_drafts` tool none of it.
 
 - Status (`running`, `completed`, `failed`, `paused`), assessed revision, and
   staleness.

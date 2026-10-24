@@ -9,6 +9,7 @@ import httpx
 from anthropic import AnthropicError, APIStatusError, APITimeoutError
 from pydantic import ValidationError
 
+from .. import request_timing
 from . import claude, openai, usage
 from .claude import ClaudeClient
 from .types import (
@@ -102,13 +103,15 @@ def turn(
     with usage.metered(config) as report:
         try:
             if config.provider == "claude":
-                response = claude.turn(task, config, client)
+                with request_timing.phase("model"):
+                    response = claude.turn(task, config, client)
             elif client is not None and not isinstance(client, httpx.Client):
                 raise ModelError(
                     "OpenAI requires an HTTP client for transport injection"
                 )
             else:
-                response = openai.turn(task, config, client)
+                with request_timing.phase("model"):
+                    response = openai.turn(task, config, client)
         except (ValidationError, AnthropicError) as exc:
             raise _provider_failure(config.provider, "turn", exc) from None
         report(response.usage)
@@ -133,11 +136,12 @@ def structured_with_usage(
     """`structured`, plus the tokens the request used."""
     with usage.metered(config) as report:
         try:
-            result = (
-                claude.structured(task, config, client)
-                if config.provider == "claude"
-                else openai.structured(task, config, client)
-            )
+            with request_timing.phase("model"):
+                result = (
+                    claude.structured(task, config, client)
+                    if config.provider == "claude"
+                    else openai.structured(task, config, client)
+                )
         except (ValidationError, AnthropicError) as exc:
             raise _provider_failure(config.provider, "structured", exc) from None
         report(result[1])

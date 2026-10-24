@@ -21,9 +21,10 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import media, media_formats, principal_audience
 from ..media_store import TargetKind
+from ..request_timing import TimedRoute
 from .access import _enforce_role, _require_admin, _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 #: Routes whose body is a file. The app-wide body limit skips them; each reads
 #: its body against the media caps instead.

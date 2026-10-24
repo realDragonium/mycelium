@@ -330,6 +330,54 @@ def test_a_plan_is_reviewed_into_runs_and_a_dismissal_sticks(client, monkeypatch
     assert replanned["latest"]["dropped"] == {"dismissed before": 1}
 
 
+def test_a_batch_beyond_the_run_limit_queues_in_order(client, monkeypatch):
+    import threading
+
+    from mycelium import product_settings, server
+    from product_settings_helpers import set_product
+
+    _profile()
+    set_product(product_settings.ConcurrencySettings(documentation_runs=1))
+    set_product(product_settings.DocumentationPlanningSettings(approve_batch=3))
+    release = threading.Event()
+    written = doc_runs.RUNNER
+
+    def runner(prompt, *, guideline_set, document_type):
+        release.wait()
+        return written(prompt, guideline_set=guideline_set, document_type=document_type)
+
+    doc_runs.RUNNER = runner
+    conn = server._db()
+    with store.transaction(conn):
+        statement = store.create_statement(conn, "capability", "invoices export")
+    titles = ("Export invoices", "Invoice limits", "Invoice fields")
+    items = _plan(
+        client,
+        monkeypatch,
+        *(_item(title=title, statement_ids=[statement]) for title in titles),
+    )["items"]
+
+    approved = client.post(
+        "/api/documentation/plan-items/approve",
+        json={"item_ids": [item["id"] for item in items]},
+    ).json()
+
+    assert [entry["error"] for entry in approved] == [None, None, None]
+    runs = [
+        item["run"]
+        for item in client.get("/api/documentation/plans/public").json()["items"]
+    ]
+    assert [(run["status"], run["queue_position"]) for run in runs] == [
+        ("running", None),
+        ("queued", 1),
+        ("queued", 2),
+    ]
+    release.set()
+    doc_runs.wait_all()
+    finished = client.get("/api/documentation/plans/public").json()["items"]
+    assert all(item["run"]["status"] not in ("queued", "running") for item in finished)
+
+
 def test_an_approved_item_that_wrote_nothing_is_retried_from_the_plan(
     client, monkeypatch
 ):

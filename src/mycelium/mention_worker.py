@@ -27,7 +27,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from . import mentions, store
+from . import mentions, request_timing, store
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ _wake = threading.Event()
 _stop = threading.Event()
 
 
+@request_timing.tracked("background mention recompute")
 def drain(conn: sqlite3.Connection, *, chunk: int = CHUNK) -> int:
     """Drain the recompute queue to empty on `conn`, one chunk per
     transaction. Returns the number of statement recomputes performed.

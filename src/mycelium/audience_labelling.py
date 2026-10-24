@@ -29,6 +29,7 @@ from . import (
     audiences,
     model_settings,
     product_settings,
+    request_timing,
     store,
     timestamps,
 )
@@ -191,6 +192,7 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
     return labelled
 
 
+@request_timing.tracked("background audience labelling")
 def drain(conn: sqlite3.Connection, *, call: Call = _call) -> int:
     """Label due batches until none is due or one fails. Returns how many
     statements were labelled. Without provider credentials nothing is tried,

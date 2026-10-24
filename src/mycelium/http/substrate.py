@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from .. import principal_audience, store
+from ..request_timing import TimedRoute
 from ..server import runtime
 from .access import _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 @router.get("/api/data")
@@ -27,6 +28,30 @@ def get_substrate_dump(request: Request) -> dict[str, Any]:
     """
     with principal_audience.reads(_require_principal(request)):
         return store.substrate_dump(store.substrate_connection())
+
+
+@router.get("/api/graph/concepts")
+def get_graph_concepts(request: Request) -> dict[str, Any]:
+    """What the graph views offer to open on: every entity the caller may see
+    with its statement and entity-link counts, most mentioned first."""
+    with principal_audience.reads(_require_principal(request)):
+        dump = store.substrate_dump(store.substrate_connection())
+    return {
+        "concepts": store.concept_degrees(dump),
+        "statements": len(dump["statements"]),
+    }
+
+
+@router.get("/api/graph/neighbourhood")
+def get_graph_neighbourhood(request: Request, focus: str) -> dict[str, Any]:
+    """The part of `/api/data` around one entity or statement, which is what
+    a graph view shows unless asked for everything."""
+    with principal_audience.reads(_require_principal(request)):
+        dump = store.substrate_dump(store.substrate_connection())
+    part = store.dump_neighbourhood(dump, focus)
+    if part is None:
+        raise HTTPException(status_code=404, detail=f"no entity or statement {focus}")
+    return part
 
 
 @router.get("/api/substrate-counts")

@@ -16,8 +16,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import auth, github_app, github_connections
+from .request_timing import TimedRoute
 
-router = APIRouter(prefix="/api/github")
+router = APIRouter(prefix="/api/github", route_class=TimedRoute)
 TTL = 600
 
 

@@ -16,15 +16,16 @@ import logging
 import re
 import sqlite3
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, NotRequired, TypedDict
 
 from pydantic import JsonValue
 
-from .. import auth, link_authoring, media, store, timestamps
+from .. import auth, embed, link_authoring, media, store, timestamps
 from .draft_review import _draft_operation_findings, _review_knowledge_preconditions
 from .drafts import _identified_principal
 from .indexes import _persisted_index_write, _restore_index_snapshots
+from .names import _embed_name_ahead
 from .registry import _ORIG_SIGNATURES, TOOLS, tool
 from .runtime import (
     _db,
@@ -247,6 +248,46 @@ def _replay_draft_ops(ops: list[sqlite3.Row]) -> list[dict[str, Any]]:
     return results
 
 
+def _draft_texts(ops: list[sqlite3.Row]) -> Iterator[tuple[str, str]]:
+    """Each statement text and name a draft's replay would embed, tagged
+    `statement` or `name`."""
+    for op in ops:
+        payload = _json.loads(op["payload_json"])
+        kind = op["kind"]
+        if kind in ("upsert_statement", "patch_statement") and payload.get("text"):
+            yield "statement", payload["text"]
+        elif kind == "upsert_statements":
+            for item in payload.get("statements") or []:
+                yield "statement", item["text"]
+        elif kind == "upsert_entity":
+            yield "name", payload["name"]
+        elif kind == "upsert_name":
+            yield "name", payload["text"]
+        elif kind == "rename_name":
+            yield "name", payload["new_text"]
+
+
+def embed_draft_ahead(draft_id: str) -> None:
+    """Embed a draft's texts before its replay takes the write lock: replay
+    holds the lock from its first operation to its commit, and every write
+    and token check in the process queues behind it, while embedding is the
+    slow part. Replay then finds these in `embed`'s cache. Texts a replay
+    derives itself, such as `replace_text` results, are still embedded under
+    the lock."""
+    from .. import drafts_store
+
+    try:
+        for kind, text in _draft_texts(drafts_store.list_ops(_drafts_db(), draft_id)):
+            if kind == "name":
+                _embed_name_ahead(text)
+            else:
+                embed.embed(text)
+    except Exception:  # noqa: BLE001
+        # The replay embeds again and reports a failure in the operation's
+        # terms; failing here would only report it worse.
+        logger.warning("could not embed draft %s ahead of replay", draft_id)
+
+
 def apply_draft(
     draft_id: str,
     *,
@@ -436,6 +477,7 @@ def approve_draft(draft_id: str, *, decided_by: str) -> DraftReplay:
     from .. import drafts_store
 
     conn = _drafts_db()
+    embed_draft_ahead(draft_id)
     with store.write_lock():
         with store.transaction(conn):
             draft = drafts_store.get_draft(conn, draft_id)
@@ -494,6 +536,7 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> ReviewedApplicationRe
 
     principal = _identified_principal()
     conn = _drafts_db()
+    embed_draft_ahead(draft_id)
     with store.write_lock():
         if not _reviewed_apply_enabled():
             raise ValueError("reviewed draft application is disabled")

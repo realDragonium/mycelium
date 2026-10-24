@@ -756,11 +756,20 @@ def finish_run(
     conn.commit()
 
 
+# A queued run's place in line, 1 being next: runs start in admission order.
+_RUN_COLUMNS = (
+    "SELECT r.*, d.id IS NOT NULL AS document_exists, "
+    "d.last_run_id AS document_last_run_id, "
+    "CASE WHEN r.started_at IS NULL AND r.finished_at IS NULL THEN ("
+    "SELECT COUNT(*) FROM documentation_runs AS q "
+    "WHERE q.started_at IS NULL AND q.finished_at IS NULL AND q.rowid <= r.rowid"
+    ") END AS queue_position "
+)
+
+
 def get_run(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT r.*, d.id IS NOT NULL AS document_exists, "
-        "d.last_run_id AS document_last_run_id "
-        "FROM documentation_runs AS r "
+        _RUN_COLUMNS + "FROM documentation_runs AS r "
         "LEFT JOIN generated_documents AS d ON d.id = r.document_id "
         "WHERE r.id = ?",
         (run_id,),
@@ -770,9 +779,7 @@ def get_run(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
 def list_runs(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
     return list(
         conn.execute(
-            "SELECT r.*, d.id IS NOT NULL AS document_exists, "
-            "d.last_run_id AS document_last_run_id "
-            "FROM documentation_runs AS r "
+            _RUN_COLUMNS + "FROM documentation_runs AS r "
             "LEFT JOIN generated_documents AS d ON d.id = r.document_id "
             "ORDER BY r.created_at DESC, r.id DESC LIMIT ?",
             (limit,),
@@ -822,6 +829,7 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "guideline_set": row["guideline_set"],
         "document_type": row["document_type"],
         "status": status_for(row),
+        "queue_position": row["queue_position"],
         "created_at": row["created_at"],
         "created_by": row["created_by"],
         "started_at": row["started_at"],

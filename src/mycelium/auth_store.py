@@ -22,6 +22,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from . import request_timing
 from .connections import ConnectionProvider
 
 AUTH_SCHEMA = """
@@ -162,7 +163,9 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
     `check_same_thread=False` because uvicorn workers reuse the
     connection across requests, and `row_factory=Row` for dict-style
     access. FKs are enforced so cascade-on-user-delete works."""
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = sqlite3.connect(
+        str(db_path), check_same_thread=False, factory=request_timing.TimedConnection
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     # WAL + a busy timeout so each request thread can hold its OWN connection:

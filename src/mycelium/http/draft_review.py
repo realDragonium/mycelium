@@ -14,9 +14,10 @@ from pydantic import BaseModel, JsonValue
 
 from .. import draft_review_settings as review_settings
 from .. import server
+from ..request_timing import TimedRoute
 from .access import _enforce_curator, _require_admin
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 class Backlog(BaseModel):

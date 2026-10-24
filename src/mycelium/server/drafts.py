@@ -261,15 +261,13 @@ def list_drafts(
         raise ValueError("status must be one of: " + ", ".join(_DRAFT_STATUS_VALUES))
 
     conn = _drafts_db()
-    rows = drafts_store.list_drafts(conn, status=status)
     counts = drafts_store.count_ops_by_draft(conn)
     out = []
-    for r in rows:
-        if created_by is not None and r["created_by"] != created_by:
+    for d in drafts_store.list_draft_summaries(conn, status=status):
+        if created_by is not None and d["created_by"] != created_by:
             continue
-        d = drafts_store.serialize_draft(r)
-        del d["review_evidence"], d["review_assessment"]
-        d["op_count"] = counts.get(r["id"], 0)
+        del d["review_assessment"]
+        d["op_count"] = counts.get(d["id"], 0)
         out.append(d)
     return out
 

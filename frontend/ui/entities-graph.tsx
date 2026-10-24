@@ -5,7 +5,7 @@
 // no mention edges. Entity counts in practice are ~10² rather than
 // ~10³, so the simulation can stay simple — naive O(N²) repulsion is
 // fine, no spatial grid required.
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { useState as useStateE, useEffect as useEffectE, useRef as useRefE, useMemo as useMemoE } from 'react';
 import { RecordTag, useDataCtx, useMe } from './lib';
 import { errorMessage, getJSON, isScoped, postJSON } from './api';
@@ -150,7 +150,7 @@ function EntityLinkAddForm({ self, entities, knownTypes, onCreated, onCancel }: 
   );
 }
 
-function EntitiesGraph({ focusId }: { focusId?: string | null }) {
+function EntitiesGraph({ focusId, scope }: { focusId?: string | null; scope?: ReactNode }) {
   const scoped = isScoped(useMe());
   const router = useRouter();
   const { theme } = usePrefs().prefs;
@@ -944,6 +944,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
       </div>
 
       <aside className="graph-side">
+        {scope}
         {!selected && (
           <div>
             <h3>Entities</h3>

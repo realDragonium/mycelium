@@ -14,9 +14,10 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .. import auth, store
+from ..request_timing import TimedRoute
 from .access import _enforce_curator, _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 def _serialize_gap(row: sqlite3.Row) -> dict[str, Any]:

@@ -61,6 +61,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from . import auth
+from .request_timing import TimedRoute
 
 _oauth: Any | None = None  # lazy: only constructed when OIDC is enabled
 
@@ -136,7 +137,7 @@ def _safe_next(target: str | None) -> str:
 # --- routes ---------------------------------------------------------------
 
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"], route_class=TimedRoute)
 
 
 def _require_oidc() -> None:

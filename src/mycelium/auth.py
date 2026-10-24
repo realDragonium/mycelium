@@ -38,7 +38,7 @@ import secrets
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from .require import require
@@ -331,7 +331,7 @@ def _scoped(
 def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
     """Look up a bearer token and return the authenticated principal.
     Returns None when the token is unknown, revoked, expired, or its owner
-    is suspended/missing. Bumps `last_used_at` on a hit.
+    is suspended/missing. Reads only; `record_token_use` notes the use.
     """
     row = conn.execute(
         """
@@ -362,10 +362,6 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
             f"token of user {row['user_id']}", row["email"], "email domain not allowed"
         )
         return None
-    conn.execute(
-        "UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?",
-        (now.isoformat(), row["token_id"]),
-    )
     # A scoped user's audience binds every token they hold.
     return _scoped(
         id=row["user_id"],
@@ -374,6 +370,34 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
         type=row["type"],
         audience_id=row["user_audience_id"] or row["token_audience_id"],
     )
+
+
+#: How far behind a token's `last_used_at` may run. It tells an admin roughly
+#: when a token was last used; writing it on every request would make every
+#: token-authenticated read a write that queues on the process's write lock.
+TOKEN_USE_RESOLUTION = timedelta(minutes=1)
+
+
+def record_token_use(conn: sqlite3.Connection, raw_token: str) -> None:
+    """Bump the token's `last_used_at` once it is `TOKEN_USE_RESOLUTION` old,
+    in a transaction of its own."""
+    from . import store
+
+    row = conn.execute(
+        "SELECT id, last_used_at FROM mcp_tokens WHERE hash = ?",
+        (hash_token(raw_token),),
+    ).fetchall()
+    now = datetime.now(UTC)
+    if not row or (
+        row[0]["last_used_at"] is not None
+        and now - datetime.fromisoformat(row[0]["last_used_at"]) < TOKEN_USE_RESOLUTION
+    ):
+        return
+    with store.transaction(conn):
+        conn.execute(
+            "UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?",
+            (now.isoformat(), row[0]["id"]),
+        )
 
 
 def resolve_session_user(

@@ -80,13 +80,13 @@ def request_documentation(
     writes onto a reviewable draft, and this tool sits outside that machinery:
     what it produces lands live and is served to readers as it stands.
 
-    Returns immediately with the serialized run row (its `status` will be
-    "running"); poll `get_documentation_run(run_id)` for the outcome and
+    Returns immediately with the serialized run row: `status` "running", or
+    "queued" with its `queue_position` (1 starts next) when the saved
+    documentation active-run limit (default 2) is full; poll `get_documentation_run(run_id)` for the outcome and
     `get_generated_document(document_id)` for what it wrote. `guideline_set`
     picks the writing guidance (see `list_prompt_texts(type="guideline-set")`)
     and `document_type` the template within it; left out, they stay null on
-    the row and the run resolves them. Raises when the active-run cap is
-    reached (saved documentation active-run limit, default 2), when `guideline_set` is
+    the row and the run resolves them. Raises when `guideline_set` is
     unknown, when `document_type` is not one that set can write, or when
     `prompt` is blank or longer than the saved prompt length limit.
     `provider` selects claude or openai; omitted uses saved documentation settings

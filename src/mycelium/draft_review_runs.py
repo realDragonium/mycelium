@@ -27,6 +27,7 @@ from . import (
     model_settings,
     product_settings,
     quarantine,
+    request_timing,
     store,
     timestamps,
 )
@@ -225,6 +226,7 @@ _sweeper: threading.Thread | None = None
 _stop_sweeper = threading.Event()
 
 
+@request_timing.tracked("background draft review sweep")
 def sweep(now: datetime | None = None) -> list[str]:
     """Resume budget-paused reviews and retry failed reviews after backoff.
     Returns the draft ids started."""
@@ -519,6 +521,7 @@ def _statement_texts(ops: JsonValue) -> list[str]:
     return texts
 
 
+@request_timing.tracked("background draft review")
 def _execute(
     run: ReviewRun,
     inspection: DraftReviewInspection,

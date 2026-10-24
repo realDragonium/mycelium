@@ -11,9 +11,10 @@ from fastapi import APIRouter, Request
 from pydantic import JsonValue
 
 from .. import alias_suggestions, auth, names_workspace, server
+from ..request_timing import TimedRoute
 from .access import _enforce_curator, _enforce_role, _require_admin, _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 @router.get("/api/mention-candidates")

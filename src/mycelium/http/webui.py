@@ -6,15 +6,20 @@ a mount); this module owns where they live and the redirects around them.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+from starlette.types import Scope
 
 from .. import connect_page
+from ..request_timing import TimedRoute
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 @router.get("/connect", include_in_schema=False)
@@ -41,6 +46,28 @@ def _root_redirect() -> RedirectResponse:
 # the server runs without Node.
 _WEBUI_DIR = Path(__file__).resolve().parent.parent / "webui"
 _UI_DIR = _WEBUI_DIR / "ui"
+_ASSETS_DIR = _UI_DIR / "assets"
+
+
+class UIFiles(StaticFiles):
+    """The UI's files. Vite names each bundle after its content, so a cached
+    one never goes stale and is kept for a year; everything else, the
+    `index.html` naming the current bundles first, is checked on every
+    load so a deploy shows at once."""
+
+    def file_response(
+        self,
+        full_path: str | os.PathLike[str],
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        if Path(full_path).parent == _ASSETS_DIR:
+            response.headers["cache-control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["cache-control"] = "no-cache, private"
+        return response
 
 
 # Serve the app at the bare /ui path too. Starlette would normally redirect

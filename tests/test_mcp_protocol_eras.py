@@ -293,3 +293,22 @@ def test_routing_headers_must_agree_with_the_body(client, bearer):
 
     assert r.status_code == 400, r.text
     assert _parse(r)["error"]["code"] == HEADER_MISMATCH
+
+
+def test_a_tool_call_is_timed_under_its_method_and_tool(client, bearer):
+    from mycelium import request_timing
+
+    called = _modern(
+        client,
+        "tools/call",
+        token=bearer["reader"],
+        params={"name": "list_entities", "arguments": {}},
+    )
+    assert called.status_code == 200, called.text
+
+    (route,) = (
+        r
+        for r in request_timing.recorder.summary()
+        if r.label == "MCP tools/call list_entities"
+    )
+    assert {"first_byte", "thread_run"} <= route.phases.keys()
