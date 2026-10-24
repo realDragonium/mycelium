@@ -47,6 +47,29 @@ def proposal(entity_id, statement_id=None):
     )
 
 
+@contextmanager
+def direct_vocabulary(tmp_path, monkeypatch):
+    from mycelium import draft_review_runs, embed
+
+    monkeypatch.setattr(embed, "embed", lambda text: [0.0] * 768)
+    server.init(tmp_path)
+    token = auth.current_principal.set(auth.LOCAL_ADMIN)
+    try:
+        entity_id = server.upsert_entity(
+            name="Single sign-on", description="Federated authentication"
+        )["entity_id"]
+        with store.transaction(server._db()):
+            statement_id = store.create_statement(
+                server._db(),
+                "state",
+                "Single sign-on (SSO) is enabled for administrators",
+            )
+        yield entity_id, statement_id
+    finally:
+        draft_review_runs.wait_all()
+        auth.current_principal.reset(token)
+
+
 def queue(entity_id, statement_id, *, extra=False):
     source = store.get_statement(server._db(), statement_id)["text"]
     suggestion = aliases.prepare(
@@ -74,6 +97,24 @@ def queue(entity_id, statement_id, *, extra=False):
             )
         drafts_store.set_submitted(db, draft_id)
     return aliases.list_entries()[0]
+
+
+def queue_suggestions(suggestions):
+    db = server._drafts_db()
+    with store.transaction(db):
+        draft_id = drafts_store.create_draft(
+            db, created_by=auth.LOCAL_ADMIN.id, session_id=None, title="Aliases"
+        )
+        for suggestion in suggestions:
+            drafts_store.add_op(
+                db,
+                draft_id=draft_id,
+                kind=aliases.KIND,
+                payload=suggestion.model_dump(mode="json"),
+                created_by=auth.LOCAL_ADMIN.id,
+            )
+        drafts_store.set_submitted(db, draft_id)
+    return draft_id
 
 
 def decide(entry, action="accept", **kwargs):
@@ -518,6 +559,7 @@ def test_auto_review_remains_advisory_even_if_model_proposes_acceptance(
                 rationale="The abbreviation is supported.",
                 corrections=[],
                 questions=[],
+                alias_decisions=[],
                 contradictions=[],
             ),
         )
@@ -531,6 +573,235 @@ def test_auto_review_remains_advisory_even_if_model_proposes_acceptance(
         assert aliases.list_entries()[0].suggestion.status == "pending"
         assert store.get_name_by_text(server._db(), "SSO") is None
         assert store.get_name_by_text(server._db(), "Unrelated") is None
+
+
+def test_alias_only_drafts_stay_out_of_review_and_backlog_when_disabled(
+    tmp_path, monkeypatch
+):
+    from mycelium import draft_review_runs
+    from settings_helpers import set_review_controls
+
+    with direct_vocabulary(tmp_path, monkeypatch) as (entity_id, statement_id):
+        set_review_controls(mode="review-only", alias_decisions=False)
+        entry = queue(entity_id, statement_id)
+
+        draft_review_runs.on_submitted(entry.draft_id)
+
+        assert server.get_draft(entry.draft_id)["review_assessment"] is None
+        assert entry.draft_id not in draft_review_runs.backlog()
+        set_review_controls(alias_decisions=True)
+        assert entry.draft_id in draft_review_runs.backlog()
+
+
+def test_reviewer_accepts_and_rejects_aliases_and_closes_alias_draft(
+    tmp_path, monkeypatch
+):
+    from mycelium import draft_review_runs
+    from mycelium.draft_review_store import AliasDecision, Assessment
+    from settings_helpers import save_model, set_review_controls
+
+    with direct_vocabulary(tmp_path, monkeypatch) as (entity_id, statement_id):
+        export_entity = server.upsert_entity(
+            name="Data exports", description="Workspace data archives"
+        )["entity_id"]
+        with store.transaction(server._db()):
+            export_statement = store.create_statement(
+                server._db(), "state", "Data exports (DE) include workspace invoices"
+            )
+        export_proposal = aliases.Proposal(
+            entity_id=export_entity,
+            alias="DE",
+            quote="Data exports (DE)",
+            reason="The abbreviation is explicitly defined.",
+            ambiguity="",
+            statement_id=export_statement,
+        )
+        suggestions = [
+            aliases.prepare(
+                server._db(),
+                proposal(entity_id, statement_id),
+                store.get_statement(server._db(), statement_id)["text"],
+            ),
+            aliases.prepare(
+                server._db(),
+                export_proposal,
+                store.get_statement(server._db(), export_statement)["text"],
+            ),
+        ]
+        with store.transaction(runtime._auth_db()):
+            reviewer_id = auth.create_user(
+                runtime._auth_db(), name="Alias reviewer", role="writer", type="service"
+            )
+        set_review_controls(
+            mode="review-and-apply",
+            application_enabled=True,
+            alias_decisions=True,
+            reviewer_id=reviewer_id,
+        )
+        save_model("draft_review", provider="openai", openai_model="fixture")
+        monkeypatch.setenv("OPENAI_API_KEY", "fixture")
+        draft_id = queue_suggestions(suggestions)
+        entries = [
+            entry for entry in aliases.list_entries() if entry.draft_id == draft_id
+        ]
+        monkeypatch.setattr(
+            draft_review_runs,
+            "RUNNER",
+            lambda context: Assessment(
+                label="good",
+                rationale="Each suggestion has direct source evidence.",
+                questions=[],
+                alias_decisions=[
+                    AliasDecision(
+                        operation_ref=entries[0].operation_ref,
+                        decision="accept",
+                        quote="Single sign-on (SSO)",
+                        reason="The source explicitly defines the abbreviation.",
+                    ),
+                    AliasDecision(
+                        operation_ref=entries[1].operation_ref,
+                        decision="reject",
+                        quote="Data exports (DE)",
+                        reason="The source is too narrow to establish a durable alias.",
+                    ),
+                ],
+                corrections=[],
+                contradictions=[],
+            ),
+        )
+
+        draft_review_runs.on_submitted(draft_id)
+        draft_review_runs.wait_all()
+
+        draft = server.get_draft(draft_id)
+        assert draft["status"] == "approved"
+        assert draft["review_assessment"]["application"] == "applied"
+        assert "1 accepted, 1 rejected, 0 left" in draft["review_assessment"]["detail"]
+        assert store.get_name_by_text(server._db(), "SSO")["entity_id"] == entity_id
+        assert store.get_name_by_text(server._db(), "DE") is None
+        decided = [
+            entry for entry in aliases.list_entries("all") if entry.draft_id == draft_id
+        ]
+        assert [entry.suggestion.status for entry in decided] == [
+            "accepted",
+            "rejected",
+        ]
+        for entry in decided:
+            [history] = entry.suggestion.history
+            assert history.actor_id == reviewer_id
+            assert history.quote is not None
+            assert history.reason is not None
+
+
+def test_reviewer_decides_alias_before_applying_mixed_draft(tmp_path, monkeypatch):
+    from mycelium import draft_review_runs
+    from mycelium.draft_review_store import AliasDecision, Assessment
+    from settings_helpers import save_model, set_review_controls
+
+    with direct_vocabulary(tmp_path, monkeypatch) as (entity_id, statement_id):
+        with store.transaction(runtime._auth_db()):
+            reviewer_id = auth.create_user(
+                runtime._auth_db(), name="Alias reviewer", role="writer", type="service"
+            )
+        set_review_controls(
+            mode="review-and-apply",
+            application_enabled=True,
+            alias_decisions=True,
+            reviewer_id=reviewer_id,
+        )
+        save_model("draft_review", provider="openai", openai_model="fixture")
+        monkeypatch.setenv("OPENAI_API_KEY", "fixture")
+        entry = queue(entity_id, statement_id, extra=True)
+        monkeypatch.setattr(
+            draft_review_runs,
+            "RUNNER",
+            lambda context: Assessment(
+                label="good",
+                rationale="The draft and alias fit the supplied knowledge.",
+                questions=[],
+                alias_decisions=[
+                    AliasDecision(
+                        operation_ref=entry.operation_ref,
+                        decision="accept",
+                        quote="Single sign-on (SSO)",
+                        reason="The source explicitly defines the abbreviation.",
+                    )
+                ],
+                corrections=[],
+                contradictions=[],
+            ),
+        )
+
+        draft_review_runs.on_submitted(entry.draft_id)
+        draft_review_runs.wait_all()
+
+        draft = server.get_draft(entry.draft_id)
+        assert draft["status"] == "approved"
+        assert draft["review_assessment"]["application"] == "applied"
+        assert store.get_name_by_text(server._db(), "SSO") is not None
+        assert store.get_name_by_text(server._db(), "Unrelated") is not None
+
+
+@pytest.mark.parametrize("mode", ["review-only", "review-and-apply"])
+def test_invalid_alias_quote_fails_validation_or_review_only_stays_advisory(
+    tmp_path, monkeypatch, mode
+):
+    from mycelium import draft_review_runs
+    from mycelium.draft_review_store import AliasDecision, Assessment
+    from settings_helpers import save_model, set_review_controls
+
+    with direct_vocabulary(tmp_path, monkeypatch) as (entity_id, statement_id):
+        with store.transaction(runtime._auth_db()):
+            reviewer_id = auth.create_user(
+                runtime._auth_db(), name="Alias reviewer", role="writer", type="service"
+            )
+        set_review_controls(
+            mode=mode,
+            application_enabled=True,
+            alias_decisions=True,
+            reviewer_id=reviewer_id,
+        )
+        save_model("draft_review", provider="openai", openai_model="fixture")
+        monkeypatch.setenv("OPENAI_API_KEY", "fixture")
+        entry = queue(entity_id, statement_id)
+        quote = (
+            "Single sign-on (SSO)"
+            if mode == "review-only"
+            else "A quote absent from the source"
+        )
+        monkeypatch.setattr(
+            draft_review_runs,
+            "RUNNER",
+            lambda context: Assessment(
+                label="good",
+                rationale="The suggestion was assessed.",
+                questions=[],
+                alias_decisions=[
+                    AliasDecision(
+                        operation_ref=entry.operation_ref,
+                        decision="accept",
+                        quote=quote,
+                        reason="The source was checked.",
+                    )
+                ],
+                corrections=[],
+                contradictions=[],
+            ),
+        )
+
+        draft_review_runs.on_submitted(entry.draft_id)
+        draft_review_runs.wait_all()
+
+        run = server.get_draft(entry.draft_id)["review_assessment"]
+        if mode == "review-only":
+            assert run["status"] == "completed"
+            assert run["application"] == "unapplied"
+            assert run["alias_decisions"][0]["decision"] == "accept"
+        else:
+            assert run["status"] == "failed"
+            assert "quote is not in" in run["detail"]
+        assert aliases.list_entries()[0].suggestion.status == "pending"
+        assert store.get_name_by_text(server._db(), "SSO") is None
 
 
 def test_accepting_an_unrelated_concept_alias_does_not_stale_other_suggestions(

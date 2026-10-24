@@ -93,8 +93,11 @@ ask for evidence of product behaviour. good and reject have no corrections or
 contradictions; changes_suggested requires corrections; needs_context has no
 contradictions. Each contradiction names a live
 statement id that a correction updates or removes. Never apply changes or record
-reviews. Only the server may authorize application after revision and knowledge
-checks."""
+reviews. For each pending alias_suggestion operation, return one alias_decisions
+entry accepting or rejecting it, with a quote copied verbatim from that
+suggestion's source text that supports the decision and a reason. Do not return
+alias_decisions entries for any other operation.
+Only the server may authorize application after revision and knowledge checks."""
 
 
 def build_system_prompt(instructions: str) -> str:

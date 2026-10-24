@@ -126,8 +126,10 @@ class InProcessDraftEmitter:
             )
 
     def submit_aliases(self, draft_id: str) -> None:
-        """Submit a draft of alias suggestions without starting internal
-        review: each suggestion awaits an individual human decision."""
+        """Submit a draft of alias suggestions for configured review."""
         conn = self._server._drafts_db()
         with store.transaction(conn):
             drafts_store.set_submitted(conn, draft_id)
+        from .. import draft_review_runs
+
+        draft_review_runs.on_submitted(draft_id)

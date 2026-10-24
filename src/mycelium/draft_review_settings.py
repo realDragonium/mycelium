@@ -33,6 +33,7 @@ class Controls(BaseModel):
     mode: Mode = "off"
     reviewer_id: str = Field(default="", max_length=200)
     application_enabled: bool = False
+    alias_decisions: bool = False
     #: What review-and-apply applies unattended: only drafts the reviewer
     #: approves without corrections, or also those it corrects.
     auto_apply: AutoApply = "clean"
@@ -222,6 +223,7 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
         mode=request.mode,
         reviewer_id=request.reviewer_id,
         application_enabled=request.application_enabled,
+        alias_decisions=request.alias_decisions,
         auto_apply=request.auto_apply,
     )
     if "external_agent" not in request.model_fields_set:

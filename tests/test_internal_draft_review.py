@@ -30,6 +30,7 @@ def _assessment(label="good", corrections=(), contradictions=()):
         questions=["What evidence establishes the changed behavior?"]
         if label == "needs_context"
         else [],
+        alias_decisions=[],
         corrections=list(corrections),
         contradictions=list(contradictions),
     )

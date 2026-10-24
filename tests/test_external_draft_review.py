@@ -6,6 +6,7 @@ import pytest
 
 from mycelium import (
     agent_tasks,
+    alias_suggestions,
     auth,
     draft_review_runs,
     draft_review_store,
@@ -78,7 +79,14 @@ def _claim(principal_id):
         auth.current_principal.reset(token)
 
 
-def _submit(principal_id, task_id, label, corrections=(), questions=()):
+def _submit(
+    principal_id,
+    task_id,
+    label,
+    corrections=(),
+    questions=(),
+    alias_decisions=(),
+):
     token = _as(principal_id)
     try:
         return server.submit_agent_task(
@@ -89,6 +97,7 @@ def _submit(principal_id, task_id, label, corrections=(), questions=()):
                         "label": label,
                         "rationale": "Judged against the supplied knowledge.",
                         "questions": list(questions),
+                        "alias_decisions": list(alias_decisions),
                         "corrections": [c.model_dump() for c in corrections],
                         "contradictions": [],
                     }
@@ -194,6 +203,65 @@ def test_a_malformed_verdict_is_refused_with_findings(agent):
     assert "requires corrections" in refused.findings[0].problem
     assert refused.retries_left == agent_tasks.RETRIES
     assert server.get_draft(draft_id)["review_assessment"]["status"] == "running"
+
+
+def test_alias_quote_outside_source_is_refused_with_findings(agent):
+    set_review_controls(alias_decisions=True)
+    entity_id = server.upsert_entity(
+        name="Workspace exports", description="Downloadable workspace archives"
+    )["entity_id"]
+    with store.transaction(server._db()):
+        statement_id = store.create_statement(
+            server._db(), "state", "Workspace exports (WE) include invoices"
+        )
+    suggestion = alias_suggestions.prepare(
+        server._db(),
+        alias_suggestions.Proposal(
+            entity_id=entity_id,
+            alias="WE",
+            quote="Workspace exports (WE)",
+            reason="The abbreviation is explicitly defined.",
+            ambiguity="",
+            statement_id=statement_id,
+        ),
+        "Workspace exports (WE) include invoices",
+    )
+    conn = server._drafts_db()
+    with store.transaction(conn):
+        draft_id = drafts_store.create_draft(
+            conn, created_by="drafter-1", session_id=None, title="Export alias"
+        )
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind=alias_suggestions.KIND,
+            payload=suggestion.model_dump(mode="json"),
+            created_by="drafter-1",
+        )
+        drafts_store.set_submitted(conn, draft_id)
+    [operation] = drafts_store.list_ops(conn, draft_id)
+    operation_ref = operation["id"]
+    draft_review_runs.on_submitted(draft_id)
+    [task] = _claim(agent).tasks
+
+    refused = _submit(
+        agent,
+        task.id,
+        "good",
+        alias_decisions=[
+            {
+                "operation_ref": operation_ref,
+                "decision": "accept",
+                "quote": "Text absent from the source",
+                "reason": "The source was checked.",
+            }
+        ],
+    )
+
+    assert refused.status == "refused"
+    assert "quote is not in" in refused.findings[0].problem
+    assert server.get_draft(draft_id)["review_assessment"]["status"] == "running"
+    assert alias_suggestions.list_entries()[0].suggestion.status == "pending"
 
 
 def test_held_corrections_wait_in_the_backlog_for_an_agent(agent):

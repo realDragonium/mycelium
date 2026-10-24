@@ -171,6 +171,7 @@ def _asks_then_approves(monkeypatch):
                 label="needs_context",
                 rationale="The draft may duplicate a live concept.",
                 questions=[QUESTION],
+                alias_decisions=[],
                 corrections=[],
                 contradictions=[],
             )

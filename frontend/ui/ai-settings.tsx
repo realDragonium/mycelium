@@ -283,17 +283,17 @@ type ReviewMode = 'off' | 'review-only' | 'review-and-apply';
 type AutoApply = 'clean' | 'with_corrections';
 interface Reviewer { id: string; name: string; role: string }
 interface ReviewConfig {
-  mode: ReviewMode; application_enabled: boolean; auto_apply: AutoApply; provider: Provider; model: string; reasoning_effort?: Effort;
+  mode: ReviewMode; application_enabled: boolean; alias_decisions: boolean; auto_apply: AutoApply; provider: Provider; model: string; reasoning_effort?: Effort;
   claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
   reviewer_id: string; external_agent: boolean; revision: number | string; model_revision: number | string;
   source: string; issues: string[]; model_warning?: string | null; can_configure: boolean; providers: ProviderStatus[]; reviewers: Reviewer[];
   catalog: CatalogModel[];
 }
-interface ReviewForm { application_enabled: boolean; auto_apply: AutoApply; mode: ReviewMode; provider: Provider; model: string; reasoning_effort: Effort; reviewer_id: string; external_agent: boolean; revision: number | string; model_revision: number | string }
+interface ReviewForm { application_enabled: boolean; alias_decisions: boolean; auto_apply: AutoApply; mode: ReviewMode; provider: Provider; model: string; reasoning_effort: Effort; reviewer_id: string; external_agent: boolean; revision: number | string; model_revision: number | string }
 
 function reviewForm(d: ReviewConfig): ReviewForm {
   return {
-    application_enabled: d.application_enabled, auto_apply: d.auto_apply, mode: d.mode, provider: d.provider, model: d.model,
+    application_enabled: d.application_enabled, alias_decisions: d.alias_decisions, auto_apply: d.auto_apply, mode: d.mode, provider: d.provider, model: d.model,
     reasoning_effort: (d.provider === 'claude' ? d.claude_reasoning_effort : d.openai_reasoning_effort) ?? null,
     reviewer_id: d.reviewer_id, external_agent: d.external_agent, revision: d.revision, model_revision: d.model_revision,
   };
@@ -443,6 +443,8 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
           <fieldset disabled={busy || conflict}>
             <label className="check"><input type="checkbox" checked={form.application_enabled} onChange={e => change({ application_enabled: e.target.checked })} />Allow applying accepted reviews</label>
             <p className="hint">Automatic application also needs Review and apply mode. The permission can be on while reviews are off.</p>
+            <label className="check"><input type="checkbox" checked={form.alias_decisions} onChange={e => change({ alias_decisions: e.target.checked })} />Reviewer decides alias suggestions</label>
+            <p className="hint">Accepts or rejects each suggestion with a quote from its source; off leaves them to people.</p>
             <div className="field-grid">
               <label className="field"><span>Review mode</span>
                 <select className="input" value={form.mode} onChange={e => change({ mode: e.target.value as ReviewMode })}>
