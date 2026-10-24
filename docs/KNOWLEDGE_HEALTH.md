@@ -116,7 +116,7 @@ statements**, all off by default (and off after an upgrade):
 
 Every proposal is a draft with the statements it rests on as evidence, created
 by no account, so the [reviewer](DRAFT_REVIEW.md) judges and, in
-review-and-apply, applies it; with review off it waits for a curator. An item
+review-and-apply, applies it (a merge only under an admin reviewer); with review off it waits for a curator. An item
 the model leaves undecided, or decides with something the server cannot check
 (a statement it was not given, an operation outside the fixed set), is released
 `skipped`: outside agents can still claim it, and the pass does not try it
@@ -246,7 +246,10 @@ since their draft is still undecided.
    with a reason (the pair is distinct; a concept pair is dismissed in Names
    & aliases as you) or `skipped`. It is not offered again until either side's
    text, or a concept's names, change. Pairs either side of which an undecided
-   draft touches are left out.
+   draft touches are left out. Merges stay admin operations: a merge draft
+   applies only when its reviewer is an admin (an external agent with an
+   admin token, or an admin reviewer account for a server model). Under a
+   writer reviewer the attempt fails with the role error and the draft waits.
 
    A `question` item is released as `answered` (one item per call) with
    `answer` (at most 6,000 characters) and `evidence`: one to five items in
