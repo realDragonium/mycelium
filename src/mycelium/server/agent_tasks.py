@@ -58,6 +58,7 @@ def _handler(kind: Kind) -> Handler:
     from .. import (
         alias_suggestions,
         audience_labelling,
+        audience_review,
         documentation_plan_review,
         documentation_planning,
         draft_review_runs,
@@ -71,6 +72,7 @@ def _handler(kind: Kind) -> Handler:
         "documentation_planning": documentation_planning.AGENT_TASK,
         "plan_review": documentation_plan_review.AGENT_TASK,
         "audience_labelling": audience_labelling.AGENT_TASK,
+        "audience_review": audience_review.AGENT_TASK,
         "ingest": ingest.HANDLER,
         "connect": ingest.HANDLER,
         "alias_discovery": alias_suggestions.AGENT_TASK,
@@ -93,6 +95,7 @@ def claim_agent_task(
     `plan_review` (approve or dismiss the items of a plan; never one you
     made),
     `audience_labelling` (decide which audiences may see statements),
+    `audience_review` (review waiting external audience grants),
     `ingest` (turn text into a draft of knowledge), `connect` (propose links
     and concept mentions for unconnected statements), `alias_discovery`
     (find new names of concepts in statements) or `draft_review` (approve,
@@ -138,9 +141,8 @@ def claim_agent_task(
         renewed=renewed,
         expires_at=expires,
         note=f"{withheld} waiting {kind} task{'s are' if withheld > 1 else ' is'} "
-        "your own work, a draft you created, a document you wrote or a plan "
-        "you made, and "
-        "only another agent may review it."
+        "your own work, a draft you created, a document you wrote, a plan you "
+        "made or grants you labelled, and only another agent may review it."
         if withheld
         else None,
     )

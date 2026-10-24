@@ -36,6 +36,7 @@ Kind = Literal[
     "documentation_planning",
     "plan_review",
     "audience_labelling",
+    "audience_review",
     "ingest",
     "connect",
     "alias_discovery",

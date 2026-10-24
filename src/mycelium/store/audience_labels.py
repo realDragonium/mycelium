@@ -45,6 +45,7 @@ class Decision(TypedDict, total=False):
     decision: Literal["confirmed", "rejected"]
     by: str | None
     at: str
+    reason: str
     #: Set when the grant was accepted in bulk after a reviewed sample.
     sample: Sample
 
@@ -380,6 +381,7 @@ def decide_pending(
     confirm: bool,
     by: str | None,
     reason: str = "",
+    decision_reason: str | None = None,
     sample: Sample | None = None,
     graph: Graph | None = None,
 ) -> bool:
@@ -395,6 +397,8 @@ def decide_pending(
         "by": by,
         "at": _now(),
     }
+    if decision_reason is not None:
+        decision["reason"] = decision_reason
     if sample is not None:
         decision["sample"] = sample
     decisions = {**label_decisions(current), audience_id: decision}
