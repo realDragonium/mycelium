@@ -194,11 +194,15 @@ A statement or name without a vector SHALL NOT appear in vector-ranked results, 
 - **THEN** `grep_statements` finds it by a word in its text while `search_statements` with an available provider does not return it
 
 ### Requirement: Degraded reads while the provider is unavailable
-While the embedding provider cannot embed a query, `search_statements` and `search_entities` SHALL fall back to keyword or name-substring matching marked `retrieval: "keyword"`, so Ask and documentation runs keep working with weaker retrieval, whereas `discover_facts` MUST report the error. Fallback ranking is specified in the `search-and-ask` capability.
+While the embedding provider cannot embed a query, `search_statements` and `search_entities` SHALL fall back to keyword or name-substring matching marked `retrieval: "keyword"`, so Ask and documentation runs keep working with weaker retrieval, whereas `discover_facts` MUST report the error. `find_duplicates` compares only stored vectors and SHALL keep working. Fallback ranking is specified in the `search-and-ask` capability.
 
 #### Scenario: Ask during an outage
 - **WHEN** the provider is down and an asker calls `ask`
 - **THEN** the run retrieves through keyword fallback and returns an answer rather than an error
+
+#### Scenario: Duplicate audit during an outage
+- **WHEN** the provider is down and a curator calls `find_duplicates`
+- **THEN** it returns the near-duplicate pairs among statements that already have vectors
 
 ### Requirement: Write-time near-duplicate warning
 After embedding a new or changed statement, `upsert_statement`, `upsert_statements` and a text-changing `patch_statement` SHALL report up to 5 existing statements whose cosine score is at or above the model's near-duplicate threshold, excluding the statement itself, each as `{id, text, score}` with `text` cut to 100 characters; `upsert_statements` reports them as a map from statement id to that list, listing only statements that have matches.

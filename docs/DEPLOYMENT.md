@@ -147,13 +147,14 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_SLOW_REQUEST_MS` | `2000` | A request or background job that takes at least this long, fails, or whose client leaves before the response ends logs one `MYCELIUM_SLOW_REQUEST` line with its route and where the time went. |
 | `MYCELIUM_TRACE_ENABLED` | off | Start with profiling traces on; otherwise they are switched on and off at runtime through `/api/tracing`. |
 | `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling flamegraphs and metadata sidecars are written. |
-| `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. |
+| `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. The connect pass always writes to `<data dir>/connect_trace.jsonl`. |
 | `MYCELIUM_TRACE_LOG_MAX_BYTES` | `10000000` (10 MB) | Rotate JSONL trace logs before exceeding this size; keep one older generation. `0` disables rotation. |
 | `MYCELIUM_TRACE_KEEP` | `200` | Keep this many newest traces per directory by mtime; a flamegraph and sidecar count as one. `0` disables pruning. |
 | `MYCELIUM_{INGEST,DOCGEN}_DOCTRINE_PATH` | the packaged file | Instruction file used when no edited instructions are saved in [AI prompts](AI_PROMPTS.md). |
 | `MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Lifetime of an access token issued through the OAuth flow. See [OAuth token lifetime](#oauth-token-lifetime). |
 | `MYCELIUM_DISABLE_MCP_HTTP` | unset | `1` serves HTTP without the `/mcp` endpoint. |
 | `MYCELIUM_DISABLE_MENTION_WORKER` | unset | `1` stops the background worker that recomputes mentions after name changes. Meant for tests. |
+| `MYCELIUM_DISABLE_EMBED_WORKER` | unset | `1` stops the background worker that embeds statements and names saved without a vector (see [When the provider is unavailable](#when-the-provider-is-unavailable)); they then stay out of semantic search. Meant for tests. |
 | `MYCELIUM_DISABLE_REVIEW_SWEEP` | unset | `1` stops the sweep that retries failed draft reviews. Meant for tests. |
 | `MYCELIUM_DISABLE_AUDIENCE_WORKER` | unset | `1` stops the background worker that labels statements with audiences. Meant for tests. |
 | `MYCELIUM_DISABLE_MAINTENANCE_WORKER` | unset | `1` stops the background worker that keeps generated documents current. Meant for tests. |
@@ -363,10 +364,13 @@ URL it hosts — instead of registering. Resolving one means Mycelium makes an
 outbound HTTPS request to a URL chosen by the caller, so an egress-filtered
 deployment needs to allow that, and an operator should know it happens.
 
-The fetch is fenced: HTTPS only, redirects not followed, a 5s timeout, a
-64 KiB cap, and every address the hostname resolves to must be on the public
-internet. Documents are cached per process, honouring `Cache-Control` within
-a 1-minute to 1-hour bound.
+The fetch is fenced: HTTPS only, redirects not followed, a 5s timeout per
+network operation and 10s for the whole fetch, a 64 KiB cap, and every address
+the hostname resolves to must be on the public internet. Documents are cached
+per process, at most 256 at a time (the soonest to expire goes first), for 5
+minutes unless `Cache-Control` says otherwise: a `max-age` is held to a
+1-minute to 1-hour bound, and a document sent with `no-store`, `no-cache` or
+`max-age=0` is not cached at all.
 
 Registration (`/register`) still works for clients that predate the
 mechanism; it is deprecated upstream, not removed.
@@ -510,7 +514,7 @@ Everything an instance knows lives in `/var/lib/mycelium`:
 | `mycelium-ops.db` | Only on instances that predate its removal: tool-call telemetry that is no longer written or read, and not archived |
 | `mycelium.vec`, `mycelium-names.vec` | Vector indexes; rebuilt by re-embedding if missing |
 | `entity-positions.json` | Entity layout cache; rebuilt if missing |
-| `ask_trace.jsonl`, `ingest_trace.jsonl`, `traces/` | Run traces and profiling output, not data; not archived |
+| `ask_trace.jsonl`, `ingest_trace.jsonl`, `connect_trace.jsonl`, `traces/` | Run traces and profiling output, not data; not archived |
 | `.uv-cache/` | uv's package cache, not data |
 
 The databases run in WAL mode, so copying a live `.db` file can produce a
@@ -547,8 +551,11 @@ followed by your off-site copy (rsync to S3, restic, borg — your call).
 The archive is written owner-only and must be treated like the data dir:
 it holds token hashes, invite links and all knowledge. It deliberately
 leaves out OAuth authorization codes and consent screens (they expire
-within minutes), tool-call telemetry, and two internal bookkeeping tables;
-`UNARCHIVED_TABLES` in `src/mycelium/backup.py` lists them with reasons.
+within minutes), single-use media upload links (they expire within fifteen
+minutes), curation leases (an agent claims its work again after a restore),
+the marks of one-time environment imports (restore sets them again), and
+tool-call telemetry; `UNARCHIVED_TABLES` in `src/mycelium/backup.py` lists
+them with reasons.
 It also does not hold anything outside the data dir: back up
 `/etc/mycelium.env` (session secret, OIDC and GitHub App secrets), the
 GitHub App private key, and your nginx and systemd edits separately.
@@ -645,8 +652,9 @@ newer build; an older build refuses it.
 5. Start the service. If the archive was exported with `--no-vectors`, or
    import reported that an index disagrees with the archived data (a write
    landed while a live export copied the index), the first start re-embeds
-   every statement or name, which needs Ollama with the same embedding
-   model and takes time proportional to the knowledge base.
+   every statement or name, which needs the configured embedding provider
+   (see [Embedding provider](#embedding-provider)) and takes time proportional to the
+   knowledge base.
 
    ```bash
    sudo systemctl start mycelium
@@ -824,8 +832,10 @@ still fails:
 - `search_statements` (also with `decompose`) falls back to keyword matching,
   and `search_entities` to name substring matching. Each hit is marked
   `retrieval: "keyword"`. Ask and documentation runs keep working, with weaker
-  retrieval. `discover_facts` and `find_duplicates` report the error instead,
-  since a keyword guess would mislead them.
+  retrieval. `discover_facts` reports the error instead, since a keyword
+  guess would mislead it. `find_duplicates` keeps working: it compares the
+  vectors already in the index and calls no provider, so only statements
+  still waiting for a vector are left out.
 - A write still succeeds. The statement or name is saved without a vector and
   stays out of semantic search until a background worker re-embeds it, which it
   retries every 30 seconds. Statement responses carry `embedding_pending`; name
