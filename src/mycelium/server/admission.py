@@ -15,8 +15,9 @@ from typing import Any, TypeVar
 
 import anyio
 import anyio.to_thread
+from mcp.server.mcpserver.exceptions import ToolError
 
-from .. import request_timing
+from .. import auth, request_timing
 from ..model_capacity import Capacity
 
 R = TypeVar("R")
@@ -124,6 +125,17 @@ def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(wrapper)
     async def offloaded(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await _run(*args, **kwargs)
+        except ToolError:
+            raise
+        except (ValueError, auth.RoleRequired) as exc:
+            # The SDK hides the text of anything but a ToolError. These are the
+            # refusals a caller must read to correct itself; the HTTP layer
+            # reports the same ones as 4xx. Anything else stays hidden.
+            raise ToolError(str(exc)) from exc
+
+    async def _run(*args: Any, **kwargs: Any) -> Any:
         if name == "ask":
             from ..ask.events import run_cancellable
 

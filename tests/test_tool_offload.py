@@ -49,16 +49,6 @@ def test_offloaded_call_returns_the_wrapped_result():
     assert asyncio.run(offloaded(2, b=3)) == 5
 
 
-def test_offloaded_call_propagates_the_exception():
-    def boom() -> None:
-        raise ValueError("nope")
-
-    offloaded = admission._offloaded(boom)
-
-    with pytest.raises(ValueError, match="nope"):
-        asyncio.run(offloaded())
-
-
 def test_offloaded_call_runs_off_the_calling_thread():
     def which_thread() -> int:
         return threading.get_ident()
@@ -254,3 +244,24 @@ def test_model_loop_limiter_admits_only_its_bound_concurrently(monkeypatch):
         admission._model_loop_limiter.cache_clear()
 
     assert peak == 2
+
+
+@pytest.mark.parametrize(
+    ("raised", "reaches_client"),
+    [
+        (ValueError("text is required"), True),
+        (auth.RoleRequired("writer role required"), True),
+        (RuntimeError("database path /secret/db"), False),
+    ],
+)
+def test_only_anticipated_refusals_keep_their_text(raised, reaches_client):
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    def refuses() -> None:
+        raise raised
+
+    with pytest.raises(Exception) as caught:
+        anyio.run(admission._offloaded(refuses))
+
+    assert isinstance(caught.value, ToolError) is reaches_client
+    assert (str(raised) in str(caught.value)) is True
