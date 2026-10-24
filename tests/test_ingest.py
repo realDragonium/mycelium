@@ -18,6 +18,7 @@ import types
 
 import pytest
 
+from mycelium.ai import Usage
 from mycelium.ask.substrate import SubstrateError, ToolSpec
 from mycelium.ingest import (
     DraftCreated,
@@ -26,6 +27,7 @@ from mycelium.ingest import (
     run_ingest,
 )
 from mycelium.ingest.tools import EMIT_TOOL, build_tools, parse_emit_input
+from mycelium.product_settings import IngestSettings
 
 # --------------------------------------------------------------------------- #
 # Fakes
@@ -237,7 +239,9 @@ def _run(responses, results=None, emitter=None, **config_over):
     client = FakeAnthropic(responses)
     substrate = FakeSubstrate(results)
     emitter = emitter or FakeEmitter()
-    cfg = IngestConfig(thinking=True, trace_log_path=None, **config_over)
+    limits = {k: v for k, v in config_over.items() if k in IngestSettings.model_fields}
+    rest = {k: v for k, v in config_over.items() if k not in limits}
+    cfg = IngestConfig(limits=IngestSettings(**limits), trace_log_path=None, **rest)
     result = run_ingest(
         "An invite is submitted.",
         client=client,
@@ -674,6 +678,44 @@ def test_op_cap_with_unresponsive_model_returns_nothing_never_raises():
     assert emitter.created == []  # never a partial draft
 
 
+@pytest.mark.parametrize(
+    ("model", "cap", "read_turns", "expected_cost", "forced_finalize"),
+    [
+        ("claude-opus-5-5", 0.054, 1, 0.00278, "cost_cap"),
+        ("claude-opus-5-5", 0.058, 2, 0.00542, "cost_cap"),
+        ("claude-unlisted", 0.000001, 2, None, None),
+    ],
+)
+def test_cost_and_cap_use_the_models_list_price(
+    model: str,
+    cap: float,
+    read_turns: int,
+    expected_cost: float | None,
+    forced_finalize: str | None,
+) -> None:
+    # Opus cache reads cost 5% of input. At $0.058, that discount leaves
+    # room for a second read and the emit reserve; a 10% rate would stop early.
+    reads = _reconcile_then_adjacency()[:read_turns]
+    for read in reads:
+        read.usage = Usage(
+            input_tokens=10,
+            output_tokens=5,
+            cache_read_input_tokens=10_000,
+            cache_creation_input_tokens=100,
+        )
+    result, client, _sub, _emitter = _run(
+        [*reads, _message([_tool_use(EMIT_TOOL, _good_new_op_emit())])],
+        model=model,
+        max_cost_usd=cap,
+    )
+
+    assert isinstance(result, DraftCreated)
+    assert len(client.calls) == read_turns + 1
+    assert all(call["model"] == model for call in client.calls)
+    assert result.trace["forced_finalize"] == forced_finalize
+    assert result.trace["cost_usd"] == expected_cost
+
+
 def test_api_error_degrades_to_forced_finalize():
     class Boom(FakeAnthropic):
         def create(self, **kwargs):
@@ -782,7 +824,7 @@ def test_oversized_input_is_truncated_and_noted():
     )
     substrate = FakeSubstrate()
     emitter = FakeEmitter()
-    cfg = IngestConfig(max_input_chars=10, trace_log_path=None)
+    cfg = IngestConfig(limits=IngestSettings(max_input_chars=10), trace_log_path=None)
     result = run_ingest(
         big, client=client, substrate=substrate, emitter=emitter, config=cfg
     )
@@ -1380,7 +1422,10 @@ def test_reading_stops_in_time_for_the_final_emit(monkeypatch):
         client=client,
         substrate=FakeSubstrate(),
         emitter=FakeEmitter(),
-        config=IngestConfig(thinking=True, trace_log_path=None, wall_clock_s=120.0),
+        config=IngestConfig(
+            limits=IngestSettings(thinking=True, wall_clock_s=120.0),
+            trace_log_path=None,
+        ),
     )
 
     assert isinstance(result, DraftCreated)
@@ -1499,7 +1544,7 @@ def test_t9_real_emitter_persists_draft_and_ops_via_drafts_store_and_drops_none(
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     client = FakeAnthropic(responses)
-    cfg = IngestConfig(thinking=True, trace_log_path=None)
+    cfg = IngestConfig(limits=IngestSettings(thinking=True), trace_log_path=None)
     result = run_ingest(
         "An invite is submitted.",
         client=client,
@@ -1533,13 +1578,22 @@ def test_t9_real_emitter_persists_draft_and_ops_via_drafts_store_and_drops_none(
 # --------------------------------------------------------------------------- #
 
 
-def test_t10_wall_clock_forces_finalize():
-    """A ~zero wall clock forces finalize on the first loop iteration with the
-    'wall_clock' reason."""
+def test_t10_wall_clock_forces_finalize(monkeypatch):
+    """Vocab fetch exhausts the wall clock before the first loop iteration."""
+    now = 0.0
+    monkeypatch.setattr(time, "monotonic", lambda: now)
+
+    def slow_vocab(_arguments):
+        nonlocal now
+        now = 2.0
+        return []
+
     responses = [_message([_tool_use(EMIT_TOOL, _good_new_op_emit())])]
     # op_cap stays generous so the op_cap gate doesn't fire first; the wall clock
     # (checked after the op_cap gate) is what trips.
-    result, _client, _sub, _e = _run(responses, wall_clock_s=0.0)
+    result, _client, _sub, _e = _run(
+        responses, results={"list_statement_kinds": slow_vocab}, wall_clock_s=1.0
+    )
     assert isinstance(result, DraftCreated)
     assert result.trace["forced_finalize"] == "wall_clock"
     assert result.trace["degraded"] is True
@@ -2011,7 +2065,7 @@ def test_model_turns_cache_and_stream_only_on_the_owned_transport(monkeypatch):
     monkeypatch.setattr(
         loop.ai, "turn", lambda task, config, client: seen.append((task, config))
     )
-    cfg = IngestConfig(trace_log_path=None, request_timeout_s=90)
+    cfg = IngestConfig(trace_log_path=None, limits=IngestSettings(request_timeout_s=90))
     until = time.monotonic() + 30
     loop._model_turn(None, cfg, "sys", [], [], force=False, until=until)
     loop._model_turn(FakeAnthropic([]), cfg, "sys", [], [], force=False, until=until)

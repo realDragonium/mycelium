@@ -50,7 +50,7 @@ def _is_seeded(type: str, name: str) -> bool:
     return any(key == (t, n) for t, n, _ in _seeded_prompt_texts())
 
 
-def _seed_prompt_texts() -> None:
+def seed_prompt_texts() -> None:
     """Seed starter profiles once and the loop doctrines when absent, then
     bring untouched seeded texts up to this build's defaults and warn about
     saved texts that predate them (see `prompt_defaults`)."""

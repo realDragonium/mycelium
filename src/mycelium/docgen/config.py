@@ -20,7 +20,7 @@ writes one, and follows its siblings exactly: a packaged file seeds the
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, TypedDict
 
@@ -93,33 +93,9 @@ class DocgenConfig:
     #: set wins too. Defaults to the one set that ships, so an instance that
     #: has only ever been booted (never configured) still has a preference.
     guideline_set: str = SET_NAME
-    #: Hard ceiling on tool operations per run. Every substrate read the run
-    #: makes while gathering material counts toward it.
-    op_cap: int = 150
-    #: Whole-run wall-clock budget, seconds. A run holds a shared model-loop
-    #: slot for its whole life, so this is also how long one request can keep
-    #: that slot from `ask` and `ingest`.
-    wall_clock_s: float = 900.0
-    #: max_tokens per model turn. A document body is the largest single thing
-    #: any loop in this tree emits, and adaptive thinking shares the budget.
-    max_tokens: int = 32000
-    #: Provider retries cover 429/5xx/connection with exponential backoff.
-    max_retries: int = 4
-    #: Per-model-call timeout, seconds. Kept well under the wall clock so
-    #: a single hung call can't blow the whole budget.
-    request_timeout_s: float = 120.0
-    #: Adaptive thinking in the loop.
-    thinking: bool = True
-    #: Cap on the requested prompt. Enforced at the door by
-    #: `request_documentation`, which refuses rather than truncates: a
-    #: documentation request is something a person typed, and silently
-    #: dropping its tail would generate the wrong document instead of an
-    #: error the caller can act on.
-    max_prompt_chars: int = 2000
-    #: Per-part `limit` of the opening decomposed `search_statements` map of
-    #: the request. Wider than ask's recon: a document covers a topic, not a
-    #: question.
-    recon_k: int = 30
+    limits: product_settings.DocgenSettings = field(
+        default_factory=product_settings.DocgenSettings
+    )
     #: Path to the docgen doctrine seeded into the store and injected into
     #: the system prompt.
     doctrine_path: str = _DEFAULT_DOCTRINE_PATH
@@ -153,14 +129,7 @@ class DocgenConfig:
             guideline_set=product_settings.get(
                 product_settings.DocumentationSettings
             ).guideline_set,
-            op_cap=limits.op_cap,
-            wall_clock_s=limits.wall_clock_s,
-            max_tokens=limits.max_tokens,
-            max_retries=limits.max_retries,
-            request_timeout_s=limits.request_timeout_s,
-            thinking=limits.thinking,
-            max_prompt_chars=limits.max_prompt_chars,
-            recon_k=limits.recon_k,
+            limits=limits,
             doctrine_path=(
                 os.environ.get("MYCELIUM_DOCGEN_DOCTRINE_PATH")
                 or _DEFAULT_DOCTRINE_PATH

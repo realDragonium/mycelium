@@ -150,7 +150,6 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. |
 | `MYCELIUM_TRACE_LOG_MAX_BYTES` | `10000000` (10 MB) | Rotate JSONL trace logs before exceeding this size; keep one older generation. `0` disables rotation. |
 | `MYCELIUM_TRACE_KEEP` | `200` | Keep this many newest traces per directory by mtime; a flamegraph and sidecar count as one. `0` disables pruning. |
-| `MYCELIUM_INGEST_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | 3 / 15 | USD per million tokens used for the ingest cost estimate in traces. Applied only while ingest runs its default Claude model. Ask and documentation runs price whichever Claude or OpenAI model ran from a built-in list-price table, including cache reads and writes; a model missing from the table gets no estimate. |
 | `MYCELIUM_{INGEST,DOCGEN}_DOCTRINE_PATH` | the packaged file | Instruction file used when no edited instructions are saved in [AI prompts](AI_PROMPTS.md). |
 | `MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Lifetime of an access token issued through the OAuth flow. See [OAuth token lifetime](#oauth-token-lifetime). |
 | `MYCELIUM_DISABLE_MCP_HTTP` | unset | `1` serves HTTP without the `/mcp` endpoint. |
@@ -159,6 +158,11 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_DISABLE_AUDIENCE_WORKER` | unset | `1` stops the background worker that labels statements with audiences. Meant for tests. |
 | `MYCELIUM_DISABLE_MAINTENANCE_WORKER` | unset | `1` stops the background worker that keeps generated documents current. Meant for tests. |
 | `MYCELIUM_DISABLE_LAYOUT_BAKE` | unset | `1` stops recomputing the entity graph layout after entity changes. Meant for tests. |
+
+`MYCELIUM_INGEST_INPUT_PER_MTOK` and `MYCELIUM_INGEST_OUTPUT_PER_MTOK` are no
+longer read. Ingest prices its model from the built-in list-price table, like
+Ask and documentation runs, including cache reads and writes. A model missing
+from the table gets no estimate and no cost cap.
 
 > **Leave `MYCELIUM_AUTH=on` on anything reachable from a network.** With
 > auth off every caller is `local-admin`, so it is for a single user on their

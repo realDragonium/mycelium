@@ -30,6 +30,7 @@ from mycelium.docgen.tools import (
     REVIEW_TOOL,
     build_tools,
 )
+from mycelium.product_settings import DocgenSettings
 from mycelium.server import draft_queue
 
 # --------------------------------------------------------------------------- #
@@ -279,13 +280,17 @@ def kb_set(prompts_db):
 
 
 def _config(**overrides) -> DocgenConfig:
-    base = {
-        "trace_dir": "",
-        "trace_log_path": None,
-        "thinking": False,
+    limits = {
+        key: overrides.pop(key)
+        for key in tuple(overrides)
+        if key in DocgenSettings.model_fields
     }
-    base.update(overrides)
-    return DocgenConfig(**base)
+    return DocgenConfig(
+        trace_dir="",
+        trace_log_path=None,
+        limits=DocgenSettings(**{"thinking": False, **limits}),
+        **overrides,
+    )
 
 
 def _everything_visible(substrate, audience):

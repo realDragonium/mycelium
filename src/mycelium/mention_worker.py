@@ -10,8 +10,8 @@ single writer between chunks so foreground tool-calls interleave (there is
 one writer; this is cooperation, not parallelism).
 
 The core (`drain`) is a synchronous function of a connection, so tests call
-it directly and deterministically. `start` wraps it in a daemon thread with
-a periodic wake-up; `wake` nudges it after an enqueue; `stop` joins it.
+it directly and deterministically. `start` runs it on a `workers.Worker`
+with a periodic wake-up; `wake` nudges it after an enqueue; `stop` joins it.
 
 Durability: each chunk — claim, recompute, delete — is one
 `store.transaction(conn)`, so a crash mid-chunk rolls the whole chunk back
@@ -24,10 +24,12 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 
-from . import mentions, request_timing, store
+from . import mentions, request_timing, store, workers
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +38,7 @@ logger = logging.getLogger(__name__)
 #: the per-chunk index build.
 CHUNK = 50
 
-_thread: threading.Thread | None = None
-_wake = threading.Event()
-_stop = threading.Event()
+_worker: workers.Worker[sqlite3.Connection] | None = None
 
 
 @request_timing.tracked("background mention recompute")
@@ -90,52 +90,34 @@ def drain(conn: sqlite3.Connection, *, chunk: int = CHUNK) -> int:
 
 def wake() -> None:
     """Nudge the worker to drain now (called after an enqueue). No-op if no
-    worker thread is running — the next periodic tick picks the work up, or
-    a test drains explicitly."""
-    _wake.set()
+    worker is running — the next periodic tick picks the work up, or a test
+    drains explicitly."""
+    if _worker is not None:
+        _worker.wake()
+
+
+@contextmanager
+def _connection(data_dir: Path) -> Iterator[sqlite3.Connection]:
+    """Un-claims any rows stranded by a previous crash before the first drain."""
+    with workers.substrate_connection(data_dir) as conn:
+        store.reset_claimed_recompute(conn)
+        yield conn
 
 
 def start(data_dir: Path | str, *, poll_interval: float = 2.0) -> None:
-    """Start the daemon worker thread (idempotent). Opens its OWN
-    connection so blocking SQLite calls never touch the event loop's
-    connection or thread. Un-claims any rows stranded by a previous crash
-    before looping."""
-    global _thread
-    if _thread is not None and _thread.is_alive():
+    """Start the worker (idempotent)."""
+    global _worker
+    if _worker is not None and _worker.running():
         return
-
-    db_path = Path(data_dir) / "mycelium.db"
-    history_path = Path(data_dir) / "mycelium-history.db"
-    _stop.clear()
-
-    def _run() -> None:
-        conn = store.connect(db_path, history_path=history_path)
-        store.reset_claimed_recompute(conn)
-        while not _stop.is_set():
-            try:
-                drain(conn)
-            except Exception:  # never let the thread die on one bad drain
-                logger.exception("mention recompute drain failed")
-            _wake.wait(poll_interval)
-            _wake.clear()
-
-    _thread = threading.Thread(target=_run, name="mention-worker", daemon=True)
-    _thread.start()
+    _worker = workers.Worker(
+        "mention-worker",
+        drain,
+        interval=poll_interval,
+        session=partial(_connection, Path(data_dir)),
+    )
+    _worker.start()
 
 
 def stop(timeout: float = 5.0) -> None:
-    """Signal the worker to exit and join it. Mostly for clean test
-    teardown; in production the daemon thread dies with the process.
-
-    Keeps the reference when the join times out, so the next `start` can
-    tell a slow worker from an absent one and refuse a second thread on the
-    same queue."""
-    global _thread
-    _stop.set()
-    _wake.set()
-    if _thread is not None:
-        _thread.join(timeout)
-        if _thread.is_alive():
-            logger.warning("mention worker did not stop within %.1fs", timeout)
-            return
-        _thread = None
+    if _worker is not None:
+        _worker.stop(timeout)

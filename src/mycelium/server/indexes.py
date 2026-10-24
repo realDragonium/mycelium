@@ -149,6 +149,90 @@ def _rebuild_vector_index(
         )
 
 
+def _log_index_rebuild_reason(
+    label: str,
+    index_path: Path,
+    *,
+    dirty: bool,
+    recorded_identity: str,
+    configured_identity: str,
+) -> None:
+    if dirty:
+        logger.warning(
+            "rebuilding %s vector index: dirty marker indicates a crash "
+            "before the index was persisted",
+            label,
+        )
+    elif index_path.exists() and recorded_identity != configured_identity:
+        logger.warning(
+            "rebuilding %s vector index: built by %s, configured embedder is %s",
+            label,
+            recorded_identity,
+            configured_identity,
+        )
+
+
+def load_or_rebuild(
+    path: Path,
+    *,
+    label: str,
+    rows: Callable[[sqlite3.Connection], list[sqlite3.Row]],
+    get_id: Callable[[sqlite3.Connection, str], int | None],
+    next_id: Callable[[sqlite3.Connection], int],
+    set_id: Callable[[sqlite3.Connection, str, int], None],
+    on_load: Callable[[vector.Index, Path], None] | None = None,
+) -> vector.Index:
+    """Load a clean, compatible index or durably rebuild it from the substrate.
+
+    Fetch rebuild rows inside the substrate transaction. The optional load
+    hook runs before a missing legacy identity sidecar is written.
+    """
+    configured_identity = embed.identity()
+    dirty = _dirty_marker_path(path).exists()
+    recorded_identity = _read_index_identity(path)
+    if path.exists() and not dirty and recorded_identity == configured_identity:
+        index = vector.Index.load(path)
+        if on_load is not None:
+            on_load(index, path)
+        if not _meta_path(path).exists():
+            _write_index_identity(path, configured_identity)
+        return index
+
+    _log_index_rebuild_reason(
+        label,
+        path,
+        dirty=dirty,
+        recorded_identity=recorded_identity,
+        configured_identity=configured_identity,
+    )
+    _write_dirty_marker(path)
+    index = vector.Index.empty()
+    with store.transaction(_db()):
+        _rebuild_vector_index(index, rows(_db()), get_id, next_id, set_id, label=label)
+    index.save(path)
+    _fsync_file(path)
+    _write_index_identity(path, configured_identity)
+    _clear_dirty_marker(path)
+    return index
+
+
+def prune_stranded_name_vectors(index: vector.Index, path: Path) -> None:
+    """Prune loaded name vectors whose mappings were dropped by a migration
+    (v6's case-variant merge does). Stranded vectors resolve to nothing but
+    still occupy top-k slots in every name search."""
+    stranded = [
+        vid for vid in index.ids() if store.get_name_id_by_vector_id(_db(), vid) is None
+    ]
+    if stranded:
+        logger.info("pruning %d stranded name vector(s)", len(stranded))
+        _write_dirty_marker(path)
+        for vid in stranded:
+            index.delete(vid)
+        index.save(path)
+        _fsync_file(path)
+        _clear_dirty_marker(path)
+
+
 def _persist_index() -> None:
     _idx().save(_idx_path())
 

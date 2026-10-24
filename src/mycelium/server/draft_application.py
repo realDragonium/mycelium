@@ -451,7 +451,7 @@ def _reviewed_apply_enabled() -> bool:
     return draft_review_settings.load_controls(_prompts_db()).application_enabled
 
 
-def _substrate_application_result(
+def substrate_application_result(
     application_id: str,
 ) -> DraftReplay | None:
     row = (
@@ -566,7 +566,7 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> ReviewedApplicationRe
                 review_id=review_id,
                 claimed_by=principal.id,
             )
-            result = _substrate_application_result(application_id)
+            result = substrate_application_result(application_id)
             if result is None:
                 current = _review_knowledge_preconditions(
                     drafts_store.list_ops(conn, draft_id),
@@ -605,7 +605,7 @@ def _apply_claimed_draft(
     from .. import drafts_store
 
     conn = _drafts_db()
-    result = _substrate_application_result(application_id)
+    result = substrate_application_result(application_id)
     if result is None:
         try:
             result = apply_draft(
@@ -615,7 +615,7 @@ def _apply_claimed_draft(
                 strict=strict,
             )
         except BaseException as exc:
-            committed = _substrate_application_result(application_id)
+            committed = substrate_application_result(application_id)
             if committed is None:
                 with store.transaction(conn):
                     drafts_store.finish_application(

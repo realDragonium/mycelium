@@ -30,6 +30,7 @@ from . import (
     request_timing,
     store,
     timestamps,
+    workers,
 )
 from .ask.substrate import InProcessSubstrate, _json_schema_for
 from .draft_review_store import Answer, Assessment, Mode, ReviewRun
@@ -222,8 +223,6 @@ RETRY_BACKOFF = timedelta(minutes=5)
 # left for the backlog review.
 RETRY_WINDOW = RETRY_BACKOFF * (1 << MAX_RETRIES)
 SWEEP_INTERVAL_S = 60.0
-_sweeper: threading.Thread | None = None
-_stop_sweeper = threading.Event()
 
 
 @request_timing.tracked("background draft review sweep")
@@ -349,21 +348,21 @@ def review_backlog() -> list[str]:
     return started
 
 
-def start_sweeper(interval: float = SWEEP_INTERVAL_S) -> None:
-    global _sweeper
-    if _sweeper is not None and _sweeper.is_alive():
-        return
-    _stop_sweeper.clear()
+_sweeper = workers.Worker(
+    "draft-review-sweep",
+    lambda _: sweep(),
+    interval=SWEEP_INTERVAL_S,
+    session=workers.no_session,
+    delay_first=True,
+)
 
-    def loop() -> None:
-        while not _stop_sweeper.wait(interval):
-            try:
-                sweep()
-            except Exception:  # never let the thread die on one bad sweep
-                logger.exception("draft review sweep failed")
 
-    _sweeper = threading.Thread(target=loop, name="draft-review-sweep", daemon=True)
+def start_sweeper() -> None:
     _sweeper.start()
+
+
+def stop_sweeper(timeout: float = 5.0) -> None:
+    _sweeper.stop(timeout)
 
 
 def wait_all(timeout: float = 10) -> None:
@@ -389,7 +388,7 @@ def _failed(run: ReviewRun, detail: str) -> None:
         drafts_store.connection(),
         run,
         lambda application_id: (
-            draft_application._substrate_application_result(application_id) is not None
+            draft_application.substrate_application_result(application_id) is not None
         ),
     )
     run.finished_at = timestamps.now()

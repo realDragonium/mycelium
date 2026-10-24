@@ -35,10 +35,7 @@ from .. import ai, ai_prompts, link_rules, tracing, when_expression
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
-from ..agentloop import (
-    check_budget,
-    cost_usd,
-)
+from ..agentloop import check_budget
 from ..agentloop import (
     first_tool_use as _first_tool_use,
 )
@@ -252,8 +249,8 @@ def _execute(
     trace = TraceBuilder(
         model=config.model,
         provider=config.provider,
-        op_cap=config.op_cap,
-        wall_clock_s=config.wall_clock_s,
+        op_cap=config.limits.op_cap,
+        wall_clock_s=config.limits.wall_clock_s,
         input_chars=len(task.text),
     )
     trace.notes.extend(task.notes)
@@ -268,7 +265,7 @@ def _execute(
     ]
 
     reads_after_vocab: list[str] = []  # successful read names, for the floor
-    max_turns = config.op_cap + _TURN_HEADROOM
+    max_turns = config.limits.op_cap + _TURN_HEADROOM
 
     ctx = _RunContext(
         task=task,
@@ -281,8 +278,8 @@ def _execute(
         trace=trace,
         start=start,
         reads_after_vocab=reads_after_vocab,
-        reading_until=start + config.wall_clock_s * (1 - _FINAL_TURN_SHARE),
-        deadline=start + config.wall_clock_s,
+        reading_until=start + config.limits.wall_clock_s * (1 - _FINAL_TURN_SHARE),
+        deadline=start + config.limits.wall_clock_s,
         nudged=False,
         floor_blocks=0,
         malformed_retries=0,
@@ -291,7 +288,7 @@ def _execute(
     while True:
         # ---- Budget gates first — forced finalize bypasses the floor ----
         reason = (
-            check_budget(trace, config, start, max_turns)
+            check_budget(trace, config.limits, start, max_turns)
             or ("wall_clock" if time.monotonic() >= ctx.reading_until else None)
             or _cost_reached(trace, config, _reserve(ctx, config))
         )
@@ -375,7 +372,7 @@ def _execute(
 
 
 def _spent(trace: TraceBuilder, config: IngestConfig) -> float:
-    return trace.cost_usd(config.input_per_mtok, config.output_per_mtok) or 0.0
+    return trace.cost_usd(config.price) or 0.0
 
 
 def _note_turn(
@@ -397,16 +394,14 @@ def _reserve(ctx: _RunContext, config: IngestConfig) -> float:
     like the dearest so far, then the forced emit. Forcing the tool choice
     invalidates the cached history: that turn writes the whole history to the
     cache again."""
-    if config.input_per_mtok is None or config.output_per_mtok is None:
+    price = config.price
+    if price is None:
         return 0.0
-    emit = {
-        "input": 0,
-        "cache_read": 0,
-        "cache_creation": ctx.history_tokens,
-        "output": ctx.largest_output_tokens,
-    }
-    return ctx.largest_turn_usd + cost_usd(
-        emit, config.input_per_mtok, config.output_per_mtok
+    return ctx.largest_turn_usd + price.cost_usd(
+        ai.Usage(
+            cache_creation_input_tokens=ctx.history_tokens,
+            output_tokens=ctx.largest_output_tokens,
+        )
     )
 
 
@@ -415,7 +410,7 @@ def _cost_reached(
 ) -> str | None:
     """The spending cap, checked before each turn; an unpriced model has no
     cap."""
-    if config.max_cost_usd is None or config.input_per_mtok is None:
+    if config.max_cost_usd is None or config.price is None:
         return None
     spent = _spent(trace, config)
     return "cost_cap" if spent + reserve_usd >= config.max_cost_usd else None
@@ -504,12 +499,12 @@ def _existing_statements(
 
 def _guard_input(text: str, config: IngestConfig) -> tuple[str, str | None]:
     text = text or ""
-    if len(text) <= config.max_input_chars:
+    if len(text) <= config.limits.max_input_chars:
         return text, None
-    head = text[: config.max_input_chars]
+    head = text[: config.limits.max_input_chars]
     note = (
         f"input truncated: {len(text)} chars exceeded max_input_chars="
-        f"{config.max_input_chars}; only the head was processed (tail is a gap)"
+        f"{config.limits.max_input_chars}; only the head was processed (tail is a gap)"
     )
     return head, note
 
@@ -1174,8 +1169,7 @@ def _build_trace(trace: TraceBuilder, outcome: str, ctx: _RunContext) -> dict:
         outcome=outcome,
         latency_ms=latency_ms,
         floor=_floor_state(ctx.reads_after_vocab),
-        input_per_mtok=config.input_per_mtok,
-        output_per_mtok=config.output_per_mtok,
+        price=config.price,
     )
     tracing.emit_trace(
         trace.spans,
@@ -1364,10 +1358,10 @@ def _model_turn(
         ai.ModelConfig(
             provider=config.provider,
             model=config.model,
-            max_tokens=config.max_tokens,
-            request_timeout_s=min(config.request_timeout_s, remaining),
-            max_retries=config.max_retries,
-            thinking=config.thinking,
+            max_tokens=config.limits.max_tokens,
+            request_timeout_s=min(config.limits.request_timeout_s, remaining),
+            max_retries=config.limits.max_retries,
+            thinking=config.limits.thinking,
             reasoning_effort=config.reasoning_effort,
             cache=True,
         ),

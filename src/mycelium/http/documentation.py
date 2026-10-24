@@ -50,7 +50,7 @@ def documentation_options(request: Request) -> dict[str, object]:
         "can_generate": auth.principal_has_real_role(principal, "writer"),
         "guideline_sets": guidelines.catalogue(prompt_store.connection()),
         "profile_audiences": _profile_audiences(),
-        "max_prompt_chars": DocgenConfig.from_env().max_prompt_chars,
+        "max_prompt_chars": DocgenConfig.from_env().limits.max_prompt_chars,
     }
 
 

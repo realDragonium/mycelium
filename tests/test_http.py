@@ -3030,3 +3030,13 @@ def test_init_prunes_stranded_name_vectors(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch, deterministic_embed):
         for vid in stranded_vids:
             assert runtime._name_idx().get_vector(vid) is None
+
+
+def test_shutting_the_app_down_stops_the_background_workers(tmp_path, monkeypatch):
+    from mycelium.server import startup
+
+    stopped: list[bool] = []
+    monkeypatch.setattr(startup, "stop_workers", lambda: stopped.append(True))
+    with _client(tmp_path, monkeypatch, fake_embed_factory()):
+        assert stopped == []
+    assert stopped == [True]

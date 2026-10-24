@@ -55,7 +55,11 @@ def test_import_once_preserves_runtime_budgets_and_ignores_later_environment(
     assert settings.get(settings.AskSettings).wall_clock_s == 32.5
     assert settings.get(settings.IngestSettings).op_cap == 73
     quick = for_depth(AskConfig.from_env(), "quick")
-    assert (quick.op_cap, quick.wall_clock_s, quick.request_timeout_s) == (8, 25, 20)
+    assert (
+        quick.limits.op_cap,
+        quick.limits.wall_clock_s,
+        quick.limits.request_timeout_s,
+    ) == (8, 25, 20)
     assert not quick.enforce_floor
 
 

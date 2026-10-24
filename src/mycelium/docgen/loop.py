@@ -359,8 +359,8 @@ def _execute(
         model=config.model,
         provider=config.provider,
         run_id=run_id,
-        op_cap=config.op_cap,
-        wall_clock_s=config.wall_clock_s,
+        op_cap=config.limits.op_cap,
+        wall_clock_s=config.limits.wall_clock_s,
         prompt=prompt,
         requested_set=requested_set,
         requested_type=requested_type,
@@ -511,10 +511,10 @@ def _execute(
 def _write(ctx: _RunContext) -> DocgenResult:
     """The tool-use loop: read, file gaps, emit. Returns the outcome."""
     trace: TraceBuilder = ctx.trace
-    max_turns = ctx.config.op_cap + _TURN_HEADROOM
+    max_turns = ctx.config.limits.op_cap + _TURN_HEADROOM
 
     while True:
-        reason = check_budget(trace, ctx.config, ctx.start, max_turns)
+        reason = check_budget(trace, ctx.config.limits, ctx.start, max_turns)
         if reason:
             return _forced_finalize(reason, ctx)
 
@@ -707,7 +707,7 @@ def _recon(ctx: _RunContext) -> Any:
     """The opening wide map of the request. Counts toward the op cap, and its
     ids count as retrieved — the map is how a run finds what to hydrate."""
     trace: TraceBuilder = ctx.trace
-    args = {"query": ctx.prompt, "limit": ctx.config.recon_k, "decompose": True}
+    args = {"query": ctx.prompt, "limit": ctx.config.limits.recon_k, "decompose": True}
     _progress(ctx, "Surveying the knowledge base")
     if not _substrate_has(ctx.substrate, "search_statements"):
         trace.notes.append("recon skipped: search_statements not available")
@@ -1377,10 +1377,10 @@ def _model_turn(
             ai.ModelConfig(
                 provider=config.provider,
                 model=config.model,
-                max_tokens=config.max_tokens,
-                request_timeout_s=config.request_timeout_s,
-                max_retries=config.max_retries,
-                thinking=config.thinking,
+                max_tokens=config.limits.max_tokens,
+                request_timeout_s=config.limits.request_timeout_s,
+                max_retries=config.limits.max_retries,
+                thinking=config.limits.thinking,
                 reasoning_effort=config.reasoning_effort,
                 cache=True,
             ),

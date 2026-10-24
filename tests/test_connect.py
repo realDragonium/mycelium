@@ -11,6 +11,7 @@ import pytest
 from mycelium import ai
 from mycelium.ingest import DraftCreated, IngestConfig, NothingToIngest
 from mycelium.ingest.connect import Looked, Target, looked_at, run_connect
+from mycelium.product_settings import IngestSettings
 from test_ingest import (
     FakeAnthropic,
     FakeEmitter,
@@ -64,7 +65,7 @@ def _connect(ops, *, known=(), **config):
         client=client,
         substrate=FakeSubstrate({"get_statements": _statements}),
         emitter=emitter,
-        config=IngestConfig(trace_log_path=None, **config),
+        config=IngestConfig(trace_log_path=None, limits=IngestSettings(**config)),
     )
     return result, emitter, client
 
@@ -318,8 +319,6 @@ def test_stops_reading_while_another_turn_and_the_final_emit_fit_under_the_cap()
         config=IngestConfig(
             trace_log_path=None,
             max_cost_usd=0.04,
-            input_per_mtok=3.0,
-            output_per_mtok=15.0,
         ),
     )
 
