@@ -207,6 +207,258 @@ def test_an_outcome_its_kind_does_not_take_is_refused(conn, drafts):
         )
 
 
+def _pair(conn, a, b):
+    item_id = "~".join(sorted((a, b)))
+    text = curation.item_text(conn, "duplicate", item_id)
+    assert text is not None
+    return curation.DuplicateCandidate(item_id, text)
+
+
+def test_statement_duplicate_is_settled_until_either_text_changes(conn, drafts):
+    pair = _pair(conn, "stm_a", "stm_b")
+    chosen, _, _ = curation.claim(
+        conn,
+        drafts,
+        "duplicate",
+        limit=1,
+        claimant="agent-1",
+        now=NOW,
+        pairs=[pair],
+    )
+    curation.release(
+        conn,
+        [chosen[0].id],
+        "not_applicable",
+        claimant="agent-1",
+        now=NOW,
+        reason="Different parts of login.",
+    )
+
+    settled, _, _ = curation.claim(
+        conn,
+        drafts,
+        "duplicate",
+        limit=1,
+        claimant="agent-2",
+        now=NOW,
+        pairs=[pair],
+    )
+    assert settled == []
+    conn.execute("UPDATE statements SET text = text || ' Now.' WHERE id = 'stm_b'")
+    changed = _pair(conn, "stm_a", "stm_b")
+    claimed, _, _ = curation.claim(
+        conn,
+        drafts,
+        "duplicate",
+        limit=1,
+        claimant="agent-2",
+        now=NOW,
+        pairs=[changed],
+    )
+    assert [item.id for item in claimed] == [changed.id]
+
+
+def test_concept_duplicate_dismissal_records_the_claimant(conn, drafts):
+    conn.execute("INSERT INTO entities (id) VALUES ('ent_login')")
+    conn.execute(
+        "INSERT INTO names (id, text, entity_id) VALUES "
+        "('nam_login', 'Login', 'ent_login')"
+    )
+    pair = _pair(conn, "ent_login", "ent_sso")
+    chosen, _, _ = curation.claim(
+        conn,
+        drafts,
+        "duplicate",
+        limit=1,
+        claimant="agent-1",
+        now=NOW,
+        pairs=[pair],
+    )
+
+    curation.release(
+        conn,
+        [chosen[0].id],
+        "not_applicable",
+        claimant="agent-1",
+        now=NOW,
+        reason="One is a protocol and one is a page.",
+    )
+
+    dismissal = store.list_entity_duplicate_dismissals(conn)[0]
+    assert dismissal["dismissed_by"] == "agent-1"
+
+
+def test_concept_kinds_claim_and_release(conn, drafts):
+    conn.execute("INSERT INTO entities (id, description) VALUES ('ent_export', '')")
+    conn.execute(
+        "INSERT INTO names (id, text, entity_id) VALUES "
+        "('nam_export', 'Invoice export', 'ent_export')"
+    )
+    conn.execute(
+        "INSERT INTO entities (id, description) VALUES "
+        "('ent_archive', 'A retained export.')"
+    )
+    conn.execute(
+        "INSERT INTO names (id, text, entity_id) VALUES "
+        "('nam_archive', 'Export archive', 'ent_archive')"
+    )
+
+    undescribed, _ = _claim(conn, drafts, "undescribed")
+    unused, _ = _claim(conn, drafts, "unused", who="agent-2")
+    assert "ent_export" in undescribed
+    assert "ent_archive" in unused
+
+    curation.release(
+        conn,
+        ["ent_export"],
+        "no_link",
+        claimant="agent-1",
+        now=NOW,
+        reason="No statement explains it yet.",
+    )
+    curation.release(
+        conn,
+        ["ent_archive"],
+        "no_link",
+        claimant="agent-2",
+        now=NOW,
+        reason="Keep the concept for planned exports.",
+    )
+    assert _claim(conn, drafts, "undescribed", who="agent-3")[0] == []
+    assert _claim(conn, drafts, "unused", who="agent-3")[0] == []
+
+
+def test_undescribed_concept_in_an_undecided_draft_is_not_offered(conn, drafts):
+    draft = drafts_store.create_draft(drafts, created_by="agent-1", session_id="s")
+    drafts_store.add_op(
+        drafts,
+        draft_id=draft,
+        kind="upsert_entity",
+        payload={"name": "single sign-on", "description": "A login protocol."},
+        created_by="agent-1",
+    )
+
+    assert _claim(conn, drafts, "undescribed")[0] == []
+
+
+def test_model_skips_are_not_retried_by_that_model(conn, drafts):
+    claimed, _ = _claim(conn, drafts, limit=1, who="model:test")
+    curation.release(conn, claimed, "skipped", claimant="model:test", now=NOW)
+
+    chosen, _, _ = curation.claim(
+        conn,
+        drafts,
+        "isolated",
+        limit=1,
+        claimant="model:test",
+        now=NOW,
+        exclude_skipped_by="model:test",
+    )
+
+    assert claimed[0] not in [item.id for item in chosen]
+    assert claimed[0] in _claim(conn, drafts, who="agent-1")[0]
+
+
+def test_skipped_undescribed_concept_is_retried_after_new_evidence(conn, drafts):
+    conn.execute("INSERT INTO entities (id) VALUES ('ent_empty')")
+    conn.execute(
+        "INSERT INTO names (id, text, entity_id) VALUES "
+        "('nam_empty', 'Export schedule', 'ent_empty')"
+    )
+    chosen, _, _ = curation.claim(
+        conn,
+        drafts,
+        "undescribed",
+        limit=1,
+        claimant="model:test",
+        now=NOW,
+        exclude_skipped_by="model:test",
+    )
+    assert [item.id for item in chosen] == ["ent_empty"]
+    curation.release(conn, ["ent_empty"], "skipped", claimant="model:test", now=NOW)
+
+    conn.execute(
+        "INSERT INTO statements (id, kind, text, created_at) VALUES (?, ?, ?, ?)",
+        (
+            "stm_schedule",
+            "state",
+            "An export schedule controls recurring invoice exports.",
+            timestamps.of(NOW + timedelta(minutes=1)),
+        ),
+    )
+    conn.execute("INSERT INTO statement_mentions VALUES ('stm_schedule', 'nam_empty')")
+
+    retried, _, _ = curation.claim(
+        conn,
+        drafts,
+        "undescribed",
+        limit=1,
+        claimant="model:test",
+        now=NOW + timedelta(minutes=2),
+        exclude_skipped_by="model:test",
+    )
+    assert [item.id for item in retried] == ["ent_empty"]
+
+
+@pytest.mark.parametrize("kind", ["duplicate", "undescribed", "unused"])
+def test_zero_limit_only_renews_new_kinds(conn, drafts, kind):
+    pairs = [_pair(conn, "stm_a", "stm_b")] if kind == "duplicate" else []
+    chosen, renewed, _ = curation.claim(
+        conn,
+        drafts,
+        kind,
+        limit=0,
+        claimant="agent-1",
+        now=NOW,
+        pairs=pairs,
+    )
+
+    assert chosen == []
+    assert renewed == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "outcome"),
+    [
+        ("duplicate", "no_link"),
+        ("undescribed", "not_applicable"),
+        ("unused", "resolved"),
+    ],
+)
+def test_new_kinds_refuse_wrong_outcomes(conn, drafts, kind, outcome):
+    if kind == "duplicate":
+        pair = _pair(conn, "stm_a", "stm_b")
+        curation.claim(
+            conn,
+            drafts,
+            kind,
+            limit=1,
+            claimant="agent-1",
+            now=NOW,
+            pairs=[pair],
+        )
+        item_id = pair.id
+    else:
+        if kind == "unused":
+            conn.execute(
+                "INSERT INTO entities (id, description) VALUES "
+                "('ent_unused', 'A saved invoice export.')"
+            )
+            conn.execute(
+                "INSERT INTO names (id, text, entity_id) VALUES "
+                "('nam_unused', 'Saved export', 'ent_unused')"
+            )
+        [item_id], _ = _claim(conn, drafts, kind)
+    with pytest.raises(ValueError, match="cannot be released"):
+        curation.release(
+            conn,
+            [item_id],
+            outcome,
+            claimant="agent-1",
+            now=NOW,
+        )
+
+
 def test_summaries_count_holders_and_outcomes(conn, drafts):
     knowledge_health.record_attempts(conn, {"stm_c": []})
     _claim(conn, drafts, limit=1)

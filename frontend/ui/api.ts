@@ -452,7 +452,7 @@ export interface HealthCounts {
 }
 // `max_run_tokens` is 0 when runs have no token cap.
 export interface ConnectLimits { batch_size: number; max_run_tokens: number; provider: string; model: string; external_agent: boolean }
-export type CurationKind = 'isolated' | 'unnamed' | 'rephrase' | 'gap' | 'question';
+export type CurationKind = 'isolated' | 'unnamed' | 'rephrase' | 'gap' | 'question' | 'duplicate' | 'undescribed' | 'unused';
 // `name` is null once the holder is no longer a known user. Outcome `looked`
 // is the server's connect pass; the rest come from outside agents.
 export interface CurationHolder { claimed_by: string; name: string | null; items: number; expires_at: string }

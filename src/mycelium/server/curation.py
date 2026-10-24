@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, TypedDict
 
-from pydantic import Field, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from .. import auth as _auth
 from .. import (
@@ -24,14 +24,16 @@ from .. import (
     media,
     store,
 )
+from .names import find_entity_duplicates
 from .registry import tool
 from .runtime import _db, _drafts_db
-from .search import search_statements
+from .search import find_duplicates, search_statements
 from .vocabulary import list_link_types
 
 #: Statements offered with each item as its nearest neighbours.
 NEIGHBOURS = 5
 _json_rows = TypeAdapter(list[dict[str, JsonValue]])
+_json = TypeAdapter(dict[str, JsonValue])
 _evidence = TypeAdapter(list[drafts_store.Evidence])
 
 
@@ -64,6 +66,12 @@ class WorkItem(TypedDict):
     neighbours: list[Neighbour]
     #: For a `question` item: the review waiting for an answer.
     question: Question | None
+    #: For a duplicate item: both candidates and their similarity evidence.
+    pair: dict[str, JsonValue] | None
+    #: For an undescribed or unused item: the concept and statements naming it.
+    concept: dict[str, JsonValue] | None
+    #: For a rephrase or gap item about a draft: the draft under discussion.
+    draft: dict[str, JsonValue] | None
 
 
 class WorkBatch(TypedDict):
@@ -118,6 +126,231 @@ def _neighbours(item: curation.Candidate) -> list[Neighbour]:
     ][:NEIGHBOURS]
 
 
+class _StatementDuplicate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    a_id: str
+    a_text: str
+    b_id: str
+    b_text: str
+    score: float
+
+
+class _ConceptDuplicate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    a_entity_id: str
+    b_entity_id: str
+    score: float
+    matches: list[dict[str, JsonValue]]
+
+
+def _concept(
+    entity_id: str, *, statement_limit: int = 8
+) -> dict[str, JsonValue] | None:
+    row = (
+        _db()
+        .execute(
+            "SELECT e.description, n.text AS name FROM entities e "
+            "LEFT JOIN names n ON n.id = COALESCE(e.preferred_name_id, "
+            "(SELECT MIN(id) FROM names WHERE entity_id = e.id)) WHERE e.id = ?",
+            (entity_id,),
+        )
+        .fetchone()
+    )
+    if row is None:
+        return None
+    names = [
+        str(item[0])
+        for item in _db().execute(
+            "SELECT text FROM names WHERE entity_id = ? ORDER BY text COLLATE NOCASE, text",
+            (entity_id,),
+        )
+    ]
+    statements = [
+        {"id": str(item[0]), "kind": str(item[1]), "text": str(item[2])}
+        for item in _db().execute(
+            "SELECT DISTINCT s.id, s.kind, s.text FROM statements s "
+            "JOIN statement_mentions m ON m.statement_id = s.id "
+            "JOIN names n ON n.id = m.name_id WHERE n.entity_id = ? "
+            "ORDER BY s.id LIMIT ?",
+            (entity_id, statement_limit),
+        )
+    ]
+    return _json.validate_python(
+        {
+            "id": entity_id,
+            "name": str(row["name"] or (names[0] if names else entity_id)),
+            "names": names,
+            "description": str(row["description"] or ""),
+            "statements": statements,
+        }
+    )
+
+
+def duplicate_candidates(
+    *, limit: int = 200, exclude_skipped_by: str | None = None
+) -> tuple[list[curation.DuplicateCandidate], dict[str, dict[str, JsonValue]]]:
+    """Bounded index-backed duplicate candidates and their agent context."""
+    candidates: list[curation.DuplicateCandidate] = []
+    contexts: dict[str, dict[str, JsonValue]] = {}
+    scores: dict[str, float] = {}
+    now = datetime.now(UTC)
+    page_size = 200
+    offset = 0
+    while len(candidates) < limit:
+        raw_page = find_duplicates(limit=page_size, offset=offset)
+        parsed: dict[str, _StatementDuplicate] = {}
+        page_candidates: list[curation.DuplicateCandidate] = []
+        for raw_statement in raw_page:
+            statement_pair = _StatementDuplicate.model_validate(raw_statement)
+            a_id, b_id = sorted((statement_pair.a_id, statement_pair.b_id))
+            item_id = f"{a_id}~{b_id}"
+            text = curation.item_text(_db(), "duplicate", item_id)
+            if text is not None:
+                parsed[item_id] = statement_pair
+                page_candidates.append(curation.DuplicateCandidate(item_id, text))
+        available = curation.available_duplicate_candidates(
+            _db(),
+            _drafts_db(),
+            page_candidates,
+            limit=limit - len(candidates),
+            now=now,
+            exclude_skipped_by=exclude_skipped_by,
+        )
+        for candidate in available:
+            statement_pair = parsed[candidate.id]
+            a_id, b_id = candidate.id.split("~")
+            sides: dict[str, dict[str, JsonValue]] = {}
+            for statement_id in (a_id, b_id):
+                row = store.get_statement(_db(), statement_id)
+                if row is not None:
+                    sides[statement_id] = {
+                        "id": statement_id,
+                        "kind": str(row["kind"]),
+                        "text": str(row["text"]),
+                    }
+            if len(sides) != 2:
+                continue
+            candidates.append(candidate)
+            scores[candidate.id] = statement_pair.score
+            contexts[candidate.id] = _json.validate_python(
+                {
+                    "kind": "statement",
+                    "a": sides[a_id],
+                    "b": sides[b_id],
+                    "score": statement_pair.score,
+                }
+            )
+        offset += len(raw_page)
+        if len(raw_page) < page_size:
+            break
+
+    concept_candidates: list[curation.DuplicateCandidate] = []
+    offset = 0
+    while len(concept_candidates) < limit:
+        page = find_entity_duplicates(limit=page_size, offset=offset)
+        parsed_concepts: dict[str, _ConceptDuplicate] = {}
+        page_candidates = []
+        for raw_concept in page["candidates"]:
+            concept_pair = _ConceptDuplicate.model_validate(raw_concept)
+            a_id, b_id = sorted((concept_pair.a_entity_id, concept_pair.b_entity_id))
+            item_id = f"{a_id}~{b_id}"
+            text = curation.item_text(_db(), "duplicate", item_id)
+            if text is not None:
+                parsed_concepts[item_id] = concept_pair
+                page_candidates.append(curation.DuplicateCandidate(item_id, text))
+        available = curation.available_duplicate_candidates(
+            _db(),
+            _drafts_db(),
+            page_candidates,
+            limit=limit - len(concept_candidates),
+            now=now,
+            exclude_skipped_by=exclude_skipped_by,
+        )
+        for candidate in available:
+            concept_pair = parsed_concepts[candidate.id]
+            a_id, b_id = candidate.id.split("~")
+            a = _concept(a_id, statement_limit=3)
+            b = _concept(b_id, statement_limit=3)
+            if a is None or b is None:
+                continue
+            concept_candidates.append(candidate)
+            scores[candidate.id] = concept_pair.score
+            contexts[candidate.id] = _json.validate_python(
+                {
+                    "kind": "concept",
+                    "a": a,
+                    "b": b,
+                    "score": concept_pair.score,
+                    "matches": concept_pair.matches,
+                }
+            )
+        offset += len(page["candidates"])
+        if offset >= page["total"] or not page["candidates"]:
+            break
+    candidates.extend(concept_candidates)
+    chosen = sorted(candidates, key=lambda item: (-scores[item.id], item.id))[:limit]
+    return chosen, {item.id: contexts[item.id] for item in chosen}
+
+
+def _draft(gap_id: str) -> dict[str, JsonValue] | None:
+    gap = store.get_knowledge_gap(_db(), gap_id)
+    draft_id = None if gap is None else gap["draft_id"]
+    if draft_id is None:
+        return None
+    row = drafts_store.get_draft(_drafts_db(), str(draft_id))
+    if row is None:
+        return None
+    review = draft_review_store.latest(_drafts_db(), str(draft_id))
+    operations = _json_rows.validate_python(
+        [
+            {
+                "operation_ref": str(op["id"]),
+                "kind": str(op["kind"]),
+                "payload": _json.validate_json(str(op["payload_json"])),
+            }
+            for op in drafts_store.list_ops(_drafts_db(), str(draft_id))[:30]
+        ]
+    )
+    return _json.validate_python(
+        {
+            "draft_id": str(draft_id),
+            "title": None if row["title"] is None else str(row["title"]),
+            "status": drafts_store.status_for(row),
+            "rationale": None if review is None else review.rationale,
+            "operations": operations,
+        }
+    )
+
+
+def describe_work_item(
+    candidate: curation.Candidate,
+    kind: curation.Kind,
+    *,
+    pair: dict[str, JsonValue] | None = None,
+) -> WorkItem:
+    """Build the same context for an internal or outside curation agent."""
+    neighbours = _neighbours(candidate)
+    with store.transaction(_db()):
+        curation.offered(_db(), candidate.id, [item["id"] for item in neighbours])
+    return {
+        "id": candidate.id,
+        "kind": kind,
+        "text": candidate.text,
+        "statement": (
+            None
+            if candidate.statement is None
+            else candidate.statement.model_dump(mode="json")
+        ),
+        "neighbours": neighbours,
+        "question": _question(candidate.id) if kind == "question" else None,
+        "pair": pair,
+        "concept": (
+            _concept(candidate.id) if kind in ("undescribed", "unused") else None
+        ),
+        "draft": _draft(candidate.id) if kind in ("rephrase", "gap") else None,
+    }
+
+
 @tool(role="drafter")
 def claim_curation_work(
     kind: curation.Kind,
@@ -126,11 +359,11 @@ def claim_curation_work(
     """Claim a batch of curation work for 30 minutes, to check in the
     product's code what the knowledge base alone cannot settle.
 
-    `kind` picks the knowledge-health list: `isolated` (statements with no
-    links), `unnamed` (statements naming no concept), `rephrase` (gaps asking
-    for a statement to be rephrased), `gap` (other open knowledge gaps) or
-    `question` (a draft reviewer's questions for a person, with the draft
-    and the questions in `question`).
+    `kind` picks statements (`isolated`, `unnamed`), gaps (`rephrase`, `gap`,
+    `question`), duplicate statement or concept pairs (`duplicate`), or
+    concepts needing a decision (`undescribed`, `unused`). Kind-specific
+    context is in `pair`, `concept`, `draft`, or `question`; draft-backed gaps
+    include the rejected or applied draft an agent may correct or close.
     Items nobody holds, no undecided draft covers, and nobody has looked at
     since they or the statements around them last changed come first, in id
     order. Each carries its text, the statement it is about with the concepts
@@ -143,6 +376,10 @@ def claim_curation_work(
     `release_curation_work`. An item whose lease runs out is offered again.
     """
     claimant = _claimant()
+    pairs: list[curation.DuplicateCandidate] = []
+    pair_context: dict[str, dict[str, JsonValue]] = {}
+    if kind == "duplicate" and limit:
+        pairs, pair_context = duplicate_candidates()
     with store.transaction(_db()):
         chosen, renewed, expires = curation.claim(
             _db(),
@@ -151,25 +388,12 @@ def claim_curation_work(
             limit=limit,
             claimant=claimant,
             now=datetime.now(UTC),
+            pairs=pairs,
         )
     items: list[WorkItem] = []
     for candidate in chosen:
-        neighbours = _neighbours(candidate)
-        with store.transaction(_db()):
-            curation.offered(_db(), candidate.id, [n["id"] for n in neighbours])
         items.append(
-            {
-                "id": candidate.id,
-                "kind": kind,
-                "text": candidate.text,
-                "statement": (
-                    None
-                    if candidate.statement is None
-                    else candidate.statement.model_dump(mode="json")
-                ),
-                "neighbours": neighbours,
-                "question": _question(candidate.id) if kind == "question" else None,
-            }
+            describe_work_item(candidate, kind, pair=pair_context.get(candidate.id))
         )
     return {
         "kind": kind,
@@ -193,18 +417,17 @@ def release_curation_work(
 ) -> Released:
     """Release items you claimed, saying what came of them.
 
-    `proposed`: your draft `draft_id` proposes a link, a concept or a
-    rephrase for them; a gap is resolved when that draft is applied.
-    `no_link`: you checked and nothing should change; give a short `reason`.
+    `proposed`: your draft `draft_id` proposes the change. `no_link`: an
+    isolated/unnamed/undescribed/unused item should not change; give a reason.
     Neither is offered again until the item or the statements around it
     change. `skipped`: you did not get to them; they are offered again.
 
     `answered` (one `question` item): your `answer` to the reviewer's
     questions with the `evidence` you checked, in `set_operation_evidence`'s
     shape (one to five items); the draft is reviewed again with it. Not for
-    a draft you created. `resolved` (gaps): the applied draft `draft_id`
-    settled it; the gap is resolved. `not_applicable` (gaps): nothing should
-    change, for the `reason` you give; the gap is dismissed.
+    a draft you created. `resolved` (gaps): an applied draft settled it.
+    `not_applicable` dismisses a gap or records that a duplicate pair is
+    distinct; give a reason.
     """
     claimant = _claimant()
     if outcome != "answered" and (answer is not None or evidence is not None):

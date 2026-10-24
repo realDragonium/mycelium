@@ -266,6 +266,10 @@ def _init(data_dir: Path) -> None:
         from .. import audience_labelling
 
         audience_labelling.start(data_dir)
+    if os.environ.get("MYCELIUM_DISABLE_CURATION_WORKER") != "1":
+        from .. import curation_pass
+
+        curation_pass.start(data_dir)
     if os.environ.get("MYCELIUM_DISABLE_REVIEW_SWEEP") != "1":
         from .. import draft_review_runs
 
@@ -279,6 +283,7 @@ def stop_workers() -> None:
     worker that never ran."""
     from .. import (
         audience_labelling,
+        curation_pass,
         document_maintenance,
         draft_review_runs,
         embedding_worker,
@@ -288,5 +293,6 @@ def stop_workers() -> None:
     mention_worker.stop()
     embedding_worker.stop()
     audience_labelling.stop()
+    curation_pass.stop()
     draft_review_runs.stop_sweeper()
     document_maintenance.stop()
