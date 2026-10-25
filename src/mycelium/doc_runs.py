@@ -260,6 +260,7 @@ def resume_after_restart(conn: sqlite3.Connection) -> tuple[int, int]:
     as neither."""
     readmitted = 0
     failed = 0
+    retries = product_settings.get(product_settings.DocgenSettings).restart_retries
     for row in docs_store.reset_unfinished(conn):
         run_id = str(row["id"])
         if (document_id := docs_store.document_written_by(conn, run_id)) is not None:
@@ -268,6 +269,17 @@ def resume_after_restart(conn: sqlite3.Connection) -> tuple[int, int]:
             )
             continue
         manual = row["draft_body"] is not None
+        if (restarts := int(row["restarts"])) > retries:
+            docs_store.finish_run(
+                conn,
+                run_id,
+                outcome="failed",
+                error=f"Interrupted by {restarts} server restarts and not started "
+                "again. "
+                + ("Edit the document again." if manual else "Retry starts it again."),
+            )
+            failed += 1
+            continue
         try:
             anchored = row["anchor_entity_id"] is not None
             review_notes: Sequence[ReviewNote] = (

@@ -925,6 +925,29 @@ def test_a_run_that_cannot_be_admitted_again_fails_with_why(tmp_path):
     assert row["error"].endswith("Retry starts it again.")
 
 
+def test_a_run_interrupted_by_more_restarts_than_its_limit_fails(tmp_path):
+    conn = _conn(tmp_path)
+    set_product(product_settings.DocgenSettings(restart_retries=1))
+    doc_runs.RUNNER = lambda *_a, **_k: {"outcome": "nothing_written", "reason": "x"}
+    run_id = docs_store.create_run(
+        conn, prompt="document invoices", created_by=None, provider="claude"
+    )
+    queued = docs_store.create_run(
+        conn, prompt="document exports", created_by=None, provider="claude"
+    )
+    docs_store.mark_started(conn, run_id)
+    conn.execute("UPDATE documentation_runs SET restarts = 1 WHERE id = ?", (run_id,))
+    conn.commit()
+
+    assert doc_runs.resume_after_restart(conn) == (1, 1)
+    doc_runs.wait_all()
+
+    row = docs_store.get_run(conn, run_id)
+    assert row["outcome"] == "failed"
+    assert row["error"].startswith("Interrupted by 2 server restarts")
+    assert docs_store.get_run(conn, queued)["restarts"] == 0
+
+
 def test_bound_is_db_derived(tmp_path, monkeypatch):
     """A row left running by a previous process still counts, because the
     count comes from the table and not from this process's threads."""
