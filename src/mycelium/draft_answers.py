@@ -275,15 +275,6 @@ def _stop(run: draft_review_store.ReviewRun, count: int) -> None:
         draft_review_store.save(conn, run)
 
 
-def _model_answer_count(run: draft_review_store.ReviewRun) -> int:
-    count = 0
-    for answer in reversed(run.answers):
-        if not answer.answered_by.startswith("model:"):
-            break
-        count += 1
-    return count
-
-
 def attempt(
     run: draft_review_store.ReviewRun,
     inspection: DraftReviewInspection,
@@ -304,9 +295,9 @@ def attempt(
         return None
     try:
         limits = limits or product_settings.get(product_settings.ReviewSettings)
-        model_answers = _model_answer_count(run)
-        if model_answers >= 1 + limits.answer_retries:
-            _stop(run, model_answers)
+        answers = draft_review_store.automatic_answers(run.answers)
+        if answers >= 1 + limits.answer_retries:
+            _stop(run, answers)
             return None
         prompt, statements, review_evidence, operation_evidence = _context(
             run, inspection

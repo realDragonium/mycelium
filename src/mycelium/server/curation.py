@@ -392,6 +392,9 @@ def claim_curation_work(
             follow_up_retries=product_settings.get(
                 product_settings.ConnectSettings
             ).follow_up_retries,
+            answer_retries=product_settings.get(
+                product_settings.ReviewSettings
+            ).answer_retries,
         )
     items: list[WorkItem] = []
     for candidate in chosen:

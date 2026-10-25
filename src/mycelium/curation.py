@@ -23,9 +23,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal, get_args
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
-from . import automation_stops, knowledge_health, store, timestamps
+from . import (
+    automation_stops,
+    draft_review_store,
+    knowledge_health,
+    store,
+    timestamps,
+)
 from .store.gaps import set_knowledge_gap_status
 
 Kind = Literal[
@@ -93,6 +99,7 @@ _GAP_SETTLED = (
 )
 _GAP_CLAIMED = knowledge_health.CLAIMED.replace("s.id", "g.id")
 _CHUNK = 200
+_answers = TypeAdapter(list[draft_review_store.Answer])
 _CONCEPT_KINDS: dict[Kind, knowledge_health.EntityFilter] = {
     "undescribed": "undescribed",
     "unused": "unused",
@@ -157,18 +164,27 @@ def _params(now: str, waiting: Sequence[str] = ()) -> dict[str, object]:
     }
 
 
-def waiting_for_answer(drafts: sqlite3.Connection) -> list[str]:
+def waiting_for_answer(
+    drafts: sqlite3.Connection, answer_retries: int | None = None
+) -> list[str]:
     """Submitted drafts whose latest review asked a person and that have not
-    changed since."""
+    changed since. With `answer_retries`, not those whose reviewer already
+    asked again more often after automatic answers: a person answers them."""
     return [
-        str(row[0])
+        str(row["id"])
         for row in drafts.execute(
-            "SELECT id FROM drafts WHERE submitted_at IS NOT NULL "
+            "SELECT id, json_extract(review_assessment_json, '$.answers') AS answers "
+            "FROM drafts WHERE submitted_at IS NOT NULL "
             "AND decided_at IS NULL "
             "AND json_extract(review_assessment_json, '$.application') = 'needs_human' "
             "AND json_extract(review_assessment_json, '$.draft_revision') = revision "
             "ORDER BY id"
         )
+        if answer_retries is None
+        or draft_review_store.automatic_answers(
+            _answers.validate_json(row["answers"] or "[]")
+        )
+        <= answer_retries
     ]
 
 
@@ -184,6 +200,7 @@ def claim(
     exclude_skipped_by: str | None = None,
     draft_gaps_only: bool = False,
     follow_up_retries: int | None = None,
+    answer_retries: int | None = None,
 ) -> tuple[list[Candidate], list[str], str]:
     """Lease up to `limit` free items of `kind` to `claimant` and extend the
     lease on the items of that kind they already hold.
@@ -221,6 +238,7 @@ def claim(
         exclude_skipped_by=exclude_skipped_by,
         draft_gaps_only=draft_gaps_only,
         follow_up_retries=follow_up_retries,
+        answer_retries=answer_retries,
         at=now,
     )
     if follow_up_retries is not None and kind in ("rephrase", "gap"):
@@ -253,6 +271,7 @@ def _candidates(
     exclude_skipped_by: str | None,
     draft_gaps_only: bool,
     follow_up_retries: int | None,
+    answer_retries: int | None,
     at: datetime,
 ) -> list[Candidate]:
     """The first `limit` items of `kind`, in id order, that nobody holds, no
@@ -306,7 +325,9 @@ def _candidates(
             + ("AND g.draft_id IS NOT NULL " if draft_gaps_only else "")
             + "ORDER BY g.id LIMIT :chunk"
         )
-    params = _params(now, waiting_for_answer(drafts) if kind == "question" else ())
+    params = _params(
+        now, waiting_for_answer(drafts, answer_retries) if kind == "question" else ()
+    )
     chosen: list[sqlite3.Row] = []
     stopped = (
         automation_stops.stopped(conn, "gap_follow_up")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -231,6 +232,51 @@ def test_questions_are_the_newest_gap_of_a_draft_waiting_for_an_answer(conn, dra
 
     assert _claim(conn, drafts, "question")[0] == [asked]
     assert _claim(conn, drafts, "gap", who="agent-2")[0] == []
+
+
+def test_a_question_answered_automatically_past_its_retries_waits_for_a_person(
+    conn, drafts
+):
+    def answered(*answered_by):
+        draft = _waiting_for_answer(drafts)
+        answers = [
+            {
+                "run_id": "drv_000000000000",
+                "questions": ["Which plans include SSO?"],
+                "answer": "Enterprise.",
+                "answered_by": who,
+                "evidence": []
+                if who == "local-admin"
+                else [
+                    {"kind": "code", "path": "src/sso.py", "claim": "Plan gates SSO."}
+                ],
+            }
+            for who in answered_by
+        ]
+        drafts.execute(
+            "UPDATE drafts SET review_assessment_json = json_set("
+            "review_assessment_json, '$.answers', json(?)) WHERE id = ?",
+            (json.dumps(answers), draft),
+        )
+        store.create_knowledge_gap(conn, f"Asked of {draft}.", draft_id=draft)
+        return draft
+
+    answered("agent-1", "model:openai", "agent-1")
+    within = answered("agent-1", "local-admin", "agent-1", "agent-1")
+    question = conn.execute(
+        "SELECT id FROM knowledge_gaps WHERE draft_id = ?", (within,)
+    ).fetchone()[0]
+
+    chosen, _, _ = curation.claim(
+        conn,
+        drafts,
+        "question",
+        limit=5,
+        claimant="agent-2",
+        now=NOW,
+        answer_retries=2,
+    )
+    assert [c.id for c in chosen] == [question]
 
 
 def test_gap_outcomes_change_its_status_as_the_agent(conn, drafts):
