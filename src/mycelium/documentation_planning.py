@@ -1056,7 +1056,7 @@ def _submit_agent_task(
         proposal = Proposal.model_validate(result)
     except ValidationError as exc:
         findings = [agent_tasks.Finding(check="shape", problem=str(exc))]
-        if task.failures >= agent_tasks.RETRIES:
+        if task.failures >= agent_tasks.refusal_retries():
             doc_plans.finish_plan(
                 drafts, plan_id, error="The agent's proposal was malformed."
             )
@@ -1068,7 +1068,7 @@ def _submit_agent_task(
                 findings=findings,
             )
         return agent_tasks.refused(
-            drafts, task, findings, agent_tasks.RETRIES - task.failures
+            drafts, task, findings, agent_tasks.refusal_retries() - task.failures
         )
     planned = _agent_target(task)
     limits = product_settings.get(product_settings.DocumentationPlanningSettings)
@@ -1110,7 +1110,19 @@ def _submit_agent_task(
     return agent_tasks.closed(drafts, task, message)
 
 
-AGENT_TASK = agent_tasks.Handler(prepare=_prepare_agent_task, submit=_submit_agent_task)
+def _give_up_agent_task(task: agent_tasks.Task, reason: str) -> None:
+    doc_plans.finish_plan(
+        drafts_store.connection(),
+        str(task.subject_id),
+        error=f"The planning task was given up: {reason}",
+    )
+
+
+AGENT_TASK = agent_tasks.Handler(
+    prepare=_prepare_agent_task,
+    submit=_submit_agent_task,
+    give_up=_give_up_agent_task,
+)
 
 
 def wait_all(timeout: float = 10.0) -> None:

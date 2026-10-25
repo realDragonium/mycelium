@@ -19,7 +19,7 @@ interface DocumentationOptions {
 }
 interface AgentTask {
   id: string; kind: string; status: 'waiting' | 'claimed' | 'in_review' | 'done' | 'failed';
-  claimed_by: string | null; expires_at: string | null; failures: number;
+  claimed_by: string | null; expires_at: string | null; failures: number; releases: number;
   findings: { check: string; where: string | null; problem: string }[];
   release_reason: string | null; updated_at: string; error: string | null;
 }
@@ -136,8 +136,14 @@ const docDuration = (seconds: number) => seconds >= 60 ? `${Math.floor(seconds /
 const docTotalTokens = ({ tokens }: RunSummary) => tokens.input + tokens.cache_read + tokens.cache_creation + tokens.output;
 const docRunLine = (summary: RunSummary) => `${summary.turns} turns · ${docDuration(summary.duration_s)} · ${docTokens(docTotalTokens(summary))} tokens · ${summary.statements_cited} of ${summary.statements_retrieved} retrieved statements cited`;
 
+function Released({ task }: { task: AgentTask }) {
+  if (!task.release_reason) return null;
+  if (!task.releases) return <> Last released: {task.release_reason}.</>;
+  return <> Released {task.releases} time{task.releases === 1 ? '' : 's'}, last: {task.release_reason}.</>;
+}
+
 function agentRunStatus(task: AgentTask) {
-  if (task.status === 'waiting') return <>Waiting for an agent to claim it.{task.release_reason && <> Last released: {task.release_reason}.</>}</>;
+  if (task.status === 'waiting') return <>Waiting for an agent to claim it.<Released task={task} /></>;
   if (task.status === 'claimed') return <>Claimed by {task.claimed_by || 'an agent'} until {docDate(task.expires_at)}.</>;
   if (task.status === 'in_review') return <>Written; waiting for another agent's review.</>;
   if (task.status === 'failed') return <>The agent task failed{task.error ? `: ${task.error}` : '.'}</>;
@@ -145,7 +151,7 @@ function agentRunStatus(task: AgentTask) {
 }
 
 function agentPlanStatus(task: AgentTask) {
-  if (task.status === 'waiting') return <>Waiting for an agent to claim it…{task.release_reason && <> Last released: {task.release_reason}.</>}</>;
+  if (task.status === 'waiting') return <>Waiting for an agent to claim it…<Released task={task} /></>;
   if (task.status === 'claimed') return <>Claimed by {task.claimed_by || 'an agent'} until {docDate(task.expires_at)}…</>;
   return <>Finishing the external agent's plan…</>;
 }

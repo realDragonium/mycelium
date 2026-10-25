@@ -627,5 +627,44 @@ def submit_review(
     )
 
 
-WRITING = agent_tasks.Handler(prepare=prepare, read=read, submit=submit)
-REVIEW = agent_tasks.Handler(submit=submit_review)
+def _give_up(task: Task, state: WritingState, reason: str) -> None:
+    """Record the run as having written nothing for `reason`, keeping a
+    document still held for review so a person can judge it."""
+    request = state.request
+    pending = state.pending
+    _close(
+        task,
+        state,
+        NothingWritten(
+            reason=reason,
+            guideline_set=request.guideline_set,
+            document_type=request.document_type,
+            title=None if pending is None else pending.title,
+            body=None if pending is None else pending.body,
+        ),
+        failed=True,
+    )
+
+
+def give_up(task: Task, reason: str) -> None:
+    _give_up(task, WritingState.model_validate(task.state), reason)
+
+
+def give_up_review(task: Task, reason: str) -> None:
+    from .. import drafts_store
+
+    review = ReviewState.model_validate(task.state)
+    writer = agent_tasks.get(drafts_store.connection(), review.writer_task)
+    if writer is None or writer.finished_at is not None:
+        return
+    _give_up(
+        writer,
+        WritingState.model_validate(writer.state),
+        f"the document could not be reviewed: {reason}",
+    )
+
+
+WRITING = agent_tasks.Handler(
+    prepare=prepare, read=read, submit=submit, give_up=give_up
+)
+REVIEW = agent_tasks.Handler(submit=submit_review, give_up=give_up_review)

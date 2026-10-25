@@ -268,7 +268,7 @@ def test_a_malformed_verdict_is_refused_with_findings(agent):
     refused = _submit(agent, task.id, "changes_suggested")
     assert refused.status == "refused"
     assert "requires corrections" in refused.findings[0].problem
-    assert refused.retries_left == agent_tasks.RETRIES
+    assert refused.retries_left == agent_tasks.refusal_retries()
     assert server.get_draft(draft_id)["review_assessment"]["status"] == "running"
 
 
@@ -510,7 +510,7 @@ def test_a_draft_whose_reviews_fail_twice_is_rejected(agent):
     draft_id = _draft()
     for _ in range(2):
         [task] = _claim(agent).tasks
-        for _ in range(agent_tasks.RETRIES):
+        for _ in range(agent_tasks.refusal_retries()):
             assert _submit(agent, task.id, "changes_suggested").status == "refused"
         assert _submit(agent, task.id, "changes_suggested").status == "failed"
 

@@ -500,7 +500,7 @@ def _submit(
             [agent_tasks.Finding(check="shape", problem=str(exc))],
         )
     if verdicts is None or findings:
-        if task.failures >= agent_tasks.RETRIES:
+        if task.failures >= agent_tasks.refusal_retries():
             _fail(drafts, item_ids, "the agent's decisions were refused too often")
             return agent_tasks.closed(
                 drafts,
@@ -510,7 +510,7 @@ def _submit(
                 findings=findings,
             )
         return agent_tasks.refused(
-            drafts, task, findings, agent_tasks.RETRIES - task.failures
+            drafts, task, findings, agent_tasks.refusal_retries() - task.failures
         )
     started = apply(drafts, _guideline_set(task), verdicts, reviewer=claimant)
     approved = sum(d.decision == "approve" for d in verdicts.decisions)
@@ -523,4 +523,11 @@ def _submit(
     )
 
 
-AGENT_TASK = agent_tasks.Handler(prepare=_prepare, submit=_submit, queue=_queue)
+def _give_up(task: agent_tasks.Task, reason: str) -> None:
+    if "item_ids" in task.state:
+        _fail(drafts_store.connection(), _item_ids(task), reason)
+
+
+AGENT_TASK = agent_tasks.Handler(
+    prepare=_prepare, submit=_submit, queue=_queue, give_up=_give_up
+)

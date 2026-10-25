@@ -7,7 +7,9 @@ for `LEASE`, renewed by its next claim of that kind; an expired claim puts
 the task back in the pool. The agent submits a result, which passes the same
 checks the internal run's output does, or releases the task with a reason.
 A submission that fails a check comes back with findings, and the agent may
-try again a bounded number of times, which each kind decides.
+try again a bounded number of times, which each kind decides. Expired claims
+and releases count too: past the saved limit the task fails with the reason,
+and its kind closes what it served as it would after a failed run.
 
 Each kind plugs into the queue with a `Handler`: how a claimed task is
 briefed, what it may read and how a submission is checked and kept. The
@@ -46,9 +48,6 @@ KINDS: tuple[Kind, ...] = get_args(Kind)
 Status = Literal["waiting", "claimed", "in_review", "done", "failed"]
 LEASE = timedelta(minutes=30)
 MAX_BATCH = 5
-#: Refused submissions an agent may follow with another, for kinds whose
-#: internal run makes one model call and so has no retry count of its own.
-RETRIES = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_tasks (
@@ -61,6 +60,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     state             TEXT NOT NULL DEFAULT '{}',
     findings          TEXT NOT NULL DEFAULT '[]',
     failures          INTEGER NOT NULL DEFAULT 0,
+    releases          INTEGER NOT NULL DEFAULT 0,
     excluded_claimant TEXT,
     requested_by      TEXT,
     claimed_by        TEXT,
@@ -83,6 +83,11 @@ _state = TypeAdapter(dict[str, JsonValue])
 
 def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_tasks)")}
+    if "releases" not in columns:
+        conn.execute(
+            "ALTER TABLE agent_tasks ADD COLUMN releases INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 class Finding(BaseModel):
@@ -113,6 +118,8 @@ class Task(BaseModel):
     findings: list[Finding]
     #: How many submissions were refused.
     failures: int
+    #: How often a claim ran out or an agent gave the task back.
+    releases: int
     #: A principal that may not claim the task: a review's writer.
     excluded_claimant: str | None
     #: Who asked for the work, when someone did; they may follow it.
@@ -138,6 +145,7 @@ class View(BaseModel):
     claimed_by: str | None
     expires_at: str | None
     failures: int
+    releases: int = 0
     findings: list[Finding]
     release_reason: str | None
     updated_at: str
@@ -155,6 +163,7 @@ def _task(row: sqlite3.Row) -> Task:
         state=_state.validate_json(row["state"]),
         findings=_findings.validate_json(row["findings"]),
         failures=row["failures"],
+        releases=row["releases"],
         excluded_claimant=row["excluded_claimant"],
         requested_by=row["requested_by"],
         claimed_by=row["claimed_by"],
@@ -189,7 +198,8 @@ def current(stored: View, *, now: str | None = None) -> View:
 VIEW_SQL = (
     "(SELECT json_object('id', t.id, 'kind', t.kind, 'status', t.status, "
     "'claimed_by', t.claimed_by, 'expires_at', t.expires_at, "
-    "'failures', t.failures, 'findings', json(t.findings), "
+    "'failures', t.failures, 'releases', t.releases, "
+    "'findings', json(t.findings), "
     "'release_reason', t.release_reason, 'updated_at', t.updated_at, "
     "'error', t.error, 'result', json(t.result)) FROM agent_tasks AS t WHERE t.subject_id = {subject} "
     "ORDER BY t.created_at DESC, t.rowid DESC LIMIT 1)"
@@ -272,6 +282,17 @@ def open_subjects(conn: sqlite3.Connection) -> set[str]:
     }
 
 
+@dataclass(frozen=True)
+class Claimed:
+    tasks: list[Task]
+    #: Ids of tasks the claimant already held, whose lease was extended.
+    renewed: list[str]
+    expires_at: str
+    #: Tasks of any kind failed because their claims ran out too often; their
+    #: kinds close what they served.
+    given_up: list[Task]
+
+
 def claim(
     conn: sqlite3.Connection,
     kind: Kind,
@@ -279,21 +300,34 @@ def claim(
     claimant: str,
     limit: int,
     now: datetime,
-) -> tuple[list[Task], list[str], str]:
+    release_retries: int,
+) -> Claimed:
     """Lease up to `limit` waiting tasks of `kind` to `claimant`, oldest
     first, and extend the lease on those of that kind it already holds.
-
-    Returns the new tasks, the ids renewed and when the lease ends."""
+    First every expired claim is counted: the task waits again, or fails
+    once its claims ran out or were given back more than `release_retries`
+    further times."""
     stamp = timestamps.of(now)
     expires = timestamps.of(now + LEASE)
     with conn:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            "UPDATE agent_tasks SET status = 'waiting', claimed_by = NULL, "
-            "expires_at = NULL, updated_at = ? "
+        expired = conn.execute(
+            "SELECT id, claimed_by, releases FROM agent_tasks "
             "WHERE status = 'claimed' AND expires_at <= ?",
-            (stamp, stamp),
-        )
+            (stamp,),
+        ).fetchall()
+        failed: list[str] = []
+        for row in expired:
+            reason = f"the claim by {row['claimed_by']} ran out"
+            if _released(
+                conn,
+                str(row["id"]),
+                int(row["releases"]),
+                reason,
+                stamp,
+                release_retries,
+            ):
+                failed.append(str(row["id"]))
         renewed = [
             str(row[0])
             for row in conn.execute(
@@ -317,11 +351,65 @@ def claim(
         ]
         conn.executemany(
             "UPDATE agent_tasks SET status = 'claimed', claimed_by = ?, "
-            "expires_at = ?, release_reason = NULL, updated_at = ? WHERE id = ?",
+            "expires_at = ?, updated_at = ? WHERE id = ?",
             [(claimant, expires, stamp, task_id) for task_id in ids],
         )
-    chosen = [task for task_id in ids if (task := get(conn, task_id)) is not None]
-    return chosen, renewed, expires
+    return Claimed(
+        tasks=[task for task_id in ids if (task := get(conn, task_id)) is not None],
+        renewed=renewed,
+        expires_at=expires,
+        given_up=[
+            task for task_id in failed if (task := get(conn, task_id)) is not None
+        ],
+    )
+
+
+def _released(
+    conn: sqlite3.Connection,
+    task_id: str,
+    releases: int,
+    reason: str,
+    stamp: str,
+    retries: int,
+) -> bool:
+    """Count one ended claim. Returns whether the task failed for it."""
+    releases += 1
+    if releases > retries:
+        conn.execute(
+            "UPDATE agent_tasks SET status = 'failed', claimed_by = NULL, "
+            "expires_at = NULL, releases = ?, release_reason = ?, error = ?, "
+            "finished_at = ?, updated_at = ? WHERE id = ?",
+            (
+                releases,
+                reason,
+                f"Given up: {reason}, and the task was claimed "
+                f"{releases} time{'s' if releases != 1 else ''} without a result.",
+                stamp,
+                stamp,
+                task_id,
+            ),
+        )
+        return True
+    conn.execute(
+        "UPDATE agent_tasks SET status = 'waiting', claimed_by = NULL, "
+        "expires_at = NULL, releases = ?, release_reason = ?, updated_at = ? "
+        "WHERE id = ?",
+        (releases, reason, stamp, task_id),
+    )
+    return False
+
+
+def give_back(
+    conn: sqlite3.Connection, task: Task, reason: str, *, retries: int
+) -> Task:
+    """Return a held task to the pool with the agent's reason; past
+    `retries` further give-backs it fails instead."""
+    with conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _released(conn, task.id, task.releases, reason, timestamps.now(), retries)
+    released = get(conn, task.id)
+    assert released is not None
+    return released
 
 
 def withheld(conn: sqlite3.Connection, kind: Kind, claimant: str) -> int:
@@ -392,8 +480,9 @@ def set_status(
     *,
     release_reason: str | None = None,
 ) -> None:
-    """Hand a task back to the pool, or hold it while its result is reviewed;
-    either ends the claim."""
+    """Hand a task back to the pool for the server's own reason, or hold it
+    while its result is reviewed; either ends the claim without counting
+    toward its releases."""
     conn.execute(
         "UPDATE agent_tasks SET status = ?, claimed_by = NULL, expires_at = NULL, "
         "release_reason = ?, updated_at = ? WHERE id = ? AND finished_at IS NULL",
@@ -425,6 +514,24 @@ def finish(
         ),
     )
     conn.commit()
+
+
+def refusal_retries() -> int:
+    """Refused submissions an agent may follow with another, for kinds whose
+    internal run makes one model call and so has no retry count of its own."""
+    from . import product_settings
+
+    return product_settings.get(
+        product_settings.AutomationSettings
+    ).task_refusal_retries
+
+
+def release_retries() -> int:
+    from . import product_settings
+
+    return product_settings.get(
+        product_settings.AutomationSettings
+    ).task_release_retries
 
 
 class Submitted(BaseModel):
@@ -478,6 +585,10 @@ class Handler:
     #: Queue up to n tasks of due work when an agent asks for some, for kinds
     #: whose work nobody requests.
     queue: Callable[[int], object] | None = None
+    #: Close what a task served once it failed because its claims ran out or
+    #: were given back too often: (task, reason). Without one the failed
+    #: task is the whole outcome, followed by whoever queued it.
+    give_up: Callable[[Task, str], None] | None = None
 
 
 _json: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)

@@ -497,7 +497,7 @@ def _submit_agent_task(
     except ValidationError as exc:
         findings = [agent_tasks.Finding(check="shape", problem=str(exc))]
     if findings:
-        if task.failures >= agent_tasks.RETRIES:
+        if task.failures >= agent_tasks.refusal_retries():
             with store.transaction(conn):
                 store.audience_labels.record_failure(
                     conn, list(batch.texts), "An agent's labels were refused."
@@ -510,7 +510,7 @@ def _submit_agent_task(
                 findings=findings,
             )
         return agent_tasks.refused(
-            drafts, task, findings, agent_tasks.RETRIES - task.failures
+            drafts, task, findings, agent_tasks.refusal_retries() - task.failures
         )
     limits = product_settings.get(product_settings.AudienceLabellingSettings)
     labelled = _apply(
@@ -533,7 +533,19 @@ def _submit_agent_task(
     )
 
 
-AGENT_TASK = agent_tasks.Handler(submit=_submit_agent_task, queue=_queue_agent_tasks)
+def _give_up_agent_task(task: agent_tasks.Task, reason: str) -> None:
+    conn = store.substrate_connection()
+    with store.transaction(conn):
+        store.audience_labels.record_failure(
+            conn, list(AgentBatch.model_validate(task.state).texts), reason
+        )
+
+
+AGENT_TASK = agent_tasks.Handler(
+    submit=_submit_agent_task,
+    queue=_queue_agent_tasks,
+    give_up=_give_up_agent_task,
+)
 
 
 def _queued(conn: sqlite3.Connection, ids: list[str]) -> list[sqlite3.Row]:

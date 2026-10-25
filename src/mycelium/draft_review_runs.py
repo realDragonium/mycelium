@@ -2326,9 +2326,9 @@ def _submit_agent_review(
         )
     except (ValueError, TypeError) as exc:
         findings = [agent_tasks.Finding(check="review", problem=str(exc))]
-        if task.failures < agent_tasks.RETRIES:
+        if task.failures < agent_tasks.refusal_retries():
             return agent_tasks.refused(
-                conn, task, findings, agent_tasks.RETRIES - task.failures
+                conn, task, findings, agent_tasks.refusal_retries() - task.failures
             )
         # The agent stands as reviewer of the failed attempt, as a model
         # does, so a second failure can reject the draft.
@@ -2393,6 +2393,19 @@ def _submit_agent_review(
     return submitted
 
 
+def _give_up_agent_review(task: agent_tasks.Task, reason: str) -> None:
+    run = _task_run(task)
+    if run.status != "running":
+        return
+    _fail_agent_run(
+        run,
+        _task_settings.validate_json(str(task.state["settings"])),
+        f"No agent finished the review: {reason}",
+    )
+
+
 AGENT_TASK = agent_tasks.Handler(
-    prepare=_prepare_agent_review, submit=_submit_agent_review
+    prepare=_prepare_agent_review,
+    submit=_submit_agent_review,
+    give_up=_give_up_agent_review,
 )

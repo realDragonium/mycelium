@@ -509,12 +509,12 @@ def _submit_agent_task(
     except ValidationError as exc:
         findings = [agent_tasks.Finding(check="shape", problem=str(exc))]
     if findings:
-        if task.failures >= agent_tasks.RETRIES:
+        if task.failures >= agent_tasks.refusal_retries():
             return agent_tasks.closed(
                 drafts, task, "Refused too often.", failed=True, findings=findings
             )
         return agent_tasks.refused(
-            drafts, task, findings, agent_tasks.RETRIES - task.failures
+            drafts, task, findings, agent_tasks.refusal_retries() - task.failures
         )
     try:
         kept = _keep(
