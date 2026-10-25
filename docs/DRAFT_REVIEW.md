@@ -234,14 +234,19 @@ sweep below retries it.
 A sweep retries submitted drafts whose latest attempt failed without recording a
 review, such as provider failures, an unusable reviewer account, and attempts
 interrupted by a restart. It runs every minute while review is on and starts a
-retry 5 minutes after the failure, doubling the wait each time, at most 5
-retries per draft (about two and a half hours). Each retry is a fresh attempt
-with the usual single rerun where that applies. A curator's **Run again** or a backlog review
-starts the count over. Drafts with no attempt at all are left for the backlog
-review, and so are failures older than the whole retry schedule (about two
-hours and forty minutes), such as those in a restored copy of another
-instance or from before a long outage: the sweep does not review, and possibly
-apply, them unasked.
+retry 5 minutes after the failure, doubling the wait each time. The single
+rerun and every sweep retry count toward one limit, **Retries of a failed
+draft review** (**Settings → Limits → Draft review**, `failure_retries`,
+default 2): with the default a draft is reviewed at most three times after
+failures. A sweep retry gets the single rerun only while the limit allows it.
+Past the limit the draft stays submitted and is listed under [Stopped
+automations](KNOWLEDGE_HEALTH.md#stopped-automations) with the last failure;
+nothing retries it until the draft changes or an admin's **Retry** there,
+which starts the count over, as a curator's **Run again** or a backlog review
+does. Drafts with no attempt at all are left for the backlog review, and so
+are failures older than about two hours and forty minutes, such as those in a
+restored copy of another instance or from before a long outage: the sweep
+does not review, and possibly apply, them unasked.
 
 Earlier versions paused an attempt when the monthly AI budget was spent.
 Mycelium has no budget any more (see [AI models](AI_MODELS.md#ai-usage)), so
@@ -274,8 +279,10 @@ recorded, the run notes why, and the question stays open for a curation agent
 or a person. After its first answer the model answers again at most
 **AI answer retries per draft** times in a row (**Settings → Limits → Draft
 review**, `answer_retries`, default 2); then the run notes "Stopped AI answers
-after N; the questions wait for a person." A person's answer starts the count
-again. Its tokens count as draft review. In the web app the questions and an answer form sit at the top of the
+after N; the questions wait for a person." A curation agent's answer, the one
+that comes with evidence, counts toward the same limit, and past it the
+question is no longer offered to curation agents. A person's answer starts
+the count again. Its tokens count as draft review. In the web app the questions and an answer form sit at the top of the
 draft; such drafts sort first under Drafts and are counted on Home. The reviewer gets no new tools for this.
 
 ## Corrections

@@ -187,7 +187,8 @@ since their draft is still undecided.
    nobody has looked at since they or the statements around them changed. A
    second token cannot claim an item the first holds. Each claim extends the
    lease on every item of that kind you still hold; `limit=0` only renews.
-   An item whose lease runs out goes back to the pool.
+   An item whose lease runs out goes back to the pool, and that counts as a
+   skip (see below).
 2. **Check each item in the codebase.** Find where the product implements
    what the statement says, and what the neighbouring statements describe.
    Read the neighbours and any other candidates with `get_statements`, and
@@ -271,7 +272,15 @@ since their draft is still undecided.
    statement's text, a neighbour you were offered, or a statement naming
    one of its concepts changes (for a gap: until its text or the statement
    it is about changes, or a person reopens a gap an agent closed). A reviewer that asks again files a new gap, which
-   is a new item. `skipped` items are offered again at once. Releasing an
+   is a new item. `skipped` items are offered again at once, but each skip,
+   and each claim of the item that ran out, counts: past **Retries of a
+   curation item that was skipped or whose claim ran out** (**Settings →
+   Limits → Connecting statements**, `skip_retries`, default 2) the item is
+   not offered again until it changes or an admin retries it under [Stopped
+   automations](#stopped-automations). Any other outcome forgets the count.
+   A reviewer's question stops being offered once agents and the model
+   answered it more often in a row than the draft review's `answer_retries`;
+   it waits for a person. Releasing an
    item you do not hold, or with an outcome its kind does not take, is
    refused.
 
@@ -304,10 +313,26 @@ distinct, a gap closed as not applicable, and an item the agent skipped.
 
 ### Stopped automations
 
-Knowledge health lists the items automatic work stopped retrying: connect
-pass statements, [audience decisions](AUDIENCES.md#stopped-decisions) and gap
-follow-ups, each with the reason, the failures and when it stopped. Nothing
-retries them automatically until their inputs change (the statement text, the
-label, the gap). An admin's **Retry** (`POST /api/knowledge-health/stopped/retry`
+Knowledge health lists the items automatic work stopped retrying, each with
+the reason, the failures and when it stopped:
+
+- connect pass statements;
+- [audience decisions](AUDIENCES.md#stopped-decisions);
+- gap follow-ups;
+- [draft reviews](DRAFT_REVIEW.md) that failed past their retries;
+- curation items skipped, or whose claim ran out, past their retries;
+- mention recomputes: a queued vocabulary change whose recompute failed
+  past **Retries of a failing mention recompute** (`mention_retries`);
+- embeddings: a statement or name that failed to embed, while others
+  embedded, past **Retries of a statement or name that fails to embed**
+  (`embedding_retries`).
+
+The last two are under **Settings → Limits → Agent tasks and background
+work**, default 2. A failing row no longer holds up its queue: the mention
+worker redoes a failing chunk row by row and the embedding worker halves a
+failing batch until the row is alone, then passes over it. A provider outage
+fails every row alike and so stops none. Nothing retries a stopped item
+automatically until its inputs change (the statement text, the label, the
+gap, the draft, the item). An admin's **Retry** (`POST /api/knowledge-health/stopped/retry`
 with `kind` and `item_id`) offers the item to its automation again with a
 fresh count.

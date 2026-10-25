@@ -250,7 +250,10 @@ keeps its place and a running one starts over, keeping its run id. A run's
 only lasting effect is its final document write, so starting over repeats
 model calls but nothing else; a run that had already written its document is
 finished as written. A restarted run uses the current documentation model and
-writing profile, as **Retry** does. A run that cannot be admitted again, for
+writing profile, as **Retry** does. A run a restart cut off after it started
+more often than **Retries of a run a server restart interrupted**
+(**Settings → Limits → Document generation**, `restart_retries`, default 2)
+fails instead, saying how often, until someone retries it. A run that cannot be admitted again, for
 example because its model has no key now, fails with an error saying so;
 **Retry** starts it again. In quarantine no run is started again: each fails.
 

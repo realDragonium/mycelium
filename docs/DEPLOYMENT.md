@@ -859,7 +859,8 @@ still fails:
   still waiting for a vector are left out.
 - A write still succeeds. The statement or name is saved without a vector and
   stays out of semantic search until a background worker re-embeds it, which it
-  retries every 30 seconds. Statement responses carry `embedding_pending`; name
+  retries every 30 seconds. A row that keeps failing while others embed is
+  passed over and listed under Stopped automations on Knowledge health. Statement responses carry `embedding_pending`; name
   responses are unchanged. An edited statement's old vector is removed, so
   search never matches its previous wording.
 - A startup that has to rebuild an index fails and reports why; it needs the

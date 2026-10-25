@@ -429,7 +429,8 @@ def release_curation_work(
     `proposed`: your draft `draft_id` proposes the change. `no_link`: an
     isolated/unnamed/undescribed/unused item should not change; give a reason.
     Neither is offered again until the item or the statements around it
-    change. `skipped`: you did not get to them; they are offered again.
+    change. `skipped`: you did not get to them; they are offered again
+    until skipped, or left to run out, more often than the limit.
 
     `answered` (one `question` item): your `answer` to the reviewer's
     questions with the `evidence` you checked, in `set_operation_evidence`'s

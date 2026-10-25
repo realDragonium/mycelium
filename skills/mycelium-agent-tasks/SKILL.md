@@ -62,7 +62,8 @@ the token can claim.
    - `failed`: the work is closed; the run, plan or labels record why.
 4. **Release what you cannot finish.** `release_agent_task(task_id,
    reason)` puts the task back for another agent, sooner than the lease
-   running out.
+   running out; the next claimant sees your reason. Releases and leases
+   that ran out count: past the limit the task fails (`status` `failed`).
 
 ## By kind
 
