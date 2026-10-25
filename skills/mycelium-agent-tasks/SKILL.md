@@ -29,9 +29,15 @@ the token can claim.
    You hold the task for 30 minutes (`expires_at`); calling
    `claim_agent_task(kind, limit=0)` renews it. Each task has:
    - `brief.instructions`: the system prompt the server's model would get.
-     Follow it as your instructions for this task: it holds the writing
-     profile's guidance, exposure rules and template, or the labelling and
-     planning rules.
+     Follow it as your instructions for this task.
+   - `brief.profile` (documentation, document_review,
+     documentation_planning and plan_review): the writing profile the task
+     is for, in full: `name`, `audience` (with its `description`),
+     `guidance`, `exposure` (disclosure rules), `templates` (only the chosen
+     one for a document), the policies and `destinations`. Read it and
+     follow it. What to write, for whom and what to leave out is the
+     profile's to say, not this skill's. `get_writing_profile(name)` reads the
+     same profile outside a task.
    - `brief.input`: the first message the model would get, with the request
      and what the server already read for it.
    - `read_tools` (documentation, ingest and connect), `brief.result` and
@@ -61,20 +67,22 @@ the token can claim.
 ## By kind
 
 **`documentation`.** Write the document `brief.input` asks for, in the
-profile's template, for `brief.audience`. Every claim must come from a
+template in `brief.profile.templates`, following the profile's guidance and
+disclosure rules, for `brief.profile.audience`. Every claim must come from a
 statement you read. List those statements in `statement_ids`. A refusal
 names the statements the run never read or the audience may not see, and
 any internal vocabulary or media the document may not carry.
 
 **`document_review`.** You are never offered a review of your own document.
-Judge the document in `brief.input` against `brief.instructions` only:
-exposure (does it tell the audience something it must not get) and
-conformance (does it follow the template). Fail a check only with a
+Judge the document in `brief.input` against `brief.instructions` and
+`brief.profile`: exposure (does it tell the profile's audience something its
+description or the disclosure rules say it must not get) and conformance
+(does it follow the template). Fail a check only with a
 concrete finding saying where and what is wrong. Your review is recorded
 either way; a failed one sends the document back to its writer.
 
 **`documentation_planning`.** Propose the documents the profile's audience
-needs from the overview in `brief.input`, most valuable first. Place the
+(`brief.profile.audience`) needs, in the profile's templates, from the overview in `brief.input`, most valuable first. Place the
 `uncovered_statements` (visible, but cited by no document of the profile)
 a reader needs: list one in the `statement_ids` of an `update` of the
 existing document it belongs in (`existing_documents` gives each one's

@@ -32,16 +32,17 @@ code or from memory: a missing fact is a knowledge gap to fill first.
 
 - **Profile** (`guideline_set`) decides the guidance, the templates and the
   **audience** the document is for, which decides what it may draw on.
-  `GET /api/documentation/profiles` lists them with `effective_audience`,
-  templates, `ready` and `issues`. Pass one when the request or the operator
-  names it, or the audience makes it clear (a customer-facing page needs a
-  profile that writes for an external audience); otherwise the run chooses
-  among the ready profiles. The starter profile is `kb-authoring`.
-- **Type** (`document_type`) is a template of that profile; the starter
-  profile has `tutorial`, `how-to`, `reference`, `explanation` and
-  `troubleshooting`. Pass it when the request makes it clear: "how do I"
-  is a how-to, "what are the limits" a reference, "why does" an
-  explanation, "it fails when" troubleshooting.
+  `list_writing_profiles` lists them with `effective_audience`, templates,
+  `ready` and `issues`; `get_writing_profile(name)` returns one in full,
+  with the description of the audience it writes for. Pass one when the
+  request or the operator names it, or when one profile's audience is
+  plainly the reader the request describes; otherwise the run chooses among
+  the ready profiles. The profiles are the instance's own: read them rather
+  than assuming what a name means. A fresh instance has none until someone
+  creates one.
+- **Type** (`document_type`) is a template of that profile; the profile
+  names them. Pass it when the request makes plain which template fits;
+  otherwise the run chooses.
 - **Anchor** (`anchor_entity_id`) names the one concept the document is
   about, found with `search_entities` / `list_entities`. With a profile and
   a type, it gives the document a stable identity: a later request for the
@@ -201,7 +202,9 @@ or dismissed item again. Report what gave up.
   the operator asked and the document's writing profile's `delivery` is
   `agents` or `auto`; otherwise the call is refused, and the operator publishes
   from the document (**Create / update GitHub PR**). Under `auto` the server
-  publishes every reviewed revision itself; do not deliver it again. Merging the pull request is
+  publishes every reviewed revision itself; do not deliver it again. A profile
+  that names its destinations (`destinations` in the profile listing)
+  publishes only there; pick one of those. Merging the pull request is
   the destination repository's decision, never yours.
 - **Missing facts.** Fill them in the knowledge base, then run the request
   again.
