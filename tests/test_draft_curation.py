@@ -393,15 +393,15 @@ def test_sweep_retries_a_provider_failure_after_backoff(curated_app, monkeypatch
     _failing_provider(monkeypatch)
     draft_id = _draft()
     failed = _latest(draft_id)
-    assert (failed.status, failed.attempt, failed.retries) == ("failed", 2, 0)
-    due = _finished(failed) + draft_review_runs.RETRY_BACKOFF
+    assert (failed.status, failed.attempt, failed.retries) == ("failed", 2, 1)
+    due = _due(failed)
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment())
 
     assert draft_review_runs.sweep(due - timedelta(seconds=1)) == []
     assert draft_review_runs.sweep(due) == [draft_id]
 
     retried = _latest(draft_id)
-    assert (retried.attempt, retried.retries) == (1, 1)
+    assert (retried.attempt, retried.retries) == (1, 2)
     assert retried.previous_failure == "Fixture provider outage"
     assert retried.application == "applied"
     assert server.get_draft(draft_id)["status"] == "approved"
@@ -432,17 +432,34 @@ def test_sweep_waits_for_credentials_without_recording_runs(curated_app, monkeyp
     assert _latest(draft_id).run_id == failed.run_id
 
 
-def test_sweep_stops_after_the_last_attempt(curated_app, monkeypatch):
+def test_a_review_past_its_failure_retries_stops_until_an_admin_retries_it(
+    curated_app, monkeypatch
+):
+    client, _ = curated_app
     _automatic()
     _failing_provider(monkeypatch)
     draft_id = _draft()
-    for _ in range(draft_review_runs.MAX_RETRIES):
-        assert draft_review_runs.sweep(_due(_latest(draft_id))) == [draft_id]
+    assert draft_review_runs.sweep(_due(_latest(draft_id))) == [draft_id]
     exhausted = _latest(draft_id)
-    assert exhausted.retries == draft_review_runs.MAX_RETRIES
-    assert exhausted.attempt == 2
-    assert draft_review_runs.sweep(_finished(exhausted) + timedelta(days=30)) == []
+    assert (exhausted.attempt, exhausted.retries) == (1, 2)
+
+    later = _finished(exhausted) + timedelta(days=30)
+    assert draft_review_runs.sweep(later) == []
+    assert draft_review_runs.sweep(later) == []
+    stopped = client.get("/api/knowledge-health").json()["stopped"]
+    assert [(s["kind"], s["item_id"], s["failures"]) for s in stopped] == [
+        ("draft_review", draft_id, 3)
+    ]
+    assert "Fixture provider outage" in stopped[0]["reason"]
     assert server.get_draft(draft_id)["status"] == "submitted"
+
+    assert client.post(
+        "/api/knowledge-health/stopped/retry",
+        json={"kind": "draft_review", "item_id": draft_id},
+    ).json() == {"retried": True}
+    assert draft_review_runs.sweep(later) == [draft_id]
+    assert (_latest(draft_id).attempt, _latest(draft_id).retries) == (2, 1)
+    assert client.get("/api/knowledge-health").json()["stopped"] == []
 
 
 def test_sweep_recovers_restarts_and_configuration_failures(curated_app):
@@ -578,8 +595,8 @@ def test_sweep_does_not_supersede_a_run_that_finished_after_selection(
     retry_due = draft_review_runs._retry_due
     interleaved = []
 
-    def selection_then_manual_rerun(run, now):
-        due = retry_due(run, now)
+    def selection_then_manual_rerun(run, now, retries):
+        due = retry_due(run, now, retries)
         if due and not interleaved:
             interleaved.append(run.run_id)
             _asks_then_approves(monkeypatch)

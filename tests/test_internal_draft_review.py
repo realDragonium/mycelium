@@ -1128,7 +1128,7 @@ def test_sweep_resumes_a_review_an_earlier_budget_paused(review_server, monkeypa
     paused = _budget_paused(
         draft_id,
         attempt=2,
-        retries=draft_review_runs.MAX_RETRIES,
+        retries=2,
         previous_failure="Provider unavailable.",
     )
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment())
@@ -1136,7 +1136,7 @@ def test_sweep_resumes_a_review_an_earlier_budget_paused(review_server, monkeypa
     assert draft_review_runs.sweep() == [draft_id]
     result = _result(draft_id)
     assert result["run_id"] != paused.run_id
-    assert (result["attempt"], result["retries"]) == (2, draft_review_runs.MAX_RETRIES)
+    assert (result["attempt"], result["retries"]) == (2, 2)
     assert result["previous_failure"] == "Provider unavailable."
     assert result["application"] == "applied"
 
@@ -1148,8 +1148,8 @@ def test_sweep_does_not_resume_a_superseded_paused_run(review_server, monkeypatc
     retry_due = draft_review_runs._retry_due
     interleaved = []
 
-    def selection_then_manual_rerun(run, now):
-        due = retry_due(run, now)
+    def selection_then_manual_rerun(run, now, retries):
+        due = retry_due(run, now, retries)
         if due and not interleaved:
             interleaved.append(run.run_id)
             monkeypatch.setattr(
