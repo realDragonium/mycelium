@@ -763,7 +763,14 @@ and Document generation instructions still authored by `seed` get
 the new build's default appended as a new version, and saved instructions
 that predate a newer default are logged as a warning. The first start of a
 build with this behaviour also creates `shipped_prompt_texts` in
-`mycelium-prompts.db` and records the defaults it saw.
+`mycelium-prompts.db` and records the defaults it saw. An instance that ran
+with the previous audience labelling default and never saved its own gets
+that text saved as an `upgrade` version, so labelling keeps its rule about
+what external audiences never get.
+
+Starting a build without packaged writing profiles changes nothing stored: a
+`kb-authoring` profile seeded by an earlier build stays as it is. A fresh
+instance starts with no writing profile.
 
 Restoring a snapshot undoes these with everything else. A code-only
 rollback does not: the previous build serves the appended versions and

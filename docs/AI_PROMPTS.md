@@ -64,3 +64,10 @@ report a newer default rather than replacing it. The instance records when it
 first saw each default in `shipped_prompt_texts` in `mycelium-prompts.db`;
 backups carry it. Documentation profile templates are not updated this way —
 see [Guideline sets](GUIDELINE_SETS.md).
+
+When a release stops shipping a default that carried rules about what an
+audience may get, an instance that ran with the old default and never saved
+its own keeps the old text as a saved version authored by `upgrade`, so its
+behaviour does not change on deploy. Audience labelling is the one such
+case: its old default said what external audiences never get; the current
+default leaves that to the audience descriptions.

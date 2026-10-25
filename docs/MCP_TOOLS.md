@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 50 of its 88 registered tools over MCP. Every
+question. Mycelium therefore advertises 55 of its 93 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -11,19 +11,20 @@ The list lives in `server.MCP_TOOLS`. `tests/test_mcp_surface.py` keeps this fil
 that set, and the registered tools in agreement.
 
 Role filtering still applies: `tools/list` shows a caller only the tools their role
-can invoke. The minimum role is reader: a reader sees 20 tools. A drafter sees 41
+can invoke. The minimum role is reader: a reader sees 22 tools. A drafter sees 43
 because their writes are queued on a draft, but they do not see `list_drafts`,
 `request_documentation`, `revise_document`, `request_documentation_plan`,
-`deliver_document` or the tools that claim and do agent tasks. A writer sees
-47 and does not see the admin-only
-`delete_statement`, `merge_statements` or `merge_entities`. An admin sees all
-50. While Ask is set to External agent, `ask` is listed to no one, so each
+`deliver_document`, `save_writing_profile` or the tools that claim and do
+agent tasks. A writer sees 50 and does not see the admin-only
+`delete_statement`, `merge_statements`, `merge_entities`,
+`retire_writing_profile` or `restore_writing_profile`. An admin sees all
+55. While Ask is set to External agent, `ask` is listed to no one, so each
 count is one lower.
 
 ## Over MCP
 
-MCP covers the read path, statement and entity authoring, drafts, and the
-model-backed entry points a client cannot reproduce itself. Approval, reviewed
+MCP covers the read path, statement and entity authoring, drafts, writing
+profiles, and the model-backed entry points a client cannot reproduce itself. Approval, reviewed
 application and the reviewer's own records stay off MCP: approval is the operator's
 decision, and the rest runs in-process.
 
@@ -70,7 +71,7 @@ decision, and the rest runs in-process.
 | `request_documentation` | Starts a documentation run. `anchor_entity_id`, with a guideline set and document type, names the entity the document is about, so a repeat request revises that document; without one, the run creates a document. |
 | `get_documentation_run` | Polls a run that `request_documentation` or `revise_document` returns. A run the review refused lists the failed findings in `summary.review_findings`; a retry briefed with them lists them in `review_notes`. `retryable` says whether the run can be started again as it was (it wrote nothing and was not a manual edit). |
 | `get_generated_document` | Reads the written document and the revision that `revise_document` needs, the state of its pull request (open, merged or closed), refreshed from GitHub at most once a minute, and `stale`: whether a statement it cites was edited, deleted or merged away since, or is no longer visible to the document's audience, with old and new text. |
-| `claim_agent_task` | Leases work an action set to External agent would otherwise give a server model (writing, reviewing or planning documentation, reviewing a plan's items, labelling audiences or reviewing waiting external grants, ingest, the connect pass, alias discovery, draft review) for 30 minutes, with a brief holding the model's instructions, input and result schema. Writers and admins only; a draft's creator is never given its review, nor a labeller the review of its grants, and `note` says when such tasks were withheld. See [Agent tasks](AGENT_TASKS.md). |
+| `claim_agent_task` | Leases work an action set to External agent would otherwise give a server model (writing, reviewing or planning documentation, reviewing a plan's items, labelling audiences or reviewing waiting external grants, ingest, the connect pass, alias discovery, draft review) for 30 minutes, with a brief holding the model's instructions, input and result schema; a documentation task's brief also carries the whole writing profile it is for (`profile`). Writers and admins only; a draft's creator is never given its review, nor a labeller the review of its grants, and `note` says when such tasks were withheld. See [Agent tasks](AGENT_TASKS.md). |
 | `read_for_agent_task` | Runs one of a task's read tools for it and records the read; a documentation task's reads run inside the audience boundary it writes for. |
 | `submit_agent_task` | Hands in a claimed task's result, which passes the checks a server model's output would; a refusal returns findings and the retries left. |
 | `release_agent_task` | Gives a claimed task back to the queue with a reason. |
@@ -78,7 +79,12 @@ decision, and the rest runs in-process.
 | `revise_document` | Revises a generated document. `update_sources` briefs the run with the cited statements that changed. A delivered document's revision starts from GitHub edits; when both sides changed it is refused unless `start_from_destination` is passed. |
 | `request_documentation_plan` | Starts the same plan as **Documents → Plan** for a writing profile, on the server's model or as a `documentation_planning` agent task. An agent keeping documentation current needs to ask which documents are missing, not only write the ones it already knows. Writers and admins only. See [Documentation planning](DOCUMENTATION_PLANNING.md). |
 | `get_documentation_plan` | Reads a writing profile's plan as **Documents → Plan** shows it: the items with their state, the AI reviewer's decisions and reasons, the runs approved items started and why one could not start, out-of-date documents, coverage gaps and the uncovered and dismissed statements. An agent keeping documentation current needs to see what was proposed and decided before it plans again or follows the runs. |
-| `deliver_document` | Opens or updates the document's GitHub pull request, as **Create / update GitHub PR** does. Refused unless the document's writing profile lets agents deliver (`agents`, or `auto`, where the server also publishes each reviewed revision itself; off by default), so publishing outside the instance stays a person's decision until a writer hands it to agents for that profile. Merging stays with the destination repository. Writers and admins only. |
+| `deliver_document` | Opens or updates the document's GitHub pull request, as **Create / update GitHub PR** does. Refused unless the document's writing profile lets agents deliver (`agents`, or `auto`, where the server also publishes each reviewed revision itself; off by default), so publishing outside the instance stays a person's decision until a writer hands it to agents for that profile, and refused for a destination the profile does not publish to. Merging stays with the destination repository. Writers and admins only. |
+| `list_writing_profiles` | Lists the writing profiles with their audience, policies, destinations, template names, readiness and `revision`. A writer or admin agent managing documentation needs to see what profiles exist before it plans or writes. |
+| `get_writing_profile` | Reads one profile in full (guidance, disclosure rules, every template, policies, destinations, `revision`) and the description of the audience it writes for. An agent reads the profile it writes for here, and an editor reads the `revision` a save needs. |
+| `save_writing_profile` | Creates or updates a profile with its whole content, through the same validation, role rules and revision check as **Settings → Documentation**: a stale `revision` is refused, and removing a template or changing an existing profile's audience or destinations needs an admin. Real writers and admins only; it lands live and never queues on a draft. |
+| `retire_writing_profile` | Retires a profile, keeping its history and documents, as **Retire profile** does. The default profile cannot be retired. Real admins only. |
+| `restore_writing_profile` | Brings a retired profile back with the texts it held when it was retired. Real admins only. |
 
 ### Uploading media
 
