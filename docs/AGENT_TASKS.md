@@ -160,7 +160,7 @@ loop would try again:
 When the last retry is used, the run is recorded as nothing written, the plan
 fails, a plan review's items wait for a person, or the statements' labelling failure is counted, as for a server model.
 A writing profile that retries failed AI work then queues the work again, as
-for a server model
+for a server model, up to that kind's retries limit
 ([When AI work fails](DOCUMENTATION_PLANNING.md#when-ai-work-fails)).
 A failed `audience_review` task counts a failure for each of its items; an item
 past **Retries of a failed AI audience decision** is not queued again until its

@@ -5,7 +5,7 @@ CREATE TABLE draft_review_settings (
     revision INTEGER NOT NULL CHECK(revision > 0),
     body_json TEXT NOT NULL
 );
-INSERT INTO "draft_review_settings" VALUES(1,1,'{"mode": "off", "reviewer_id": "", "application_enabled": false, "alias_decisions": false, "auto_apply": "clean"}');
+INSERT INTO "draft_review_settings" VALUES(1,1,'{"mode": "off", "reviewer_id": "", "application_enabled": false, "alias_decisions": false, "answer_questions": false, "reject_refused": false, "auto_apply": "clean"}');
 CREATE TABLE github_app_connections (
     name TEXT PRIMARY KEY,
     body_json TEXT NOT NULL
@@ -45,12 +45,12 @@ CREATE TABLE product_settings (
 INSERT INTO "product_settings" VALUES('ask',1,'{"max_tokens":8000,"max_retries":4,"request_timeout_s":75.0,"op_cap":25,"wall_clock_s":90.0,"thinking":false,"kind":"ask","cache":true,"recon_k":8}');
 INSERT INTO "product_settings" VALUES('ingest',1,'{"max_tokens":32000,"max_retries":4,"request_timeout_s":90.0,"op_cap":50,"wall_clock_s":300.0,"thinking":true,"kind":"ingest","max_input_chars":20000}');
 INSERT INTO "product_settings" VALUES('docgen',1,'{"max_tokens":32000,"max_retries":4,"request_timeout_s":120.0,"op_cap":150,"wall_clock_s":900.0,"thinking":true,"kind":"docgen","max_prompt_chars":2000,"recon_k":30}');
-INSERT INTO "product_settings" VALUES('draft_review',1,'{"max_tokens":6000,"max_retries":0,"request_timeout_s":90.0,"kind":"draft_review","max_draft_tokens":300000}');
+INSERT INTO "product_settings" VALUES('draft_review',1,'{"max_tokens":6000,"max_retries":0,"request_timeout_s":90.0,"kind":"draft_review","max_draft_tokens":300000,"answer_retries":2,"refresh_reviews":2}');
 INSERT INTO "product_settings" VALUES('alias_discovery',1,'{"max_tokens":6000,"max_retries":0,"request_timeout_s":90.0,"kind":"alias_discovery","max_input_chars":100000}');
-INSERT INTO "product_settings" VALUES('audience_labelling',1,'{"max_tokens":6000,"max_retries":2,"request_timeout_s":90.0,"kind":"audience_labelling","automatic":true,"confirm_external_grants":true,"ai_grant_review":false,"sample_size":50,"min_sample_precision_percent":90,"batch_size":25}');
+INSERT INTO "product_settings" VALUES('audience_labelling',1,'{"max_tokens":6000,"max_retries":2,"request_timeout_s":90.0,"kind":"audience_labelling","automatic":true,"confirm_external_grants":true,"ai_grant_review":false,"ai_label_decisions":false,"sample_size":50,"min_sample_precision_percent":90,"batch_size":25,"decision_retries":2}');
 INSERT INTO "product_settings" VALUES('documentation_planning',1,'{"max_tokens":12000,"max_retries":2,"request_timeout_s":300.0,"kind":"documentation_planning","max_entities":150,"max_capabilities":150,"max_items":15,"max_uncovered":40,"coverage_min_statements":10,"replan_hint_statements":25,"approve_batch":2,"max_calls":1,"plan_retries":2,"plan_review_retries":2,"item_start_retries":2}');
 INSERT INTO "product_settings" VALUES('documentation_maintenance',1,'{"kind":"documentation_maintenance","quiet_minutes":30,"revisions_per_day":5,"run_retries":2,"revision_start_retries":2,"delivery_retries":2}');
-INSERT INTO "product_settings" VALUES('connect',1,'{"max_tokens":32000,"max_retries":4,"request_timeout_s":120.0,"op_cap":60,"wall_clock_s":300.0,"thinking":true,"kind":"connect","batch_size":5,"max_run_tokens":2000000}');
+INSERT INTO "product_settings" VALUES('connect',1,'{"max_tokens":32000,"max_retries":4,"request_timeout_s":120.0,"op_cap":60,"wall_clock_s":300.0,"thinking":true,"kind":"connect","batch_size":5,"max_run_tokens":2000000,"connect_automatically":false,"decide_duplicates":false,"describe_concepts":false,"act_on_gaps":false,"connect_retries":2,"follow_up_retries":2}');
 INSERT INTO "product_settings" VALUES('concurrency',1,'{"kind":"concurrency","model_loops":2,"documentation_runs":2}');
 INSERT INTO "product_settings" VALUES('documentation',1,'{"kind":"documentation","guideline_set":"kb-authoring","destinations":[]}');
 INSERT INTO "product_settings" VALUES('setup',1,'{"kind":"setup","dismissed":[]}');
@@ -67,7 +67,7 @@ CREATE TABLE prompt_texts (
     created_by TEXT,
     UNIQUE (type, name, version)
 );
-INSERT INTO "prompt_texts" VALUES('ptx_20665b5af72c','guideline-set','kb-authoring/guidance','# Knowledge-Base Authoring from Substrate
+INSERT INTO "prompt_texts" VALUES('ptx_273bbb20fa2e','guideline-set','kb-authoring/guidance','# Knowledge-Base Authoring from Substrate
 
 Query the mycelium product substrate to gather facts about a topic, then write a
 markdown document from the Diátaxis template for the document type you were given.
@@ -199,8 +199,8 @@ Rules that apply to all types when filling in the template:
 - [ ] Reference: tables used for structured data; prose only in `Notes` and section preambles
 - [ ] Explanation: analogy or mental model present; no step-by-step instructions
 - [ ] Troubleshooting: organized by symptom (what the user sees), not by internal cause
-',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_82b4da568618','guideline-set','kb-authoring/exposure','# What a knowledge-base article may reveal
+',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_ec5e781fe979','guideline-set','kb-authoring/exposure','# What a knowledge-base article may reveal
 
 This set writes for a reader who is not in the room and may not be in the
 company. An article''s frontmatter names its audience as `external`, `internal`
@@ -267,8 +267,8 @@ reader, leave the claim out and let the gap stand.
 Fail the exposure check when a withheld detail is still in the text, or when a
 permitted claim only works because one is. Pass it when everything the article
 says is both useful to its reader and inside this boundary.
-',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_3e3d47a80906','guideline-set','kb-authoring/tutorial','---
+',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_493fffb1e4df','guideline-set','kb-authoring/tutorial','---
 title: 
 type: tutorial
 audience: external
@@ -344,8 +344,8 @@ section is worse than no section. -->
 
 - [How to {related task}]({path}) — when you''re ready to {scenario}
 - [How {concept} works]({path}) — if you want to understand what just happened
-',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_30e1ec38b717','guideline-set','kb-authoring/how-to','---
+',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_b3b5dad0be79','guideline-set','kb-authoring/how-to','---
 title: 
 type: how-to
 audience: external
@@ -412,8 +412,8 @@ section is worse than no section. -->
 
 - [Reference: {settings/fields used}]({path})
 - [How {concept} works]({path})
-',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_8abc83985007','guideline-set','kb-authoring/reference','---
+',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_01cc71f9e8f4','guideline-set','kb-authoring/reference','---
 title: 
 type: reference
 audience: external
@@ -477,8 +477,8 @@ section is worse than no section. -->
 
 - [How to configure {area}]({path})
 - [How {concept} works]({path})
-',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_451a504bdf96','guideline-set','kb-authoring/explanation','---
+',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_c471fab3f5fe','guideline-set','kb-authoring/explanation','---
 title: 
 type: explanation
 audience: external
@@ -549,8 +549,8 @@ section is worse than no section. -->
 
 - [How to {related task}]({path})
 - [Reference: {related fields/settings}]({path})
-',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_326bc6f145a2','guideline-set','kb-authoring/troubleshooting','---
+',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_2927861fba05','guideline-set','kb-authoring/troubleshooting','---
 title: 
 type: troubleshooting
 audience: external
@@ -632,12 +632,12 @@ section is worse than no section. -->
 
 - [How to {related task}]({path})
 - [How {concept} works]({path})
-',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_81bffef56946','audience','internal-technical','{"name":"Internal technical","scope":"internal","description":"Engineers, support engineers and operators inside the company who build and run the product. They need the full technical picture: architecture, internal components, configuration, failure modes, limits and workarounds. Nothing is withheld from them: every statement may be shown to this audience.","includes":["internal-non-technical","external-technical","external-non-technical"]}',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_dfb541066615','audience','internal-non-technical','{"name":"Internal non-technical","scope":"internal","description":"Colleagues in sales, customer success, marketing and management. They need what the product does and for whom, its options, the limits that affect customers and how internal processes run, in plain language. They do not need code, internal component names, data models or infrastructure detail.","includes":["external-non-technical"]}',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_853a69299edf','audience','external-technical','{"name":"External technical","scope":"external","description":"Developers and administrators at customer or partner organisations who integrate with the product. They need what an integrator needs: APIs, webhooks, single sign-on, provisioning, data exports, authentication, rate limits and the settings they control. They must not get internal architecture, internal service or component names, infrastructure, internal processes, unreleased work, security internals, or anything about other customers.","includes":["external-non-technical"]}',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_e43cd9c6da35','audience','external-non-technical','{"name":"External non-technical","scope":"external","description":"End users and customer stakeholders who use the product through its interface. They need visible product behaviour: what features do, how to use them, which settings exist and what they change. They must not get technical internals, integration mechanics, internal processes, the roadmap, commercial terms, or anything about other customers.","includes":[]}',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_2310a0f6a2fe','doctrine','ingest','# Ingest doctrine
+',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_e39019f6bb75','audience','internal-technical','{"name":"Internal technical","scope":"internal","description":"Engineers, support engineers and operators inside the company who build and run the product. They need the full technical picture: architecture, internal components, configuration, failure modes, limits and workarounds. Nothing is withheld from them: every statement may be shown to this audience.","includes":["internal-non-technical","external-technical","external-non-technical"]}',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_752f912ba120','audience','internal-non-technical','{"name":"Internal non-technical","scope":"internal","description":"Colleagues in sales, customer success, marketing and management. They need what the product does and for whom, its options, the limits that affect customers and how internal processes run, in plain language. They do not need code, internal component names, data models or infrastructure detail.","includes":["external-non-technical"]}',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_6975ce54491b','audience','external-technical','{"name":"External technical","scope":"external","description":"Developers and administrators at customer or partner organisations who integrate with the product. They need what an integrator needs: APIs, webhooks, single sign-on, provisioning, data exports, authentication, rate limits and the settings they control. They must not get internal architecture, internal service or component names, infrastructure, internal processes, unreleased work, security internals, or anything about other customers.","includes":["external-non-technical"]}',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_69f1ee44a92b','audience','external-non-technical','{"name":"External non-technical","scope":"external","description":"End users and customer stakeholders who use the product through its interface. They need visible product behaviour: what features do, how to use them, which settings exist and what they change. They must not get technical internals, integration mechanics, internal processes, the roadmap, commercial terms, or anything about other customers.","includes":[]}',0,1,'2026-10-25T09:29:41.627Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_970c34545224','doctrine','ingest','# Ingest doctrine
 
 You are turning a block of free text into a reviewable **draft** of changes to a
 knowledge substrate. You never write anything live. You read the substrate,
@@ -845,8 +845,8 @@ Conclude by calling `emit_draft` **exactly once** with:
 You do not create the draft yourself and you do not call any write tool — the
 harness queues your ops into a draft for human review. Your job is to decide
 well and to show your reconcile work.
-',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_96c9f27efbf5','doctrine','docgen','# Documentation generation doctrine
+',0,1,'2026-10-25T09:29:41.628Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_4b32fcd24bfd','doctrine','docgen','# Documentation generation doctrine
 
 You are writing **one document** about a topic, from a knowledge substrate,
 for a reader who will never see the substrate. What you write is stored as it
@@ -1027,8 +1027,8 @@ Conclude by calling `emit_document` **exactly once** with:
 You do not store the document and you do not name the page. The harness does
 both. Your job is to gather honestly, to write only what you gathered, and to
 say plainly what was not there.
-',0,1,'2026-10-24T20:01:51.843Z','seed');
-INSERT INTO "prompt_texts" VALUES('ptx_df81307a893a','doctrine','ingest','Operator edit.',0,2,'2026-10-24T20:01:51.869Z',NULL);
+',0,1,'2026-10-25T09:29:41.628Z','seed');
+INSERT INTO "prompt_texts" VALUES('ptx_b02849301dee','doctrine','ingest','Operator edit.',0,2,'2026-10-25T09:29:41.668Z',NULL);
 CREATE TABLE shipped_prompt_texts (
     type          TEXT NOT NULL,
     name          TEXT NOT NULL,
@@ -1036,14 +1036,14 @@ CREATE TABLE shipped_prompt_texts (
     first_seen_at TEXT NOT NULL,
     PRIMARY KEY (type, name, digest)
 );
-INSERT INTO "shipped_prompt_texts" VALUES('doctrine','ask','859dc0b9fe072c7ddc7eb737c495e8e0a0e5e74d6aa2200a90fe7c094b5c4990','2026-10-24T20:01:51.843Z');
-INSERT INTO "shipped_prompt_texts" VALUES('doctrine','ingest','bed27b1df978d4171183b33682385ab8d5b5a16d489393853d61ffe8d9d62126','2026-10-24T20:01:51.843Z');
-INSERT INTO "shipped_prompt_texts" VALUES('doctrine','docgen','61795f64100dd29146174d6a2d7cbdc13d00af9c0c22a37dd4a952bd67f25717','2026-10-24T20:01:51.843Z');
-INSERT INTO "shipped_prompt_texts" VALUES('doctrine','document_review','6ce0bd9c74e237a7a20a97c90c682443f998737be95363b78e51617defafb8ae','2026-10-24T20:01:51.844Z');
-INSERT INTO "shipped_prompt_texts" VALUES('doctrine','draft_review','6e327bbe1a0d6c4ea3b943a47b779115076209a426e3a41986fcd8501f781bb6','2026-10-24T20:01:51.844Z');
-INSERT INTO "shipped_prompt_texts" VALUES('doctrine','alias_discovery','3f1ce2eee21285884d2184146a84037a688982ee82c9181db6da263175a671c6','2026-10-24T20:01:51.849Z');
-INSERT INTO "shipped_prompt_texts" VALUES('doctrine','audience_labelling','48d63ca78d5a43e0247fc5a200c2413aa0a9488ef7edc83222424602b6a25feb','2026-10-24T20:01:51.852Z');
-INSERT INTO "shipped_prompt_texts" VALUES('doctrine','documentation_planning','1a0ef2e825826a23a39e59aefc4444c0329528a6768f4fd348eb8faaf4a65661','2026-10-24T20:01:51.852Z');
-INSERT INTO "shipped_prompt_texts" VALUES('doctrine','plan_review','d5c6571e749ee5c2117c9c58a560cad63f81266c1e668444a4541986ca7d1605','2026-10-24T20:01:51.852Z');
-INSERT INTO "shipped_prompt_texts" VALUES('doctrine','connect','a74d6236cc54939ce1249b78202b35b39d10b0c76d1b7f50e18c5b1cae4affa1','2026-10-24T20:01:51.852Z');
+INSERT INTO "shipped_prompt_texts" VALUES('doctrine','ask','859dc0b9fe072c7ddc7eb737c495e8e0a0e5e74d6aa2200a90fe7c094b5c4990','2026-10-25T09:29:41.628Z');
+INSERT INTO "shipped_prompt_texts" VALUES('doctrine','ingest','bed27b1df978d4171183b33682385ab8d5b5a16d489393853d61ffe8d9d62126','2026-10-25T09:29:41.628Z');
+INSERT INTO "shipped_prompt_texts" VALUES('doctrine','docgen','61795f64100dd29146174d6a2d7cbdc13d00af9c0c22a37dd4a952bd67f25717','2026-10-25T09:29:41.628Z');
+INSERT INTO "shipped_prompt_texts" VALUES('doctrine','document_review','6ce0bd9c74e237a7a20a97c90c682443f998737be95363b78e51617defafb8ae','2026-10-25T09:29:41.629Z');
+INSERT INTO "shipped_prompt_texts" VALUES('doctrine','draft_review','6e327bbe1a0d6c4ea3b943a47b779115076209a426e3a41986fcd8501f781bb6','2026-10-25T09:29:41.629Z');
+INSERT INTO "shipped_prompt_texts" VALUES('doctrine','alias_discovery','3f1ce2eee21285884d2184146a84037a688982ee82c9181db6da263175a671c6','2026-10-25T09:29:41.636Z');
+INSERT INTO "shipped_prompt_texts" VALUES('doctrine','audience_labelling','48d63ca78d5a43e0247fc5a200c2413aa0a9488ef7edc83222424602b6a25feb','2026-10-25T09:29:41.645Z');
+INSERT INTO "shipped_prompt_texts" VALUES('doctrine','documentation_planning','1a0ef2e825826a23a39e59aefc4444c0329528a6768f4fd348eb8faaf4a65661','2026-10-25T09:29:41.645Z');
+INSERT INTO "shipped_prompt_texts" VALUES('doctrine','plan_review','d5c6571e749ee5c2117c9c58a560cad63f81266c1e668444a4541986ca7d1605','2026-10-25T09:29:41.645Z');
+INSERT INTO "shipped_prompt_texts" VALUES('doctrine','connect','a74d6236cc54939ce1249b78202b35b39d10b0c76d1b7f50e18c5b1cae4affa1','2026-10-25T09:29:41.645Z');
 COMMIT;

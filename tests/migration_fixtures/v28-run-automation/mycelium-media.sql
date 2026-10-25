@@ -8,12 +8,12 @@ CREATE TABLE media_attachments (
     attached_by TEXT,
     PRIMARY KEY (media_id, target_kind, target_id)
 );
-INSERT INTO "media_attachments" VALUES('med_4901035c69ed','statement','stm_537eb81d5b2940ff8e9d7618f527f9ef','2026-10-24T20:01:51.872Z','curator');
+INSERT INTO "media_attachments" VALUES('med_34de69ece9c6','statement','stm_af121a8242c248c88bae5101488b524a','2026-10-25T09:29:41.671Z','curator');
 CREATE TABLE media_blobs (
     media_id TEXT PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
     data     BLOB NOT NULL
 );
-INSERT INTO "media_blobs" VALUES('med_4901035c69ed',X'89504E470D0A1A0A0000000D49484452000000010000000108000000003A7E9B550000000A49444154789C636000000002000148AFA4710000000049454E44AE426082');
+INSERT INTO "media_blobs" VALUES('med_34de69ece9c6',X'89504E470D0A1A0A0000000D49484452000000010000000108000000003A7E9B550000000A49444154789C636000000002000148AFA4710000000049454E44AE426082');
 CREATE TABLE media_items (
     id                  TEXT PRIMARY KEY,
     content_type        TEXT NOT NULL,
@@ -36,7 +36,7 @@ CREATE TABLE media_items (
     updated_at          TEXT NOT NULL,
     updated_by          TEXT
 );
-INSERT INTO "media_items" VALUES('med_4901035c69ed','image/png',67,'eaa4a94ea300e0d2c775968cbe42f0b5b51ceafdeb73d64e9efddf6d4e880865',1,'2026-10-24T20:01:51.872Z','The sign-in form','Signing in','uploaded',NULL,NULL,NULL,'["external-technical"]','curator','2026-10-24T20:01:51.873Z',NULL,'2026-10-24T20:01:51.872Z','curator','2026-10-24T20:01:51.872Z','curator');
+INSERT INTO "media_items" VALUES('med_34de69ece9c6','image/png',67,'eaa4a94ea300e0d2c775968cbe42f0b5b51ceafdeb73d64e9efddf6d4e880865',1,'2026-10-25T09:29:41.671Z','The sign-in form','Signing in','uploaded',NULL,NULL,NULL,'["external-technical"]','curator','2026-10-25T09:29:41.671Z',NULL,'2026-10-25T09:29:41.671Z','curator','2026-10-25T09:29:41.671Z','curator');
 CREATE TABLE media_uploads (
     token_hash    TEXT PRIMARY KEY,
     metadata_json TEXT NOT NULL,
