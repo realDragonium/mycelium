@@ -460,7 +460,7 @@ export interface CurationSummary {
   kind: CurationKind; claims: CurationHolder[]; attempted: number;
   outcomes: Partial<Record<'looked' | 'proposed' | 'no_link' | 'skipped' | 'answered' | 'resolved' | 'not_applicable', number>>;
 }
-export type AutomationKind = 'audience_review' | 'connect' | 'gap_follow_up';
+export type AutomationKind = 'audience_review' | 'connect' | 'gap_follow_up' | 'draft_review' | 'curation' | 'mention' | 'embedding';
 export interface AutomationStop { kind: AutomationKind; item_id: string; failures: number; reason: string; updated_at: string }
 export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null; curation: CurationSummary[]; uncovered_by_profile: Record<string, number>; stopped: AutomationStop[] }
 export interface HealthStatement {

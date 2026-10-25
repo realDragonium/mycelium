@@ -5,13 +5,31 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel
 
-from . import timestamps
+from . import model_settings, product_settings, timestamps
 
-Kind = Literal["audience_review", "connect", "gap_follow_up"]
+Kind = Literal[
+    "audience_review",
+    "connect",
+    "gap_follow_up",
+    "draft_review",
+    "curation",
+    "mention",
+    "embedding",
+]
+KINDS: tuple[Kind, ...] = get_args(Kind)
+
+
+def limits() -> product_settings.AutomationSettings:
+    """The saved Automation limits, or their defaults while they cannot be
+    read, so background work still counts its failures toward a bound."""
+    try:
+        return product_settings.get(product_settings.AutomationSettings)
+    except model_settings.Unavailable:
+        return product_settings.AutomationSettings()
 
 
 class Stop(BaseModel):

@@ -426,6 +426,7 @@ the first start of a current build:
 | v26 | Marks labelling queue rows that belong to a backfill, so a backfill resumes after a restart. |
 | v27 | Lets a curation agent close a knowledge gap as resolved or not applicable. |
 | v28 | Adds the memory of items an automation stopped retrying, until their inputs change or an admin retries them. |
+| v29 | Lets draft reviews, curation items, mention recomputes and embeddings stop at their retry limits too. |
 
 The drafts and prompts databases upgrade themselves on the same start. The
 research feature's data is deleted, as are its settings (see

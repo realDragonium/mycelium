@@ -794,3 +794,24 @@ def test_v28_adds_the_automatic_stop_ledger():
         "reason",
         "updated_at",
     }
+
+
+def test_v29_keeps_stops_and_takes_the_new_kinds():
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    conn.execute("DROP TABLE automation_stops")
+    migrations._migration_v28_automation_stops(conn)
+    conn.execute(
+        "INSERT INTO automation_stops VALUES ('connect', 'stm_1', 't', 3, 1, 'r', 'now')"
+    )
+    conn.execute("PRAGMA user_version = 28")
+    conn.commit()
+
+    migrations.apply_migrations(conn)
+    conn.execute(
+        "INSERT INTO automation_stops VALUES ('mention', '7', 's', 1, 0, 'r', 'now')"
+    )
+
+    assert [
+        tuple(row) for row in conn.execute("SELECT kind, item_id FROM automation_stops")
+    ] == [("connect", "stm_1"), ("mention", "7")]
