@@ -24,7 +24,7 @@ import re
 import sqlite3
 import threading
 from collections import Counter
-from collections.abc import Callable, Iterable, Set
+from collections.abc import Callable, Iterable, Mapping, Sequence, Set
 from dataclasses import asdict, dataclass, field, replace
 from typing import Literal
 
@@ -424,6 +424,47 @@ def stale_key(document: ExistingDocument) -> str:
     return f"stale:{document.id}:r{document.revision}"
 
 
+def declined_revision(document: ExistingDocument, keys: Set[str]) -> bool:
+    """An update of the document's revision was dismissed or given up,
+    proposed as a plan update or as an out-of-date document alike."""
+    return update_key(document) in keys or stale_key(document) in keys
+
+
+@dataclass(frozen=True)
+class Declined:
+    """A create without a concept anchor that was dismissed or given up, by
+    what it drew on: reworded, it is still the same proposal."""
+
+    document_type: str
+    statement_ids: frozenset[str]
+    reason: Literal["dismissed before", "given up before"]
+
+    def covers(self, document_type: str, statement_ids: Sequence[str]) -> bool:
+        shared = self.statement_ids.intersection(statement_ids)
+        return (
+            document_type == self.document_type
+            and 2 * len(shared) >= len(statement_ids) > 0
+        )
+
+
+def declined_creates(
+    drafts: sqlite3.Connection,
+    guideline_set: str,
+    dismissed: Set[str],
+    abandoned: Mapping[str, GivenUp],
+) -> list[Declined]:
+    return [
+        Declined(
+            str(row["document_type"]),
+            frozenset(json.loads(row["statement_ids"])),
+            "given up before" if str(row["id"]) in abandoned else "dismissed before",
+        )
+        for row in doc_plans.unanchored_creates(drafts, guideline_set)
+        if str(row["id"]) in abandoned
+        or (row["state"] == "dismissed" and str(row["key"]) in dismissed)
+    ]
+
+
 @dataclass
 class Accepted:
     items: list[Item] = field(default_factory=list)
@@ -507,6 +548,7 @@ def accept(
     documents: list[ExistingDocument],
     dismissed: set[str],
     given_up: Set[str] = frozenset(),
+    declined: Sequence[Declined] = (),
     max_items: int,
 ) -> Accepted:
     """The items worth keeping. The model proposes; only ids the audience
@@ -526,13 +568,27 @@ def accept(
             if target is not None
             else create_key(document_type, anchor, proposed.title)
         )
+        unanchored = next(
+            (
+                earlier.reason
+                for earlier in declined
+                if target is None
+                and anchor is None
+                and earlier.covers(document_type, statement_ids)
+            ),
+            None,
+        )
         reason = (
             "no visible statements"
             if not statement_ids
             else "dismissed before"
             if key in dismissed
+            or (target is not None and declined_revision(target, dismissed))
             else "given up before"
             if key in given_up
+            or (target is not None and declined_revision(target, given_up))
+            else unanchored
+            if unanchored is not None
             else "duplicates another item"
             if key in seen
             else "over the item limit"
@@ -684,6 +740,7 @@ class _Inputs:
     documents: list[ExistingDocument]
     dismissed: list[sqlite3.Row]
     given_up: dict[str, GivenUp]
+    declined: list[Declined]
     task: ai.StructuredTask[Proposal]
     max_items: int
     #: The statements no document cites, beyond the batch offered.
@@ -820,6 +877,12 @@ def _inputs(
         documents,
         dismissed,
         abandoned,
+        declined_creates(
+            drafts,
+            planned.guideline_set,
+            {str(row["key"]) for row in dismissed},
+            abandoned,
+        ),
         task,
         limits.max_items,
         open_statements,
@@ -835,6 +898,7 @@ def _accept(planned: Target, inputs: _Inputs, proposal: Proposal) -> Accepted:
         documents=inputs.documents,
         dismissed={str(row["key"]) for row in inputs.dismissed},
         given_up={item.key for item in inputs.given_up.values()},
+        declined=inputs.declined,
         max_items=inputs.max_items,
     )
 
@@ -1889,7 +1953,7 @@ def view(guideline_set: str) -> PlanView:
             )
             for document in documents
             if document.freshness.status == "out_of_date"
-            and stale_key(document) not in dismissed
+            and not declined_revision(document, dismissed)
             and stale_key(document) not in {str(row["key"]) for row in maintained}
         ],
         coverage=[
