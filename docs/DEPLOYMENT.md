@@ -407,7 +407,7 @@ up to the new build's defaults — see
 
 ### Upgrading an instance at schema v14
 
-An instance last deployed at substrate schema v14 runs thirteen migrations on
+An instance last deployed at substrate schema v14 runs fourteen migrations on
 the first start of a current build:
 
 | Version | Change |
