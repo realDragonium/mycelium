@@ -11,7 +11,7 @@ const TITLES: Record<string, string> = {
   draft_review: 'Draft review', alias_discovery: 'Alias discovery', concurrency: 'Concurrent runs',
   documentation: 'Documentation delivery', audience_labelling: 'Audience labelling',
   documentation_planning: 'Documentation planning', documentation_maintenance: 'Documentation maintenance', connect: 'Connecting statements',
-  media: 'Screenshots and recordings',
+  media: 'Screenshots and recordings', automation: 'Agent tasks and background work',
 };
 
 // [label, min, step]; booleans and strings use only the label.
@@ -40,6 +40,13 @@ const FIELDS: Record<string, [string, number?, (number | 'any')?]> = {
   decision_retries: ['Retries of a failed AI audience decision', 0, 1],
   connect_retries: ['Retries of a statement after a failed connect run', 0, 1],
   follow_up_retries: ['Retries after a curation proposal is rejected', 0, 1],
+  skip_retries: ['Retries of a curation item that was skipped or whose claim ran out', 0, 1],
+  failure_retries: ['Retries of a failed draft review', 0, 1],
+  restart_retries: ['Retries of a run a server restart interrupted', 0, 1],
+  task_release_retries: ['Retries of an agent task whose claim ran out or was given back', 0, 1],
+  task_refusal_retries: ['Retries of an agent task whose submission was refused', 0, 1],
+  mention_retries: ['Retries of a failing mention recompute', 0, 1],
+  embedding_retries: ['Retries of a statement or name that fails to embed', 0, 1],
   max_run_tokens: ['Most tokens per run (0 for no cap)', 0, 1], max_draft_tokens: ['Most tokens to review one draft (0 for no cap)', 0, 1],
   image_max_bytes: ['Largest image (bytes)', 1, 1], video_max_bytes: ['Largest video (bytes)', 1, 1],
   stale_after_days: ['Flag media older than (days)', 1, 1],
