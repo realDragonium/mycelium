@@ -88,7 +88,11 @@ preferences") is not listed. The list shows 50 pairs at a time with the total;
 Admins can open either merge direction straight into the merge preview above;
 the destination's preferred name and description are preselected. Writers can
 mark a pair **Not a duplicate** so it stops appearing. **Dismissed** lists those
-pairs, newest first, and **Restore** lets a pair be proposed again. Dismissals
+pairs, newest first, and **Restore** lets a pair be proposed again. The same
+pairs are `duplicate` work in the [curation queue](KNOWLEDGE_HEALTH.md#kinds-of-work):
+an agent, or the server's [AI curation pass](KNOWLEDGE_HEALTH.md#ai-curation-pass),
+merges a pair through a reviewed draft or records it as distinct, which
+dismisses it here under the agent's name. Dismissals
 are kept in substrate backups and disappear when either concept is merged away
 or deleted.
 

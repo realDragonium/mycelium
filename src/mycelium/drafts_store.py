@@ -163,6 +163,10 @@ class Evidence(BaseModel):
     lines: str | None = Field(default=None, pattern=r"^[0-9]+(-[0-9]+)?$")
     commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,40}$")
     url: str | None = Field(default=None, max_length=500, pattern=r"^https?://\S+$")
+    #: A statement of this knowledge base the excerpt quotes.
+    statement_id: str | None = Field(default=None, max_length=100, pattern=r"^stm_\S+$")
+    #: A draft whose review evidence the excerpt quotes.
+    draft_id: str | None = Field(default=None, pattern=r"^drf_[0-9a-f]{12}$")
     excerpt: str = Field(default="", max_length=1500)
     #: One line saying what the excerpt shows.
     claim: str = Field(min_length=1, max_length=200, pattern=r"^[^\n]+$")
@@ -171,7 +175,8 @@ class Evidence(BaseModel):
     def _located(self) -> Self:
         if (self.kind == "media") != (self.media_id is not None):
             raise ValueError("media evidence, and only media evidence, has a media_id")
-        if self.path is None and self.url is None and self.media_id is None:
+        located = (self.path, self.url, self.media_id, self.statement_id, self.draft_id)
+        if all(place is None for place in located):
             raise ValueError("evidence needs a path or a url")
         if self.path is not None and (
             self.path.startswith("/") or ".." in self.path.split("/")

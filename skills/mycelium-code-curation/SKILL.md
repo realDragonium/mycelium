@@ -1,6 +1,6 @@
 ---
 name: mycelium-code-curation
-description: Work the Mycelium curation queue from inside a product's repository. Claims a small batch of knowledge-health work (isolated statements, statements naming no concept, rephrase requests, knowledge gaps, the draft reviewer's questions for a person), checks each item against the product's code, proposes links, concept names, rephrases or corrections through a drafter's draft with per-operation code evidence, answers reviewer questions with evidence, closes gaps it settled, submits the draft and releases every item with its outcome. Use when an agent with code access (Claude Code in the product repo, or a CI job) is asked to curate, connect or check Mycelium knowledge against the code, or to work the curation queue. Needs a drafter token. Content rules come from mycelium-authoring.
+description: Work the Mycelium curation queue from inside a product's repository. Claims a small batch of knowledge-health work (isolated statements, statements naming no concept, rephrase requests, knowledge gaps, the draft reviewer's questions for a person, duplicate statement or concept pairs, concepts without a description or without statements), checks each item against the product's code, proposes links, concept names, descriptions, merges, rephrases or corrections through a drafter's draft with per-operation code evidence, answers reviewer questions with evidence, closes gaps it settled, submits the draft and releases every item with its outcome. Use when an agent with code access (Claude Code in the product repo, or a CI job) is asked to curate, connect or check Mycelium knowledge against the code, or to work the curation queue. Needs a drafter token. Content rules come from mycelium-authoring.
 ---
 
 # Curating Mycelium from the product's code
@@ -43,13 +43,19 @@ first. Run one job per drafter account at a time.
 ## Workflow
 
 1. **Claim a small batch.** `claim_curation_work(kind, limit=3)`. `kind` is
-   `isolated`, `unnamed`, `rephrase`, `gap` or `question`. Keep the batch small enough to
+   `isolated`, `unnamed`, `rephrase`, `gap`, `question`, `duplicate`,
+   `undescribed` or `unused`. Keep the batch small enough to
    finish within the 30-minute lease. Each item has `id`, `text`, the
    `statement` it is about (with the concepts it names) and five
    `neighbours`; the batch has `link_types` (each type's `description`, and
    a `direction` on types limited to certain statement kinds) and
    `expires_at`. Read `link_types`: it is the menu, and its directions are
-   enforced.
+   enforced. A `duplicate` item has `pair` (its `kind`, sides `a` and `b`,
+   and the `score`); `undescribed` and `unused` items have `concept` (names,
+   description and the statements naming it); a gap about a draft has
+   `draft` (its operations and the review's rationale). A gap whose chain of
+   rejected curation proposals is past the saved limit is not offered: a
+   person decides it, so do not propose another draft for it by other means.
 2. **Find the behaviour in the code.** Search the repository for the
    statement's terms, the UI copy, the setting name or the event. Read the
    handler, the job or the check that implements it, and what runs before and
@@ -80,6 +86,10 @@ first. Run one job per drafter account at a time.
 
    A `question` is released as `answered` (see below) or `skipped`.
 
+   A `duplicate` is released as `proposed` (your merge draft),
+   `not_applicable` with a `reason` (they are distinct; a concept pair is
+   then dismissed in Names & aliases as you) or `skipped`.
+
    Group items by outcome; one call per outcome.
 
 **Leases.** `claim_curation_work(kind, limit=0)` renews every item of that
@@ -100,6 +110,9 @@ hold.
 | `rephrase` | What the code actually does, to state one claim in the right kind | `patch_statement(id, text=...)` on the item's `statement` (the item id is the gap's) |
 | `gap` | The missing fact | The statements, links or concepts that close it (`mycelium-authoring` §8) |
 | `question` | What the code says about the reviewer's `question.questions` | An answer with evidence (below), never a draft operation |
+| `duplicate` | Whether the code treats both sides as one behaviour or one concept | `merge_statements(from_id, into_id)` or `merge_entities(from_entity_id, into_entity_id)`, keeping the better phrased side; a link or a rewording when they only look alike; `not_applicable` when they differ |
+| `undescribed` | What the code and UI mean by the concept | `upsert_entity(name, description)` with its current name |
+| `unused` | Where the code uses the concept | `upsert_name` on a statement that names it under other words, a merge into the concept it duplicates, or `no_link` |
 
 Rules:
 
@@ -155,7 +168,9 @@ Each operation (and each answer) takes up to five items:
 ```
 
 - `path` relative to the repository root, `lines`, and the `commit` you read
-  (`git rev-parse --short HEAD`); a `url` instead for a UI page or doc.
+  (`git rev-parse --short HEAD`); a `url` instead for a UI page or doc; or a
+  `statement_id` (with `kind: "doc"`) when a knowledge-base statement is the
+  evidence.
 - `excerpt`: the fewest lines that show the claim, at most 1,500 characters.
   Never secrets, tokens, credentials, connection strings, environment
   values, customer data or personal data; cut them out or pick other lines.

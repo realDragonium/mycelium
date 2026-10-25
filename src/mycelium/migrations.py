@@ -1155,6 +1155,23 @@ def _migration_v27_gap_outcomes(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE curation_attempts_v26")
 
 
+def _migration_v28_automation_stops(conn: sqlite3.Connection) -> None:
+    """Remember the items an automation failed on, so repeated failures stop
+    until the inputs change or a person retries them."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS automation_stops ("
+        "kind TEXT NOT NULL "
+        "CHECK (kind IN ('audience_review', 'connect', 'gap_follow_up')), "
+        "item_id TEXT NOT NULL, "
+        "inputs TEXT NOT NULL, "
+        "failures INTEGER NOT NULL, "
+        "stopped INTEGER NOT NULL DEFAULT 0, "
+        "reason TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "PRIMARY KEY (kind, item_id))"
+    )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1186,6 +1203,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (25, _migration_v25_pending_external_grants),
     (26, _migration_v26_backfill_queue_rows),
     (27, _migration_v27_gap_outcomes),
+    (28, _migration_v28_automation_stops),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

@@ -149,6 +149,7 @@ def start(
     rerun: bool = False,
     attempt: int = 1,
     retries: int = 0,
+    refreshes: int = 0,
     previous_failure: str | None = None,
     answer: Answer | None = None,
     admit: Callable[[ReviewRun | None], bool] | None = None,
@@ -203,6 +204,7 @@ def start(
         run.model_settings_revision = settings.model_revision
         run.attempt = attempt
         run.retries = retries
+        run.refreshes = refreshes
         run.previous_failure = previous_failure
         run.answers = answers
         draft_review_store.save(conn, run)
@@ -1099,10 +1101,11 @@ def _execute(
         )
         _record(run, results)
         run.knowledge_preconditions = _supporting_preconditions(inspection, reads)
-        _finish(run, inspection, settings, reads)
+        review_again = _finish(run, inspection, settings, reads)
         run.status = "completed"
         run.finished_at = timestamps.now()
         _save(run)
+        _after_completed(run, inspection, settings, limits, review_again)
     except Exception as exc:
         logger.warning(
             "internal review %s failed: %s: %s", run.run_id, type(exc).__name__, exc
@@ -1410,11 +1413,12 @@ def _mutation_authority(
 
 def _apply_alias_decisions(
     run: ReviewRun, principal: auth.Principal
-) -> tuple[int, int, list[str]]:
+) -> tuple[int, int, int, list[str]]:
     from . import alias_suggestions
 
     accepted = 0
     rejected = 0
+    refreshed = 0
     left: list[str] = []
     for decision in run.alias_decisions:
         try:
@@ -1427,20 +1431,32 @@ def _apply_alias_decisions(
                 principal,
             )
         except alias_suggestions.Conflict as exc:
-            left.append(f"{decision.operation_ref} ({exc})")
+            try:
+                stale = alias_suggestions.resolve_stale_as_reviewer(
+                    run.draft_id, decision.operation_ref, principal
+                )
+            except alias_suggestions.Conflict:
+                left.append(f"{decision.operation_ref} ({exc})")
+                continue
+            if stale == "rejected":
+                rejected += 1
+            else:
+                refreshed += 1
             continue
         if decision.decision == "accept":
             accepted += 1
         else:
             rejected += 1
-    return accepted, rejected, left
+    return accepted, rejected, refreshed, left
 
 
-def _alias_detail(accepted: int, rejected: int, left: list[str]) -> str:
+def _alias_detail(accepted: int, rejected: int, refreshed: int, left: list[str]) -> str:
     detail = (
         f"Alias decisions: {accepted} accepted, {rejected} rejected, "
         f"{len(left)} left for a person."
     )
+    if refreshed:
+        detail += f" {refreshed} refreshed for another review."
     return detail if not left else detail + " " + "; ".join(left)
 
 
@@ -1449,7 +1465,7 @@ def _finish(
     inspection: DraftReviewInspection,
     settings: draft_review_settings.Snapshot,
     reads: list[Read],
-) -> None:
+) -> bool:
     from . import server  # local import: server registers the review tools
     from .server import draft_application
 
@@ -1463,42 +1479,43 @@ def _finish(
             run.detail = (
                 "Advisory assessment only; alias suggestions require human review."
             )
-            return
+            return False
         if run.mode != "review-and-apply" or draft_review_settings.load() != settings:
             run.detail = "Advisory assessment only; automatic action disabled by mode or changed settings."
-            return
+            return False
         principal = _mutation_authority(run, inspection, settings)
         if not draft_application._reviewed_apply_enabled():
             run.detail = "Reviewed application gate is disabled; no automatic changes."
-            return
+            return False
         if run.label == "needs_context":
             _ask_person(run, inspection, reads)
-            return
+            return False
         alias_detail: str | None = None
         application_reads = reads
         if contains_aliases:
-            accepted, rejected, left = _apply_alias_decisions(run, principal)
-            alias_detail = _alias_detail(accepted, rejected, left)
+            accepted, rejected, refreshed, left = _apply_alias_decisions(run, principal)
+            alias_detail = _alias_detail(accepted, rejected, refreshed, left)
             application_reads = _without_record_reads(
                 reads, _alias_record_keys(inspection)
             )
             alias_only = all(op["kind"] == alias_suggestions.KIND for op in draft_ops)
-            if alias_only or left:
-                if alias_only and not left:
+            if alias_only or left or refreshed:
+                if alias_only and not left and not refreshed:
                     run.application = "applied" if accepted else "rejected"
                 run.detail = alias_detail
-                return
+                return bool(refreshed)
         if run.label == "changes_suggested" and settings.auto_apply == "clean":
             run.application = "held"
             run.detail = draft_review_store.HELD_FOR_CURATOR
             if alias_detail is not None:
                 run.detail = alias_detail + " " + run.detail
-            return
+            return False
         with store.transaction(drafts_store.connection()):
             _mutation_authority(run, inspection, settings)
             _apply_corrections(run.draft_id, _precise(run.corrections))
             final = server.inspect_draft_review(run.draft_id)
-            _refuse_findings(final)
+            if run.label != "reject":
+                _refuse_findings(final)
             _check_correction_knowledge(inspection, final, application_reads)
             _mutation_authority(run, inspection, settings)
             outcome: Literal["rejected", "refined", "accepted"] = (
@@ -1531,7 +1548,7 @@ def _finish(
                 f"Draft {run.draft_id} was rejected by {_reviewer_name(run)}: "
                 f"{run.rationale}",
             )
-            return
+            return False
         _mutation_authority(run, inspection, settings)
         receipt = server.apply_reviewed_draft(run.draft_id, review["review_id"])
         run.application = "applied"
@@ -1548,6 +1565,46 @@ def _finish(
                 f"in favour of the draft: {contradiction.resolution}",
                 statement_id=contradiction.statement_id,
             )
+        return False
+
+
+def _after_completed(
+    run: ReviewRun,
+    inspection: DraftReviewInspection,
+    settings: draft_review_settings.Snapshot,
+    limits: product_settings.ReviewSettings | None,
+    review_again: bool,
+) -> None:
+    try:
+        if review_again:
+            if _review_again_after_refresh(run, limits):
+                start(
+                    run.draft_id,
+                    rerun=True,
+                    refreshes=run.refreshes + 1,
+                )
+            else:
+                _save(run)
+            return
+        from . import draft_answers
+
+        draft_answers.attempt(run, inspection, settings, limits)
+    except Exception:
+        logger.warning("post-review action for %s failed", run.run_id, exc_info=True)
+
+
+def _review_again_after_refresh(
+    run: ReviewRun, limits: product_settings.ReviewSettings | None
+) -> bool:
+    limits = limits or product_settings.get(product_settings.ReviewSettings)
+    if run.refreshes < limits.refresh_reviews:
+        return True
+    note = (
+        f"Stopped reviewing again after {run.refreshes} refreshed reviews; "
+        "a person starts the review again."
+    )
+    run.detail = f"{run.detail} {note}" if run.detail else note
+    return False
 
 
 def _ask_person(
@@ -2045,7 +2102,7 @@ def _earlier_review(task: agent_tasks.Task) -> JsonValue:
 
 
 def _prepare_agent_review(
-    task: agent_tasks.Task, _claimant: str
+    task: agent_tasks.Task, claimant: str
 ) -> agent_tasks.Task | None:
     """Brief a claimed review with the context the internal reviewer would
     get, built now so it reflects the knowledge the agent reviews against.
@@ -2067,6 +2124,7 @@ def _prepare_agent_review(
         if inspection["draft_revision"] != run.draft_revision:
             raise ValueError("draft changed while waiting for an agent; rerun")
         settings = _task_settings.validate_json(str(task.state["settings"]))
+        instructions = ai_prompts.resolve("draft_review")
         reason = _unsupported(inspection, settings) or _stale(inspection)
         contexts: list[PartContext] = []
         if reason is None:
@@ -2079,16 +2137,45 @@ def _prepare_agent_review(
         agent_tasks.finish(conn, task.id, "failed", error=str(exc))
         return None
     if reason is not None:
-        # Rejecting needs a reviewer's authority, and no agent judged the
-        # draft, so the refusal stays advisory for a person to act on.
-        _record(run, [(_whole(inspection), _refusal(reason))])
+        from .server import draft_application
+
+        refusal_reason = reason
+        if (
+            settings.reject_refused
+            and run.mode == "review-and-apply"
+            and draft_application._reviewed_apply_enabled()
+        ):
+            run.reviewer_id = claimant
+
+            def act() -> None:
+                _record(run, [(_whole(inspection), _refusal(refusal_reason))])
+                run.knowledge_preconditions = inspection["knowledge_preconditions"]
+                _finish(run, inspection, settings, [])
+
+            try:
+                contextvars.copy_context().run(act)
+            except Exception as exc:
+                _fail_agent_run(run, settings, str(exc))
+                agent_tasks.finish(conn, task.id, "failed", error=str(exc))
+                return None
+            run.status = "completed"
+            run.finished_at = timestamps.now()
+            _save(run)
+            agent_tasks.finish(
+                conn,
+                task.id,
+                "done",
+                result={"refused": refusal_reason, "application": run.application},
+            )
+            return None
+        _record(run, [(_whole(inspection), _refusal(refusal_reason))])
         run.status = "completed"
         run.detail = (
             "The server refuses this draft without a review; a person decides on it."
         )
         run.finished_at = timestamps.now()
         _save(run)
-        agent_tasks.finish(conn, task.id, "done", result={"refused": reason})
+        agent_tasks.finish(conn, task.id, "done", result={"refused": refusal_reason})
         return None
     reads: dict[str, Read] = {}
     for item in contexts:
@@ -2096,9 +2183,7 @@ def _prepare_agent_review(
             reads.setdefault(json.dumps([read.name, read.arguments]), read)
     count = len(contexts)
     brief = agent_tasks.structured_brief(
-        instructions=draft_review_model.build_system_prompt(
-            ai_prompts.resolve("draft_review").text
-        ),
+        instructions=draft_review_model.build_system_prompt(instructions.text),
         input=contexts[0].context
         if count == 1
         else "\n\n".join(
@@ -2262,14 +2347,14 @@ def _submit_agent_review(
     run.reviewer_id = claimant
     run.detail = None
 
-    def act() -> None:
+    def act() -> bool:
         _record(run, results)
         run.knowledge_preconditions = _supporting_preconditions(inspection, reads)
-        _finish(run, inspection, settings, reads)
+        return _finish(run, inspection, settings, reads)
 
     try:
         # _finish sets the acting principal; keep that out of this request.
-        contextvars.copy_context().run(act)
+        review_again = contextvars.copy_context().run(act)
     except Exception as exc:
         _fail_agent_run(run, settings, str(exc))
         return agent_tasks.closed(
@@ -2280,8 +2365,10 @@ def _submit_agent_review(
         )
     run.status = "completed"
     run.finished_at = timestamps.now()
+    if review_again:
+        review_again = _review_again_after_refresh(run, None)
     _save(run)
-    return agent_tasks.closed(
+    submitted = agent_tasks.closed(
         conn,
         task,
         run.detail or "Review recorded.",
@@ -2292,6 +2379,18 @@ def _submit_agent_review(
             "application": run.application,
         },
     )
+    if review_again:
+        try:
+            start(
+                run.draft_id,
+                rerun=True,
+                refreshes=run.refreshes + 1,
+            )
+        except Exception:
+            logger.warning(
+                "could not review refreshed aliases for %s", run.run_id, exc_info=True
+            )
+    return submitted
 
 
 AGENT_TASK = agent_tasks.Handler(

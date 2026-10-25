@@ -15,6 +15,7 @@ from mycelium import (
     audience_review,
     audiences,
     auth,
+    automation_stops,
     drafts_store,
     product_settings,
     store,
@@ -28,7 +29,6 @@ from settings_helpers import assume_configured_models
 @pytest.fixture(autouse=True)
 def _configured_models(monkeypatch):
     assume_configured_models(monkeypatch)
-    audience_review._failed_attempts.clear()
 
 
 @pytest.fixture
@@ -106,6 +106,59 @@ def _decision(
         "decision": decision,
         "reason": reason,
     }
+
+
+def _statement_decision(
+    statement_id: str, decision: str, reason: str
+) -> dict[str, str]:
+    return {
+        "statement_id": statement_id,
+        "decision": decision,
+        "reason": reason,
+    }
+
+
+def _changed_curator_label(db, text: str, *, labelled_by: str = "curator") -> str:
+    statement_id = store.create_statement(db, "capability", text)
+    store.audience_labels.set_label(
+        db,
+        statement_id,
+        [EXTERNAL],
+        source="curator",
+        reason="The curator approved this for workspace administrators.",
+        labelled_by=labelled_by,
+    )
+    store.update_statement_text(db, statement_id, text + " Updated.")
+    db.commit()
+    return statement_id
+
+
+def _kept_grant(
+    db, old_text: str, new_text: str, *, model: str = "agent:labeller"
+) -> str:
+    statement_id = store.create_statement(db, "capability", new_text)
+    store.audience_labels.set_label(
+        db,
+        statement_id,
+        [EXTERNAL],
+        source="ai",
+        reason="The labeller considered this administrator-facing.",
+        model=model,
+        decisions={
+            EXTERNAL: {
+                "decision": "confirmed",
+                "by": "curator",
+                "at": "2026-01-01T00:00:00+00:00",
+            }
+        },
+        spot_check={
+            "audiences": [EXTERNAL],
+            "old_text": old_text,
+            "at": "2026-01-02T00:00:00+00:00",
+        },
+    )
+    db.commit()
+    return statement_id
 
 
 def _claim(principal: str):
@@ -321,3 +374,391 @@ def test_internal_review_stops_retrying_an_omitted_grant_after_three_attempts(
     row = store.audience_labels.get_label(db, statement_id)
     assert row is not None
     assert store.audience_labels.label_pending(row) == [EXTERNAL]
+
+
+def test_failed_internal_review_stops_until_the_statement_changes(
+    db, prompts, monkeypatch
+):
+    set_product(
+        product_settings.AudienceLabellingSettings(
+            ai_grant_review=True, decision_retries=0
+        )
+    )
+    statement_id = _pending(db, "Workspace owners can export invoices.")
+    monkeypatch.setattr(audience_review, "_external", lambda: False)
+    monkeypatch.setattr(
+        audience_review.model_settings, "credentials_error", lambda _action: None
+    )
+    calls = 0
+
+    def call(task, config):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("model unavailable")
+
+    audience_review.review_batch(db, call=call)
+    audience_review.review_batch(db, call=call)
+
+    assert calls == 1
+    [stopped] = automation_stops.stops(db)
+    assert stopped.item_id == f"grants:{statement_id}:{EXTERNAL}"
+    assert stopped.reason == "The AI review failed: model unavailable"
+
+    db.execute(
+        "UPDATE statements SET text = ? WHERE id = ?",
+        ("Exports include invoices and receipts.", statement_id),
+    )
+    db.commit()
+    audience_review.review_batch(db, call=call)
+    assert calls == 2
+
+
+def test_failed_agent_task_stops_requeueing_its_items(db, prompts, tasks, monkeypatch):
+    set_product(
+        product_settings.AudienceLabellingSettings(
+            ai_grant_review=True, decision_retries=0
+        )
+    )
+    statement_id = _pending(db, "Workspace owners can export invoices.")
+    monkeypatch.setattr(audience_review, "_external", lambda: True)
+    [task] = _claim("reviewer").tasks
+
+    assert _submit("reviewer", task.id, []).status == "refused"
+    assert _submit("reviewer", task.id, []).status == "refused"
+    closed = _submit("reviewer", task.id, [])
+
+    assert closed.status == "failed"
+    assert closed.message is not None
+    assert "1 items stop until" in closed.message
+    assert _claim("another-reviewer").tasks == []
+    [stopped] = automation_stops.stops(db)
+    assert stopped.item_id == f"grants:{statement_id}:{EXTERNAL}"
+
+
+def test_label_decision_setting_off_makes_no_call_or_task(
+    db, prompts, tasks, monkeypatch
+):
+    set_product(product_settings.AudienceLabellingSettings(automatic=False))
+    _changed_curator_label(db, "Workspace owners can export invoices.")
+    calls = 0
+
+    def call(task, config):
+        nonlocal calls
+        calls += 1
+        return audience_review.StatementReview(decisions=[]), ai.Usage()
+
+    monkeypatch.setattr(audience_review, "_external", lambda: False)
+    monkeypatch.setattr(
+        audience_review.model_settings, "credentials_error", lambda _action: None
+    )
+    audience_labelling.labelling_pass(db, review_call=call)
+    assert calls == 0
+
+    monkeypatch.setattr(audience_review, "_external", lambda: True)
+    assert _claim("reviewer").tasks == []
+    assert agent_tasks.open_tasks(tasks, "audience_review") == []
+
+
+def test_internal_review_decides_changed_curator_labels(db, prompts, monkeypatch):
+    set_product(
+        product_settings.AudienceLabellingSettings(
+            automatic=False, ai_label_decisions=True
+        )
+    )
+    confirmed = _changed_curator_label(
+        db, "Workspace owners can export invoices.", labelled_by="curator-one"
+    )
+    handed_back = _changed_curator_label(
+        db,
+        "Administrators can configure login policies.",
+        labelled_by="curator-two",
+    )
+    monkeypatch.setattr(audience_review, "_external", lambda: False)
+    monkeypatch.setattr(
+        audience_review.model_settings, "credentials_error", lambda _action: None
+    )
+    prompts_seen = []
+
+    def call(task, config):
+        prompts_seen.append(json.loads(task.prompt))
+        return (
+            audience_review.StatementReview(
+                decisions=[
+                    audience_review.StatementDecision(
+                        statement_id=confirmed,
+                        decision="confirm",
+                        reason="The edit remains suitable for administrators.",
+                    ),
+                    audience_review.StatementDecision(
+                        statement_id=handed_back,
+                        decision="reject",
+                        reason="The edit needs a fresh audience decision.",
+                    ),
+                ]
+            ),
+            ai.Usage(),
+        )
+
+    audience_labelling.labelling_pass(db, review_call=call)
+
+    assert len(prompts_seen) == 1
+    supplied = prompts_seen[0]["curator_labels"]
+    assert {item["statement_id"] for item in supplied} == {confirmed, handed_back}
+    assert {item["labelled_by"] for item in supplied} == {
+        "curator-one",
+        "curator-two",
+    }
+    kept = store.audience_labels.get_label(db, confirmed)
+    assert kept is not None
+    assert kept["text_changed_at"] is None
+    selected = audience_review.model_settings.require("audience_labelling")
+    assert kept["labelled_by"] == f"model:{selected.model}"
+    assert store.audience_labels.get_label(db, handed_back) is None
+    assert store.audience_labels.is_queued(db, handed_back)
+
+
+def test_internal_review_retries_curator_label_three_times_per_text(
+    db, prompts, monkeypatch
+):
+    set_product(
+        product_settings.AudienceLabellingSettings(
+            automatic=False, ai_label_decisions=True
+        )
+    )
+    statement_id = _changed_curator_label(db, "Workspace owners can export invoices.")
+    monkeypatch.setattr(audience_review, "_external", lambda: False)
+    monkeypatch.setattr(
+        audience_review.model_settings, "credentials_error", lambda _action: None
+    )
+    calls = 0
+
+    def call(task, config):
+        nonlocal calls
+        calls += 1
+        return audience_review.StatementReview(decisions=[]), ai.Usage()
+
+    for _ in range(4):
+        audience_review.review_batch(db, call=call)
+
+    assert calls == 3
+    row = store.audience_labels.get_label(db, statement_id)
+    assert row is not None
+    assert row["text_changed_at"] is not None
+
+    store.update_statement_text(db, statement_id, "Exports now include receipts.")
+    db.commit()
+    audience_review.review_batch(db, call=call)
+    assert calls == 4
+
+
+def test_internal_review_decides_kept_grants(db, prompts, monkeypatch):
+    set_product(
+        product_settings.AudienceLabellingSettings(
+            automatic=False, ai_label_decisions=True
+        )
+    )
+    confirmed = _kept_grant(
+        db,
+        "Workspace exports contain invoices.",
+        "Workspace exports contain invoices and receipts.",
+        model="labeller",
+    )
+    narrowed = _kept_grant(
+        db,
+        "Administrators configure login.",
+        "Login uses an internal routing key.",
+        model="labeller",
+    )
+    monkeypatch.setattr(audience_review, "_external", lambda: False)
+    monkeypatch.setattr(
+        audience_review.model_settings, "credentials_error", lambda _action: None
+    )
+
+    def call(task, config):
+        prompt = json.loads(task.prompt)
+        assert {item["old_text"] for item in prompt["kept_grants"]} == {
+            "Workspace exports contain invoices.",
+            "Administrators configure login.",
+        }
+        return (
+            audience_review.StatementReview(
+                decisions=[
+                    audience_review.StatementDecision(
+                        statement_id=confirmed,
+                        decision="confirm",
+                        reason="The edit reveals no restricted detail.",
+                    ),
+                    audience_review.StatementDecision(
+                        statement_id=narrowed,
+                        decision="reject",
+                        reason="The routing key is an internal detail.",
+                    ),
+                ]
+            ),
+            ai.Usage(),
+        )
+
+    audience_labelling.labelling_pass(db, review_call=call)
+
+    selected = audience_review.model_settings.require("audience_labelling")
+    kept = store.audience_labels.get_label(db, confirmed)
+    assert kept is not None
+    assert store.audience_labels.label_spot_check(kept) is None
+    confirmed_decision = store.audience_labels.label_decisions(kept)[EXTERNAL]
+    assert confirmed_decision["by"] == f"model:{selected.model}"
+    assert confirmed_decision["reason"] == "The edit reveals no restricted detail."
+    reduced = store.audience_labels.get_label(db, narrowed)
+    assert reduced is not None
+    assert reduced["source"] == "curator"
+    assert reduced["labelled_by"] == f"model:{selected.model}"
+    assert reduced["reason"] == (
+        f"model:{selected.model} narrowed the external grants an edit had kept: "
+        "The routing key is an internal detail."
+    )
+
+
+def test_external_tasks_cover_both_label_decision_subjects(
+    db, prompts, tasks, monkeypatch
+):
+    set_product(product_settings.AudienceLabellingSettings(ai_label_decisions=True))
+    curator_label = _changed_curator_label(
+        db, "Workspace owners can export invoices.", labelled_by="curator"
+    )
+    kept_grant = _kept_grant(
+        db,
+        "Administrators configure SSO.",
+        "Administrators configure SSO and login domains.",
+    )
+    monkeypatch.setattr(audience_review, "_external", lambda: True)
+
+    withheld_curator = _claim("curator")
+    assert withheld_curator.tasks == []
+    assert withheld_curator.note is not None
+
+    [curator_task] = _claim("reviewer").tasks
+    stored_curator_task = agent_tasks.get(tasks, curator_task.id)
+    assert stored_curator_task is not None
+    assert stored_curator_task.state["subject"] == "curator_labels"
+    refused = _submit("reviewer", curator_task.id, [])
+    assert refused.status == "refused"
+    assert [finding.problem for finding in refused.findings] == ["no decision given"]
+    accepted = _submit(
+        "reviewer",
+        curator_task.id,
+        [
+            _statement_decision(
+                curator_label,
+                "confirm",
+                "The edited export remains administrator-facing.",
+            )
+        ],
+    )
+    assert accepted.status == "accepted"
+    curator_row = store.audience_labels.get_label(db, curator_label)
+    assert curator_row is not None
+    assert curator_row["text_changed_at"] is None
+    assert curator_row["labelled_by"] == "reviewer"
+
+    withheld_labeller = _claim("labeller")
+    assert withheld_labeller.tasks == []
+    assert withheld_labeller.note is not None
+
+    [kept_task] = _claim("reviewer").tasks
+    stored_kept_task = agent_tasks.get(tasks, kept_task.id)
+    assert stored_kept_task is not None
+    assert stored_kept_task.state["subject"] == "kept_grants"
+    outcome = _submit(
+        "reviewer",
+        kept_task.id,
+        [
+            _statement_decision(
+                kept_grant, "reject", "The added login domains need narrowing."
+            )
+        ],
+    )
+    assert outcome.status == "accepted"
+    kept_row = store.audience_labels.get_label(db, kept_grant)
+    assert kept_row is not None
+    assert kept_row["source"] == "curator"
+    assert kept_row["labelled_by"] == "reviewer"
+    assert kept_row["reason"] == (
+        "Reviewer narrowed the external grants an edit had kept: "
+        "The added login domains need narrowing."
+    )
+
+
+def test_changed_curator_label_edited_after_queueing_is_skipped(
+    db, prompts, tasks, monkeypatch
+):
+    set_product(product_settings.AudienceLabellingSettings(ai_label_decisions=True))
+    statement_id = _changed_curator_label(
+        db, "Workspace owners can export invoices.", labelled_by="curator"
+    )
+    monkeypatch.setattr(audience_review, "_external", lambda: True)
+    [task] = _claim("reviewer").tasks
+    store.update_statement_text(db, statement_id, "Exports now include receipts.")
+    db.commit()
+
+    outcome = _submit(
+        "reviewer",
+        task.id,
+        [
+            _statement_decision(
+                statement_id, "confirm", "The export remains administrator-facing."
+            )
+        ],
+    )
+    assert outcome.message == (
+        "Confirmed 0, handed 0 back to AI, skipped 1 curator labels."
+    )
+    row = store.audience_labels.get_label(db, statement_id)
+    assert row is not None
+    assert row["text_changed_at"] is not None
+    assert row["labelled_by"] == "curator"
+
+
+def test_agent_can_reject_two_grants_on_the_same_label(db, prompts, tasks, monkeypatch):
+    set_product(product_settings.AudienceLabellingSettings(ai_grant_review=True))
+    statement_id = store.create_statement(
+        db, "capability", "Workspace owners can export invoices."
+    )
+    store.audience_labels.apply_ai_label(
+        db,
+        statement_id,
+        [EXTERNAL, OTHER_EXTERNAL],
+        reason="The first labeller considered this customer-facing.",
+        model="agent:labeller",
+        hold={EXTERNAL, OTHER_EXTERNAL},
+        graph=audiences.graph(),
+    )
+    db.commit()
+    monkeypatch.setattr(audience_review, "_external", lambda: True)
+    [task] = _claim("reviewer").tasks
+
+    outcome = _submit(
+        "reviewer",
+        task.id,
+        [
+            _decision(
+                statement_id,
+                EXTERNAL,
+                "reject",
+                "The export needs a narrower audience.",
+            ),
+            _decision(
+                statement_id,
+                OTHER_EXTERNAL,
+                "reject",
+                "The export needs a narrower audience.",
+            ),
+        ],
+    )
+
+    assert outcome.message == "Confirmed 0, rejected 2, skipped 0 grants."
+    row = store.audience_labels.get_label(db, statement_id)
+    assert row is not None
+    assert store.audience_labels.label_pending(row) == []
+    assert set(store.audience_labels.label_decisions(row)) == {
+        EXTERNAL,
+        OTHER_EXTERNAL,
+    }

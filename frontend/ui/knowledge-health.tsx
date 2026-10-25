@@ -3,11 +3,11 @@
 // nothing reaches.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { draftFate } from './ingest';
-import { EmptyState, KindTag, LoadError, Loading, Notice, PageHeader, useMe } from './lib';
+import { Card, EmptyState, KindTag, LoadError, Loading, Notice, PageHeader, useMe } from './lib';
 import { Link, type Route } from './router';
 import {
   errorMessage, getReviewMode, isStatementFilter, knowledgeHealth,
-  type ConnectLimits, type ConnectResult, type CurationSummary, type EntityFilter, type HealthCounts, type HealthEntity,
+  type AutomationKind, type AutomationStop, type ConnectLimits, type ConnectResult, type CurationSummary, type EntityFilter, type HealthCounts, type HealthEntity,
   type HealthList, type HealthStatement, type StatementFilter,
 } from './api';
 import { dataOf, useAsync } from './use-async';
@@ -145,8 +145,11 @@ const WORK: Record<CurationSummary['kind'], string> = {
   rephrase: 'Requests to rephrase',
   gap: 'Other open gaps',
   question: 'Reviewer questions',
+  duplicate: 'Duplicate candidates',
+  undescribed: 'Concepts without a description',
+  unused: 'Concepts no statement mentions',
 };
-const OUTCOMES = [['looked', 'looked at by the connect pass'], ['proposed', 'proposed'], ['no_link', 'no link'], ['skipped', 'skipped'], ['answered', 'answered']] as const;
+const OUTCOMES = [['looked', 'looked at by the connect pass'], ['proposed', 'proposed'], ['no_link', 'no change'], ['skipped', 'skipped'], ['answered', 'answered'], ['resolved', 'resolved'], ['not_applicable', 'not applicable']] as const;
 
 // What agents working in the product's code have claimed and made of each
 // list; an admin frees the claims of an agent that stopped.
@@ -183,6 +186,39 @@ function AgentWork({ work, isAdmin, onChange }: { work: CurationSummary[]; isAdm
       </table>
       {error && <Notice tone="error">{error}</Notice>}
     </section>
+  );
+}
+
+const STOP_KIND: Record<AutomationKind, string> = {
+  audience_review: 'Audience decision',
+  connect: 'Connect pass',
+  gap_follow_up: 'Gap follow-up',
+};
+
+function StoppedAutomations({ items, isAdmin, onChange }: { items: AutomationStop[]; isAdmin: boolean; onChange: () => void }) {
+  const [error, setError] = useState('');
+  const retry = async (item: AutomationStop) => {
+    setError('');
+    try { await knowledgeHealth.retryStopped(item.kind, item.item_id); onChange(); } catch (e) { setError(errorMessage(e, 'Could not retry the automation.')); }
+  };
+  return (
+    <Card title="Stopped automations" className="health-agents">
+      <p>These items reached their retry limit. They remain stopped until their inputs change or an admin retries them.</p>
+      <table className="tbl">
+        <thead><tr><th>Automation</th><th>Item</th><th>Reason</th><th>Failures</th><th>Stopped</th>{isAdmin && <th />}</tr></thead>
+        <tbody>{items.map(item => (
+          <tr key={`${item.kind}:${item.item_id}`}>
+            <td>{STOP_KIND[item.kind]}</td>
+            <td className="mono">{item.item_id}</td>
+            <td>{item.reason}</td>
+            <td>{item.failures}</td>
+            <td>{new Date(item.updated_at).toLocaleString()}</td>
+            {isAdmin && <td><button className="btn sm" onClick={() => { void retry(item); }}>Retry</button></td>}
+          </tr>
+        ))}</tbody>
+      </table>
+      {error && <Notice tone="error">{error}</Notice>}
+    </Card>
   );
 }
 
@@ -306,6 +342,7 @@ export function KnowledgeHealthScreen({ list }: { list: HealthList | null }) {
           ? <ConnectPanel limits={view.connect} onDone={reload} />
           : <Notice tone="warn">Connecting statements is unavailable: {view.connect_error}</Notice>)}
         <AgentWork work={view.curation} isAdmin={me?.role === 'admin'} onChange={reload} />
+        {!!view.stopped.length && <StoppedAutomations items={view.stopped} isAdmin={me?.role === 'admin'} onChange={reload} />}
       </>}
     </main>
   );

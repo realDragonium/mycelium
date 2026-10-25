@@ -142,6 +142,12 @@ class ReviewSettings(RequestLimits):
     #: call from its parts' context and max_tokens; a larger draft is
     #: refused. 0 sets no cap.
     max_draft_tokens: int = Field(default=300_000, ge=0)
+    #: Further AI answers after the reviewer asks again, before its
+    #: questions wait for a person.
+    answer_retries: int = Field(default=2, ge=0)
+    #: Automatic reviews again after refreshed alias suggestions, before
+    #: the draft waits for a person to start its review again.
+    refresh_reviews: int = Field(default=2, ge=0)
 
 
 class AliasDiscoverySettings(RequestLimits):
@@ -162,12 +168,18 @@ class AudienceLabellingSettings(RequestLimits):
     confirm_external_grants: bool = True
     #: Have a second AI review grants waiting for external confirmation.
     ai_grant_review: bool = False
+    #: Have the same AI decide curator labels whose statement text changed
+    #: since, and confirmed grants an edit's relabel kept in force.
+    ai_label_decisions: bool = False
     #: Pending grants one review sample draws per external audience.
     sample_size: int = Field(default=50, gt=0, le=500)
     #: Below this sample precision the review suggests relabelling instead
     #: of accepting the rest.
     min_sample_precision_percent: int = Field(default=90, ge=0, le=100)
     batch_size: int = Field(default=25, gt=0, le=100)
+    #: Further AI decisions on an item after one failed, before it stops
+    #: until its statement or label changes or a person retries it.
+    decision_retries: int = Field(default=2, ge=0)
     max_tokens: int = Field(default=6000, gt=0)
     max_retries: int = Field(default=2, ge=0)
     request_timeout_s: float = Field(default=90.0, gt=0)
@@ -218,6 +230,22 @@ class ConnectSettings(LoopLimits):
     op_cap: int = Field(default=60, gt=0)
     wall_clock_s: float = Field(default=300.0, gt=0)
     request_timeout_s: float = Field(default=120.0, gt=0)
+    #: The AI curation pass works these lists in the background on the
+    #: connect model while Connecting statements runs on a server model.
+    #: Run the connect pass on the next statements to connect.
+    connect_automatically: bool = False
+    #: Decide duplicate statement and concept candidates.
+    decide_duplicates: bool = False
+    #: Describe concepts that have no description.
+    describe_concepts: bool = False
+    #: Act on rephrase gaps and on gaps about a draft.
+    act_on_gaps: bool = False
+    #: Further connect runs on a statement after one failed to look at it,
+    #: before it stops until its text changes or a person retries it.
+    connect_retries: int = Field(default=2, ge=0)
+    #: Further curation proposals in one chain of rejected drafts, before
+    #: the next gap about a rejected draft is left for a person.
+    follow_up_retries: int = Field(default=2, ge=0)
 
 
 class ConcurrencySettings(SettingsModel):

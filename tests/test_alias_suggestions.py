@@ -3,7 +3,16 @@ from contextlib import contextmanager
 
 import pytest
 
-from mycelium import ai, auth, drafts_store, model_settings, prompt_store, server, store
+from mycelium import (
+    ai,
+    auth,
+    drafts_store,
+    model_settings,
+    product_settings,
+    prompt_store,
+    server,
+    store,
+)
 from mycelium import alias_suggestions as aliases
 from mycelium.ingest.draft import InProcessDraftEmitter
 from mycelium.product_settings import IngestSettings
@@ -740,6 +749,185 @@ def test_reviewer_decides_alias_before_applying_mixed_draft(tmp_path, monkeypatc
         assert draft["review_assessment"]["application"] == "applied"
         assert store.get_name_by_text(server._db(), "SSO") is not None
         assert store.get_name_by_text(server._db(), "Unrelated") is not None
+
+
+def test_reviewer_rejects_alias_when_its_source_changed(tmp_path, monkeypatch):
+    from mycelium import draft_review_runs
+    from mycelium.draft_review_store import AliasDecision, Assessment
+    from settings_helpers import save_model, set_review_controls
+
+    with direct_vocabulary(tmp_path, monkeypatch) as (entity_id, statement_id):
+        entry = queue(entity_id, statement_id)
+        with store.transaction(server._db()):
+            store.update_statement_text(
+                server._db(), statement_id, "The earlier abbreviation was removed."
+            )
+        with store.transaction(runtime._auth_db()):
+            reviewer_id = auth.create_user(
+                runtime._auth_db(), name="Alias reviewer", role="writer", type="service"
+            )
+        set_review_controls(
+            mode="review-and-apply",
+            application_enabled=True,
+            alias_decisions=True,
+            reviewer_id=reviewer_id,
+        )
+        save_model("draft_review", provider="openai", openai_model="fixture")
+        monkeypatch.setenv("OPENAI_API_KEY", "fixture")
+        monkeypatch.setattr(
+            draft_review_runs,
+            "RUNNER",
+            lambda context: Assessment(
+                label="good",
+                rationale="The source was checked.",
+                questions=[],
+                alias_decisions=[
+                    AliasDecision(
+                        operation_ref=entry.operation_ref,
+                        decision="accept",
+                        quote="Single sign-on (SSO)",
+                        reason="The original source defined the abbreviation.",
+                    )
+                ],
+                corrections=[],
+                contradictions=[],
+            ),
+        )
+
+        draft_review_runs.on_submitted(entry.draft_id)
+        draft_review_runs.wait_all()
+
+        draft = server.get_draft(entry.draft_id)
+        assert draft["status"] == "rejected"
+        decided = aliases.list_entries("all")[0].suggestion
+        assert decided.status == "rejected"
+        [decision] = decided.history
+        assert decision.actor_id == reviewer_id
+        assert decision.quote is None
+        assert decision.reason == (
+            "The supporting statement changed since the suggestion; "
+            "scan the current statement."
+        )
+
+
+def test_reviewer_refreshes_stale_names_and_reviews_the_draft_again(
+    tmp_path, monkeypatch
+):
+    from mycelium import draft_review_runs
+    from mycelium.draft_review_store import AliasDecision, Assessment
+    from settings_helpers import save_model, set_review_controls
+
+    with direct_vocabulary(tmp_path, monkeypatch) as (entity_id, statement_id):
+        entry = queue(entity_id, statement_id)
+        server.upsert_name(text="Workspace login", entity_id=entity_id)
+        with store.transaction(runtime._auth_db()):
+            reviewer_id = auth.create_user(
+                runtime._auth_db(), name="Alias reviewer", role="writer", type="service"
+            )
+        set_review_controls(
+            mode="review-and-apply",
+            application_enabled=True,
+            alias_decisions=True,
+            reviewer_id=reviewer_id,
+        )
+        save_model("draft_review", provider="openai", openai_model="fixture")
+        monkeypatch.setenv("OPENAI_API_KEY", "fixture")
+        calls = 0
+
+        def review(context):
+            nonlocal calls
+            calls += 1
+            return Assessment(
+                label="good",
+                rationale="The source defines the abbreviation.",
+                questions=[],
+                alias_decisions=[
+                    AliasDecision(
+                        operation_ref=entry.operation_ref,
+                        decision="accept",
+                        quote="Single sign-on (SSO)",
+                        reason="The source explicitly defines the abbreviation.",
+                    )
+                ],
+                corrections=[],
+                contradictions=[],
+            )
+
+        monkeypatch.setattr(draft_review_runs, "RUNNER", review)
+        draft_review_runs.on_submitted(entry.draft_id)
+        draft_review_runs.wait_all()
+
+        assert calls == 2
+        draft = server.get_draft(entry.draft_id)
+        assert draft["status"] == "approved"
+        assert draft["review_assessment"]["refreshes"] == 1
+        decided = aliases.list_entries("all")[0].suggestion
+        assert decided.status == "accepted"
+        assert [decision.action for decision in decided.history] == [
+            "refreshed",
+            "accepted",
+        ]
+        assert all(decision.actor_id == reviewer_id for decision in decided.history)
+
+
+def test_reviewer_stops_after_the_refreshed_review_limit(tmp_path, monkeypatch):
+    from mycelium import draft_review_runs
+    from mycelium.draft_review_store import AliasDecision, Assessment
+    from product_settings_helpers import set_product
+    from settings_helpers import save_model, set_review_controls
+
+    with direct_vocabulary(tmp_path, monkeypatch) as (entity_id, statement_id):
+        entry = queue(entity_id, statement_id)
+        server.upsert_name(text="Workspace login", entity_id=entity_id)
+        with store.transaction(runtime._auth_db()):
+            reviewer_id = auth.create_user(
+                runtime._auth_db(), name="Alias reviewer", role="writer", type="service"
+            )
+        set_review_controls(
+            mode="review-and-apply",
+            application_enabled=True,
+            alias_decisions=True,
+            reviewer_id=reviewer_id,
+        )
+        set_product(product_settings.ReviewSettings(refresh_reviews=0))
+        save_model("draft_review", provider="openai", openai_model="fixture")
+        monkeypatch.setenv("OPENAI_API_KEY", "fixture")
+        calls = 0
+
+        def review(context):
+            nonlocal calls
+            calls += 1
+            return Assessment(
+                label="good",
+                rationale="The source defines the abbreviation.",
+                questions=[],
+                alias_decisions=[
+                    AliasDecision(
+                        operation_ref=entry.operation_ref,
+                        decision="accept",
+                        quote="Single sign-on (SSO)",
+                        reason="The source explicitly defines the abbreviation.",
+                    )
+                ],
+                corrections=[],
+                contradictions=[],
+            )
+
+        monkeypatch.setattr(draft_review_runs, "RUNNER", review)
+        draft_review_runs.on_submitted(entry.draft_id)
+        draft_review_runs.wait_all()
+
+        draft = server.get_draft(entry.draft_id)
+        review_run = draft["review_assessment"]
+        assert calls == 1
+        assert draft["status"] == "submitted"
+        assert review_run["application"] == "unapplied"
+        assert review_run["refreshes"] == 0
+        assert (
+            "Stopped reviewing again after 0 refreshed reviews; "
+            "a person starts the review again." in review_run["detail"]
+        )
+        assert entry.draft_id in draft_review_runs.backlog()
 
 
 @pytest.mark.parametrize("mode", ["review-only", "review-and-apply"])

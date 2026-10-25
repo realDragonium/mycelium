@@ -440,7 +440,11 @@ def decide_pending(
 
 
 def confirm_spot_check(
-    conn: sqlite3.Connection, statement_id: str, *, by: str | None
+    conn: sqlite3.Connection,
+    statement_id: str,
+    *,
+    by: str | None,
+    decision_reason: str | None = None,
 ) -> bool:
     """A curator confirms the grants an edit kept for the new text. False
     when nothing waits for a spot check."""
@@ -449,6 +453,8 @@ def confirm_spot_check(
     if current is None or checking is None:
         return False
     decision: Decision = {"decision": "confirmed", "by": by, "at": _now()}
+    if decision_reason is not None:
+        decision["reason"] = decision_reason
     decisions = {
         **label_decisions(current),
         **{key: decision for key in checking["audiences"]},

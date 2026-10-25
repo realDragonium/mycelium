@@ -771,3 +771,26 @@ def test_v24_keeps_the_connect_pass_looks_as_curation_attempts():
     )
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
     assert "connect_attempts" not in tables
+
+
+def test_v28_adds_the_automatic_stop_ledger():
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    conn.execute("DROP TABLE automation_stops")
+    conn.execute("PRAGMA user_version = 27")
+    conn.commit()
+
+    migrations.apply_migrations(conn)
+
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(automation_stops)")
+    }
+    assert columns == {
+        "kind",
+        "item_id",
+        "inputs",
+        "failures",
+        "stopped",
+        "reason",
+        "updated_at",
+    }

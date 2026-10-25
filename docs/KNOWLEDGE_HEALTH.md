@@ -91,6 +91,43 @@ to `connect_trace.jsonl` in the data directory.
 
 Its model calls are reported on the AI usage page as the connect pass.
 
+### AI curation pass
+
+The server can also work the [curation lists](#curation-work-for-outside-agents)
+itself, as a curation agent named `model:<model>` on the Connecting statements
+model. Each step has its own switch in **Settings → Limits → Connecting
+statements**, all off by default (and off after an upgrade):
+
+- **Connect statements automatically**: every minute, runs the connect pass on
+  the next isolated statements (then the next statements naming no concept),
+  as "Connect next N" does.
+- **AI decides duplicate candidates**: for each `duplicate` pair, proposes a
+  draft that merges one side into the other (`merge_statements` or
+  `merge_entities`), or records that the pair is distinct. A distinct concept
+  pair is dismissed in Names & aliases by `model:<model>`.
+- **AI describes concepts without a description**: proposes a description from
+  the statements that name the concept, citing them as evidence.
+- **AI acts on rephrase gaps and gaps about drafts**: rephrases or keeps a
+  statement the connect pass could not judge, and for a gap about a draft (a
+  rejected draft, a contradiction resolved in its favour) proposes a corrected
+  draft or closes the gap with a reason. Gaps about no draft, such as
+  questions Ask could not answer, need product knowledge and stay for agents
+  in the product's code and for people.
+
+Every proposal is a draft with the statements it rests on as evidence, created
+by no account, so the [reviewer](DRAFT_REVIEW.md) judges and, in
+review-and-apply, applies it (a merge only under an admin reviewer); with review off it waits for a curator. An item
+the model leaves undecided, or decides with something the server cannot check
+(a statement it was not given, an operation outside the fixed set), is released
+`skipped`: outside agents can still claim it, and the pass does not try it
+again until it changes. A connect run that fails, or ends without looking at
+a statement it took, counts a failure for that statement; after **Retries of
+a statement after a failed connect run** further failures (`connect_retries`,
+default 2) the statement stops (see [Stopped automations](#stopped-automations))
+until its text changes. The pass does nothing while Connecting statements runs
+on an External agent or has no credentials; its calls are metered as the
+connect pass.
+
 ## Curation work for outside agents
 
 The connect pass sees only the knowledge base, so it cannot tell whether two
@@ -115,9 +152,19 @@ audience cannot claim work.
 | `rephrase` | An open knowledge gap the connect pass filed, asking for a statement to be rephrased | A rephrasing of the statement |
 | `gap` | Any other open knowledge gap | The statements, links or concepts that close it |
 | `question` | A question the [draft reviewer](DRAFT_REVIEW.md) asked a person (`needs_context`) | The answer, with the evidence that settles it |
+| `duplicate` | A pair of statements, or of concepts, that look alike | Merge them, or say they are distinct |
+| `undescribed` | A concept without a description | Its description |
+| `unused` | A concept no statement mentions | The statements that name it, a merge, or nothing |
 
-An item's id is the statement's id for `isolated` and `unnamed`, and the
-gap's id for `rephrase`, `gap` and `question`. A `question` item is the
+An item's id is the statement's id for `isolated` and `unnamed`, the
+gap's id for `rephrase`, `gap` and `question`, the concept's id for
+`undescribed` and `unused`, and both ids sorted and joined by `~` for
+`duplicate`. A `duplicate` item carries `pair`: its kind (`statement` or
+`concept`), both sides (for concepts with their names, description and some
+statements naming them) and the score. `undescribed` and `unused` items carry
+`concept`: its names, description and the statements naming it. A `rephrase`
+or `gap` item whose gap names a draft carries `draft`: its id, title, status,
+the latest review's rationale and its operations. A `question` item is the
 newest open gap about a submitted draft whose latest review waits for a
 person and that has not changed since; it also carries `question`: the
 `draft_id`, the draft's title, the `run_id` of the review that asked, its
@@ -169,6 +216,13 @@ since their draft is still undecided.
      link that a concrete code excerpt supports even when the statement texts
      alone do not settle it, and judges a link without evidence more
      strictly.
+   - A merge: `merge_statements(from_id, into_id)` or
+     `merge_entities(from_entity_id, into_entity_id)` on your draft, keeping
+     the better phrased side. The reviewer judges it like any operation.
+   - A description: `upsert_entity(name, description)` with the concept's
+     name.
+   - Evidence can also be a knowledge-base statement: `{kind: "doc",
+     statement_id, excerpt, claim}`.
    - Nothing to propose: no write; release the item as `no_link` in step 5.
 4. **Submit the draft.** `submit_draft(draft_id)` sends it to the
    [reviewer](DRAFT_REVIEW.md) while review is on; otherwise it waits for a
@@ -191,6 +245,15 @@ since their draft is still undecided.
 
    The gap records the agent as who resolved or dismissed it and when, as
    it records a person; the Gaps page shows the agent's reason beside it.
+
+   A `duplicate` item takes `proposed` (your merge draft), `not_applicable`
+   with a reason (the pair is distinct; a concept pair is dismissed in Names
+   & aliases as you) or `skipped`. It is not offered again until either side's
+   text, or a concept's names, change. Pairs either side of which an undecided
+   draft touches are left out. Merges stay admin operations: a merge draft
+   applies only when its reviewer is an admin (an external agent with an
+   admin token, or an admin reviewer account for a server model). Under a
+   writer reviewer the attempt fails with the role error and the draft waits.
 
    A `question` item is released as `answered` (one item per call) with
    `answer` (at most 6,000 characters) and `evidence`: one to five items in
@@ -222,3 +285,29 @@ why. An admin can release an agent's
 claims on a list (`POST /api/knowledge-health/claims/free` with `kind` and
 `claimed_by`) when the agent stopped; no outcome is recorded, so the items
 are offered again.
+
+### Rejected proposal chains
+
+A rejected draft files a gap about it, and acting on that gap proposes another
+draft, which can be rejected again. So that curation and review do not loop,
+a gap about a draft is not offered to the AI curation pass or to outside
+agents once its chain holds more than **Retries after a curation proposal is
+rejected** (`follow_up_retries`, default 2) earlier rejected curation
+proposals: the draft it is about was proposed for a gap about another
+rejected draft, and so on. Such a gap stays open for a person and is listed
+under Stopped automations. An admin's retry lets that one gap be offered once
+more; if its proposal is rejected too, the new gap stops again.
+
+Other outcomes already keep an item from being offered again while its text
+is unchanged: a proposal (whatever became of its draft), a pair recorded as
+distinct, a gap closed as not applicable, and an item the agent skipped.
+
+### Stopped automations
+
+Knowledge health lists the items automatic work stopped retrying: connect
+pass statements, [audience decisions](AUDIENCES.md#stopped-decisions) and gap
+follow-ups, each with the reason, the failures and when it stopped. Nothing
+retries them automatically until their inputs change (the statement text, the
+label, the gap). An admin's **Retry** (`POST /api/knowledge-health/stopped/retry`
+with `kind` and `item_id`) offers the item to its automation again with a
+fresh count.

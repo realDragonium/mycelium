@@ -47,8 +47,8 @@ export interface DraftSummary {
 type Payload = Record<string, unknown>;
 // What the draft's creator checked in the product to support one operation.
 interface Evidence {
-  kind: 'code' | 'ui' | 'doc' | 'other'; path?: string; lines?: string; commit?: string; url?: string;
-  excerpt: string; claim: string;
+  kind: 'code' | 'ui' | 'doc' | 'media' | 'other'; path?: string; lines?: string; commit?: string; url?: string;
+  statement_id?: string; draft_id?: string; excerpt: string; claim: string;
 }
 interface DraftOp { seq: number; kind: string; payload: Payload; provenance: { source?: string } | null; evidence: Evidence[] }
 interface DraftSource { repository: string; pull_request: number; merged_commit: string; workflow_run_id: number; workflow_run_attempt: number }
@@ -271,6 +271,8 @@ function EvidenceList({ items }: { items: Evidence[] }) {
             <div className="row gap-sm"><span className="tag">{e.kind}</span><span>{e.claim}</span></div>
             <div className="mono small muted">
               {where}{where && e.url ? ' · ' : ''}{e.url && <a href={e.url} target="_blank" rel="noreferrer noopener">{e.url}</a>}
+              {e.statement_id && <Link to={{ view: 'statement', id: e.statement_id }}>statement {e.statement_id}</Link>}
+              {e.draft_id && <Link to={{ view: 'draft', id: e.draft_id }}>evidence of draft {e.draft_id}</Link>}
             </div>
             {e.excerpt && <pre className="op-evidence-excerpt">{e.excerpt}</pre>}
           </div>

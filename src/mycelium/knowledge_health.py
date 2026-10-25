@@ -38,7 +38,7 @@ STATEMENT_WHERE: dict[StatementFilter, str] = {
         "WHERE a.statement_id = s.id)"
     ),
 }
-_ENTITY_WHERE: dict[EntityFilter, str] = {
+ENTITY_WHERE: dict[EntityFilter, str] = {
     "undescribed": "TRIM(COALESCE(e.description, '')) = ''",
     "unused": (
         "NOT EXISTS (SELECT 1 FROM names n JOIN statement_mentions m "
@@ -77,7 +77,7 @@ def counts(
     )
     entity_counts = ", ".join(
         f"(SELECT COUNT(*) FROM entities e WHERE {where}) AS {name}"
-        for name, where in _ENTITY_WHERE.items()
+        for name, where in ENTITY_WHERE.items()
     )
     row = conn.execute(
         "SELECT (SELECT COUNT(*) FROM statements) AS statements, "
@@ -226,6 +226,7 @@ def to_connect(
     which: StatementFilter,
     *,
     limit: int,
+    stopped: Mapping[str, str] | None = None,
 ) -> StatementPage:
     """The statements matching `which` the connect pass should take next,
     likeliest to connect first. Leaves out what it should not be offered
@@ -240,7 +241,13 @@ def to_connect(
         f"ORDER BY {_CONNECTED_NEIGHBOURS} DESC, s.id",
         {"now": kernel._now()},
     )
-    chosen = [row for row in rows if str(row["id"]) not in pending][:limit]
+    stopped = stopped or {}
+    chosen = [
+        row
+        for row in rows
+        if str(row["id"]) not in pending
+        and stopped.get(str(row["id"])) != str(row["text"])
+    ][:limit]
     return StatementPage(
         filter=which, items=_statement_items(conn, chosen, pending), next_after=None
     )
@@ -315,7 +322,7 @@ def entities(
         "SELECT e.id, e.description, n.text AS name FROM entities e "
         "LEFT JOIN names n ON n.id = COALESCE(e.preferred_name_id, "
         "(SELECT MIN(id) FROM names WHERE entity_id = e.id)) "
-        f"WHERE e.id > ? AND {_ENTITY_WHERE[which]} ORDER BY e.id LIMIT ?",
+        f"WHERE e.id > ? AND {ENTITY_WHERE[which]} ORDER BY e.id LIMIT ?",
         (after or "", limit + 1),
     ).fetchall()
     page = rows[:limit]

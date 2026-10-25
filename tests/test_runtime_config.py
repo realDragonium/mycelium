@@ -53,7 +53,19 @@ def test_connect_adapts_its_saved_limits_for_the_ingest_loop(monkeypatch):
     monkeypatch.setattr(product_settings, "get", lambda _: limits)
     config = config_from_settings()
     assert config.limits.model_dump(exclude={"kind", "max_input_chars"}) == (
-        limits.model_dump(exclude={"kind", "batch_size", "max_run_tokens"})
+        limits.model_dump(
+            exclude={
+                "kind",
+                "batch_size",
+                "max_run_tokens",
+                "connect_automatically",
+                "decide_duplicates",
+                "describe_concepts",
+                "act_on_gaps",
+                "connect_retries",
+                "follow_up_retries",
+            }
+        )
     )
     assert (
         config.limits.max_input_chars

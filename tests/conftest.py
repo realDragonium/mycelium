@@ -75,6 +75,7 @@ def pytest_configure(config):
     # with an explicit clock instead.
     os.environ.setdefault("MYCELIUM_DISABLE_REVIEW_SWEEP", "1")
     os.environ.setdefault("MYCELIUM_DISABLE_AUDIENCE_WORKER", "1")
+    os.environ.setdefault("MYCELIUM_DISABLE_CURATION_WORKER", "1")
     # The document maintenance sweep too; tests call
     # `document_maintenance.sweep` with an explicit clock.
     os.environ.setdefault("MYCELIUM_DISABLE_MAINTENANCE_WORKER", "1")
