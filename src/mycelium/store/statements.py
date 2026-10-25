@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 
 from . import audience_labels, kernel
 from .kernel import _now, _record, _row_dict
@@ -256,21 +257,40 @@ def delete_name_vector_mapping(conn: sqlite3.Connection, name_id: str) -> None:
     conn.execute("DELETE FROM name_vector_ids WHERE name_id = ?", (name_id,))
 
 
-def list_pending_statements(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+#: A row the embedding worker stopped retrying while it had its current text;
+#: `{kind}` is the `automation_stops` item prefix of its table.
+_EMBEDDING_STOPPED = (
+    "('{kind}:' || id, text) IN (SELECT item_id, inputs FROM automation_stops "
+    "WHERE kind = 'embedding' AND stopped = 1)"
+)
+
+
+def list_pending_statements(
+    conn: sqlite3.Connection, limit: int, skip: Iterable[str] = ()
+) -> list[sqlite3.Row]:
+    """Statements without a vector, apart from the ids in `skip` and those
+    whose embedding stopped at its retry limit with their current text."""
     return conn.execute(
         "SELECT id, text FROM statements "
         "WHERE id NOT IN (SELECT statement_id FROM statement_vector_ids) "
+        "AND id NOT IN (SELECT value FROM json_each(?)) "
+        f"AND NOT {_EMBEDDING_STOPPED.format(kind='statement')} "
         "ORDER BY rowid LIMIT ?",
-        (limit,),
+        (json.dumps(list(skip)), limit),
     ).fetchall()
 
 
-def list_pending_names(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+def list_pending_names(
+    conn: sqlite3.Connection, limit: int, skip: Iterable[str] = ()
+) -> list[sqlite3.Row]:
+    """Names without a vector, as `list_pending_statements` picks them."""
     return conn.execute(
         "SELECT id, text FROM names "
         "WHERE id NOT IN (SELECT name_id FROM name_vector_ids) "
+        "AND id NOT IN (SELECT value FROM json_each(?)) "
+        f"AND NOT {_EMBEDDING_STOPPED.format(kind='name')} "
         "ORDER BY rowid LIMIT ?",
-        (limit,),
+        (json.dumps(list(skip)), limit),
     ).fetchall()
 
 

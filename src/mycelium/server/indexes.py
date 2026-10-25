@@ -16,10 +16,12 @@ import os
 import sqlite3
 import tempfile
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-from .. import embed, store, vector
+from .. import automation_stops, embed, store, vector
 from .runtime import _db, _idx, _idx_path, _name_idx, _name_idx_path
 
 logger = logging.getLogger(__name__)
@@ -66,43 +68,69 @@ def _set_name_vector(name_id: str, vec: list[float] | None) -> None:
         _name_idx().replace(vector_id, vec)
 
 
+@dataclass(frozen=True)
+class Pending:
+    kind: Literal["statement", "name"]
+    id: str
+    text: str
+
+    @property
+    def key(self) -> str:
+        """Its `automation_stops` item id."""
+        return f"{self.kind}:{self.id}"
+
+
+def pending(limit: int, skip: Collection[str] = ()) -> list[Pending]:
+    """Up to `limit` statements, then names, without a vector, apart from
+    the keys in `skip` and those stopped at their retry limit."""
+    if limit <= 0:
+        return []
+    statements = store.list_pending_statements(
+        _db(), limit, [key.removeprefix("statement:") for key in skip]
+    )
+    names = store.list_pending_names(
+        _db(), limit - len(statements), [key.removeprefix("name:") for key in skip]
+    )
+    return [
+        Pending("statement", str(row["id"]), str(row["text"])) for row in statements
+    ] + [Pending("name", str(row["id"]), str(row["text"])) for row in names]
+
+
+def embed_pending(rows: Sequence[Pending]) -> int:
+    """Embed `rows` whose text remains unchanged. Raises EmbeddingError."""
+    if not rows:
+        return 0
+    vectors = embed.embed_many([row.text for row in rows])
+    embedded = 0
+    with _persisted_index_write(
+        statements=any(row.kind == "statement" for row in rows),
+        names=any(row.kind == "name" for row in rows),
+    ):
+        for item, vec in zip(rows, vectors, strict=True):
+            if item.kind == "statement":
+                row = store.get_statement(_db(), item.id)
+                mapped = store.get_vector_id(_db(), item.id)
+            else:
+                row = store.get_name_by_id(_db(), item.id)
+                mapped = store.get_name_vector_id(_db(), item.id)
+            if row is None or row["text"] != item.text or mapped is not None:
+                continue
+            if item.kind == "statement":
+                _set_statement_vector(item.id, vec)
+            else:
+                _set_name_vector(item.id, vec)
+            embedded += 1
+        automation_stops.clear(_db(), "embedding", [row.key for row in rows])
+    return embedded
+
+
 def reembed_pending(limit: int = 256) -> int:
     """Embed pending statements and names whose text remains unchanged."""
-    if limit <= 0:
-        return 0
-    statement_rows = store.list_pending_statements(_db(), limit)
-    name_rows = store.list_pending_names(_db(), limit - len(statement_rows))
-    pending = [
-        ("statement", str(row["id"]), str(row["text"])) for row in statement_rows
-    ] + [("name", str(row["id"]), str(row["text"])) for row in name_rows]
-    if not pending:
-        return 0
     try:
-        vectors = embed.embed_many([text for _kind, _row_id, text in pending])
+        return embed_pending(pending(limit))
     except embed.EmbeddingError as exc:
         logger.warning("pending embedding pass failed: %s", exc)
         return 0
-
-    embedded = 0
-    with _persisted_index_write(
-        statements=bool(statement_rows),
-        names=bool(name_rows),
-    ):
-        for (kind, row_id, text), vec in zip(pending, vectors, strict=True):
-            if kind == "statement":
-                row = store.get_statement(_db(), row_id)
-                mapped = store.get_vector_id(_db(), row_id)
-            else:
-                row = store.get_name_by_id(_db(), row_id)
-                mapped = store.get_name_vector_id(_db(), row_id)
-            if row is None or row["text"] != text or mapped is not None:
-                continue
-            if kind == "statement":
-                _set_statement_vector(row_id, vec)
-            else:
-                _set_name_vector(row_id, vec)
-            embedded += 1
-    return embedded
 
 
 def _rebuild_vector_index(

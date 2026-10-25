@@ -173,3 +173,66 @@ def test_reembed_pending_skips_text_changed_during_embedding(
 
     assert indexes.reembed_pending() == 0
     assert store.get_vector_id(store.substrate_connection(), statement_id) is None
+
+
+def test_a_row_that_fails_alone_is_passed_over_and_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mycelium import automation_stops, embedding_worker, product_settings
+    from product_settings_helpers import set_product
+
+    _init(tmp_path, monkeypatch)
+    set_product(product_settings.AutomationSettings(embedding_retries=0))
+    monkeypatch.setattr(embed, "embed", _outage)
+    ids = [
+        server.upsert_statement(kind="state", text=text, links=[])["statement_id"]
+        for text in (
+            "Invoices export as CSV",
+            "Workspace exports are rejected by the provider",
+            "Single sign-on uses the workspace domain",
+        )
+    ]
+    bad = ids[1]
+
+    def embed_many(texts):
+        if any("rejected" in text for text in texts):
+            raise embed.EmbeddingError("input rejected")
+        return [_vector(text) for text in texts]
+
+    monkeypatch.setattr(embed, "embed_many", embed_many)
+    state = embedding_worker.Isolation()
+    conn = store.substrate_connection()
+    for _ in range(4):
+        embedding_worker.run_pass(state)
+
+    assert [store.get_vector_id(conn, sid) is not None for sid in ids] == [
+        True,
+        False,
+        True,
+    ]
+    [stop] = automation_stops.stops(conn)
+    assert (stop.kind, stop.item_id) == ("embedding", f"statement:{bad}")
+    assert indexes.pending(10) == []
+
+    store.update_statement_text(conn, bad, "Workspace exports finish")
+    conn.commit()
+    assert [row.id for row in indexes.pending(10)] == [bad]
+
+
+def test_an_outage_counts_against_no_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mycelium import automation_stops, embedding_worker
+
+    _init(tmp_path, monkeypatch)
+    monkeypatch.setattr(embed, "embed", _outage)
+    for text in ("Invoices export as CSV", "Workspace exports finish"):
+        server.upsert_statement(kind="state", text=text, links=[])
+    monkeypatch.setattr(embed, "embed_many", _outage)
+    state = embedding_worker.Isolation()
+
+    for _ in range(5):
+        embedding_worker.run_pass(state)
+
+    assert automation_stops.stops(store.substrate_connection()) == []
+    assert len(state.suspects) == 2
