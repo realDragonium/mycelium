@@ -274,8 +274,8 @@ def resume_after_restart(conn: sqlite3.Connection) -> tuple[int, int]:
                 conn,
                 run_id,
                 outcome="failed",
-                error=f"Interrupted by {restarts} server restarts and not started "
-                "again. "
+                error=f"Interrupted by {restarts} server "
+                f"restart{'s' if restarts != 1 else ''} and not started again. "
                 + ("Edit the document again." if manual else "Retry starts it again."),
             )
             failed += 1
