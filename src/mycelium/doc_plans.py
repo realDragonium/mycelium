@@ -235,21 +235,59 @@ def offered(conn: sqlite3.Connection, guideline_set: str) -> set[str]:
     return ids
 
 
+@dataclass(frozen=True)
+class StartFailure:
+    """Why an item approved without a person could not start its run, and
+    how often it failed to."""
+
+    error: str
+    attempts: int
+
+
+def start_failures(plan: sqlite3.Row) -> dict[str, StartFailure]:
+    summary = json.loads(plan["summary"]) if plan["summary"] else {}
+    return {
+        item_id: StartFailure(failure, 1)
+        if isinstance(failure, str)
+        else StartFailure(**failure)
+        for item_id, failure in summary.get("not_started", {}).items()
+    }
+
+
 def record_start_failure(
     conn: sqlite3.Connection, plan_id: str, item_id: str, error: str
 ) -> None:
-    """Note on an automatic plan that one of its items could not start its
-    run, so automatic planning leaves it for a person instead of retrying."""
+    """Note on a plan that one of its items could not start its run, so the
+    sweep leaves it for a person, or retries it while the profile's recovery
+    attempts last."""
     with conn:
         row = conn.execute(
             "SELECT summary FROM documentation_plans WHERE id = ?", (plan_id,)
         ).fetchone()
+        earlier = start_failures(row).get(item_id) if row is not None else None
         summary = json.loads(row["summary"]) if row and row["summary"] else {}
-        summary.setdefault("not_started", {})[item_id] = error
+        summary.setdefault("not_started", {})[item_id] = asdict(
+            StartFailure(error, 1 if earlier is None else earlier.attempts + 1)
+        )
         conn.execute(
             "UPDATE documentation_plans SET summary = ? WHERE id = ?",
             (json.dumps(summary), plan_id),
         )
+
+
+def failed_in_a_row(conn: sqlite3.Connection, guideline_set: str) -> int:
+    """The profile's automatic plans that failed since its last plan that did
+    not."""
+    return int(
+        conn.execute(
+            "SELECT COUNT(*) FROM documentation_plans WHERE guideline_set = ? "
+            "AND kind = 'model' AND automatic = 1 AND outcome = 'failed' "
+            "AND created_at > COALESCE((SELECT MAX(created_at) FROM "
+            "documentation_plans WHERE guideline_set = ? AND kind = 'model' "
+            "AND outcome = 'planned'), '')",
+            (guideline_set, guideline_set),
+        ).fetchone()[0]
+    )
 
 
 @dataclass(frozen=True)
@@ -262,6 +300,8 @@ class Review:
     #: The agent that reviewed it; None for the server's model.
     reviewer: str | None
     at: str
+    #: How often a review of the item failed, while it waits.
+    failures: int = 0
 
 
 def record_reviews(conn: sqlite3.Connection, reviews: Mapping[str, Review]) -> None:
@@ -308,6 +348,17 @@ def current_plans(conn: sqlite3.Connection, guideline_set: str) -> list[sqlite3.
             "WHERE guideline_set = ? AND kind = 'model' AND outcome = 'planned' "
             "ORDER BY created_at DESC, rowid DESC LIMIT 1)) ORDER BY kind DESC",
             (guideline_set, guideline_set),
+        )
+    )
+
+
+def plans(conn: sqlite3.Connection, guideline_set: str) -> list[sqlite3.Row]:
+    """All of a profile's plans, newest model plan first."""
+    return list(
+        conn.execute(
+            "SELECT * FROM documentation_plans WHERE guideline_set = ? "
+            "ORDER BY kind, created_at DESC, rowid DESC",
+            (guideline_set,),
         )
     )
 
@@ -439,6 +490,18 @@ def dismiss(
         conn.execute(
             "INSERT OR IGNORE INTO documentation_plan_dismissals VALUES (?, ?, ?, ?, ?)",
             (guideline_set, key, title, now, dismissed_by),
+        )
+
+
+def undismiss(conn: sqlite3.Connection, guideline_set: str, key: str) -> bool:
+    """Forget a dismissal, so the profile is offered the proposal again."""
+    with conn:
+        return bool(
+            conn.execute(
+                "DELETE FROM documentation_plan_dismissals "
+                "WHERE guideline_set = ? AND key = ?",
+                (guideline_set, key),
+            ).rowcount
         )
 
 

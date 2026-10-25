@@ -49,6 +49,16 @@ PLAN_REVIEW_SLOT = "plan_review"
 #: by people only.
 DELIVERY_SLOT = "delivery"
 
+#: The set-wide destination slot: the documentation destination a set whose
+#: delivery is `auto` publishes a never-published document to. Without one,
+#: only documents published before are delivered automatically.
+DELIVERY_DESTINATION_SLOT = "delivery_destination"
+
+#: The set-wide recovery slot: whether the maintenance sweep retries the
+#: set's AI work that failed, within bounded attempts, or leaves it for a
+#: person (see `mycelium.document_maintenance`). A set without one leaves it.
+RECOVERY_SLOT = "recovery"
+
 #: Slots that steer every document in a set rather than naming something the
 #: set can write. Keeping the subtraction here makes another set-wide slot a
 #: one-line addition rather than another catalogue special case.
@@ -61,6 +71,8 @@ NON_TYPE_SLOTS = frozenset(
         PLANNING_SLOT,
         PLAN_REVIEW_SLOT,
         DELIVERY_SLOT,
+        DELIVERY_DESTINATION_SLOT,
+        RECOVERY_SLOT,
     }
 )
 

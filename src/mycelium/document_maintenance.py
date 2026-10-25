@@ -1,9 +1,12 @@
 """Keeping generated documents up to date by themselves.
 
 The same sweep also plans for profiles whose planning policy is not `off`
-(`documentation_planning.plan_automatically`), and has an AI reviewer decide
+(`documentation_planning.plan_automatically`), has an AI reviewer decide
 the plan items of profiles whose plan review is `ai`
-(`documentation_plan_review`).
+(`documentation_plan_review`), retries the runs that wrote nothing of
+profiles whose recovery is `ai`, and publishes what profiles whose delivery
+is `auto` wrote. Each finished run is decided once, for both, from the
+database: whether it was retried and whether it was published.
 
 Each writing profile has a maintenance policy (`documentation_profiles`):
 `manual` leaves an out-of-date document for someone to notice, `propose`
@@ -74,21 +77,38 @@ Action = Literal["propose", "auto-revise"]
 
 def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(document_maintenance)")
+    }
+    if "attempts" not in columns:
+        # Automatic revisions that could not start their run.
+        conn.execute(
+            "ALTER TABLE document_maintenance ADD COLUMN attempts INTEGER "
+            "NOT NULL DEFAULT 0"
+        )
 
 
 def mark_interrupted(conn: sqlite3.Connection) -> None:
     """At startup nothing is starting or publishing, so a claim left without
     its outcome was cut off by the restart. It is reported, not repeated."""
+    interrupted = (
+        "interrupted by restart while publishing; publish it from the document"
+    )
     with conn:
         conn.execute(
             "UPDATE document_maintenance SET error = 'interrupted by restart "
-            "before its run started' WHERE action = 'auto-revise' "
-            "AND run_id IS NULL AND error IS NULL"
+            "before its run started', attempts = attempts + 1 "
+            "WHERE action = 'auto-revise' AND run_id IS NULL AND error IS NULL"
         )
         conn.execute(
-            "UPDATE document_maintenance SET delivery = 'failed', error = "
-            "'interrupted by restart while publishing; publish it from the "
-            "document' WHERE delivery = 'publishing'"
+            "UPDATE document_maintenance SET delivery = 'failed', error = ? "
+            "WHERE delivery = 'publishing'",
+            (interrupted,),
+        )
+        conn.execute(
+            "UPDATE documentation_runs SET delivery = 'failed', delivery_error = ? "
+            "WHERE delivery = 'publishing'",
+            (interrupted,),
         )
 
 
@@ -104,12 +124,12 @@ def sweep(now: datetime | None = None) -> list[str]:
 
     now = now or datetime.now(UTC)
     drafts = drafts_store.connection()
-    _publish_finished(drafts)
     limits = product_settings.get(product_settings.DocumentationMaintenanceSettings)
     max_active = product_settings.get(
         product_settings.ConcurrencySettings
     ).documentation_runs
     snapshot = documentation_profiles.capture()
+    _deliver_finished(drafts, snapshot, limits.delivery_retries)
     # Without credentials a revision would only fail, so the document waits
     # unclaimed and is revised once they are configured.
     can_revise = model_settings.credentials_error("docgen") is None
@@ -136,7 +156,15 @@ def sweep(now: datetime | None = None) -> list[str]:
             ):
                 continue
             row = _observe(drafts, profile.name, document, now)
-            if row["action"] is not None:
+            if (
+                profile.recovery == "ai"
+                and row["action"] == "auto-revise"
+                and row["run_id"] is None
+                and row["error"] is not None
+                and row["attempts"] <= limits.revision_start_retries
+            ):
+                _record(drafts, document.id, document.revision, action=None)
+            elif row["action"] is not None:
                 continue
             if profile.maintenance != "auto-revise":
                 _propose(drafts, profile.name, audience.id, document, now)
@@ -157,6 +185,7 @@ def sweep(now: datetime | None = None) -> list[str]:
         drafts, store.substrate_connection(), snapshot
     )
     started += documentation_plan_review.sweep(snapshot)
+    started += _retry_finished(drafts, snapshot, limits.run_retries, max_active)
     return started
 
 
@@ -290,14 +319,22 @@ def _revise(
         )
     except Exception as exc:
         logger.warning("could not revise %s automatically", document.id, exc_info=True)
-        _record(conn, document.id, document.revision, error=str(exc))
+        with conn:
+            conn.execute(
+                "UPDATE document_maintenance SET error = ?, attempts = attempts + 1 "
+                "WHERE document_id = ? AND revision = ?",
+                (str(exc), document.id, document.revision),
+            )
         return None
-    _record(conn, document.id, document.revision, run_id=run_id)
+    _record(conn, document.id, document.revision, run_id=run_id, error=None)
     return run_id
 
 
 def _record(
-    conn: sqlite3.Connection, document_id: str, revision: int, **values: str | None
+    conn: sqlite3.Connection,
+    document_id: str,
+    revision: int,
+    **values: str | int | None,
 ) -> None:
     columns = ", ".join(f"{column} = ?" for column in values)
     with conn:
@@ -308,42 +345,166 @@ def _record(
         )
 
 
-def _publish_finished(conn: sqlite3.Connection) -> None:
-    """Publish each automatic revision whose document was published before,
-    to the same destination: that updates its open pull request or opens a
-    new one, and a person still merges it."""
+def _deliver_finished(
+    conn: sqlite3.Connection,
+    snapshot: documentation_profiles.CatalogueSnapshot,
+    retries: int,
+) -> None:
+    """Publish each finished run's revision that is published automatically,
+    while it is still its document's current one: under `auto` delivery,
+    to where the document was published before or the profile's
+    destination; and an automatic revision of a document published before,
+    whatever the delivery, to the same destination. That opens or updates
+    the pull request; the destination repository merges it. A failed
+    publication is tried again while the profile's recovery attempts last."""
+    profiles = {profile.name: profile for profile in snapshot.profiles}
     rows = conn.execute(
-        "SELECT m.document_id, m.revision, r.outcome, r.result_revision, "
-        "d.delivery_destination FROM document_maintenance m "
-        "JOIN documentation_runs r ON r.id = m.run_id "
-        "LEFT JOIN generated_documents d ON d.id = m.document_id "
-        "WHERE m.delivery IS NULL AND r.finished_at IS NOT NULL"
+        "SELECT r.id, r.guideline_set, r.outcome, r.result_revision, "
+        "r.delivery_attempts, d.id AS document_id, d.current_revision, "
+        "d.delivery_destination, m.action AS maintenance "
+        "FROM documentation_runs r "
+        "LEFT JOIN generated_documents d ON d.id = r.document_id "
+        "LEFT JOIN document_maintenance m ON m.run_id = r.id "
+        "WHERE r.delivery IS NULL AND r.finished_at IS NOT NULL"
     ).fetchall()
     for row in rows:
-        document_id, revision = str(row["document_id"]), int(row["revision"])
-        if row["outcome"] != "document_written" or not row["delivery_destination"]:
-            _record(conn, document_id, revision, delivery="none")
+        run_id = str(row["id"])
+        profile = profiles.get(str(row["guideline_set"] or ""))
+        destination = row["delivery_destination"] or (
+            profile.delivery_destination
+            if profile is not None and profile.delivery == "auto"
+            else None
+        )
+        automatic = (profile is not None and profile.delivery == "auto") or row[
+            "maintenance"
+        ] == "auto-revise"
+        if (
+            row["outcome"] != "document_written"
+            or not automatic
+            or not destination
+            or row["result_revision"] != row["current_revision"]
+        ):
+            _delivered(conn, run_id, "none")
             continue
         with conn:
             claimed = conn.execute(
-                "UPDATE document_maintenance SET delivery = 'publishing' "
-                "WHERE document_id = ? AND revision = ? AND delivery IS NULL",
-                (document_id, revision),
+                "UPDATE documentation_runs SET delivery = 'publishing' "
+                "WHERE id = ? AND delivery IS NULL",
+                (run_id,),
             ).rowcount
         if not claimed:
             continue
+        _delivered(conn, run_id, "publishing")
         try:
             publication.publish(
                 conn,
-                document_id,
-                str(row["delivery_destination"]),
+                str(row["document_id"]),
+                str(destination),
                 int(row["result_revision"]),
             )
         except Exception as exc:
-            logger.warning("could not publish %s", document_id, exc_info=True)
-            _record(conn, document_id, revision, delivery="failed", error=str(exc))
+            logger.warning("could not publish %s", row["document_id"], exc_info=True)
+            attempts = int(row["delivery_attempts"]) + 1
+            again = profile is not None and profile.recovery == "ai"
+            again = again and attempts <= retries
+            _delivered(conn, run_id, None if again else "failed", str(exc), attempts)
         else:
-            _record(conn, document_id, revision, delivery="published")
+            _delivered(conn, run_id, "published")
+
+
+def _delivered(
+    conn: sqlite3.Connection,
+    run_id: str,
+    delivery: str | None,
+    error: str | None = None,
+    attempts: int | None = None,
+) -> None:
+    """Record what came of publishing a run's revision, on the run and on
+    the automatic revision it made, if it made one. No delivery leaves the
+    run to be published on the next sweep."""
+    with conn:
+        conn.execute(
+            "UPDATE documentation_runs SET delivery = ?, delivery_error = ?, "
+            "delivery_attempts = COALESCE(?, delivery_attempts) WHERE id = ?",
+            (delivery, error, attempts, run_id),
+        )
+        conn.execute(
+            "UPDATE document_maintenance SET delivery = ?, "
+            "error = COALESCE(?, error) WHERE run_id = ?",
+            (delivery, error, run_id),
+        )
+
+
+def _retry_finished(
+    conn: sqlite3.Connection,
+    snapshot: documentation_profiles.CatalogueSnapshot,
+    retries: int,
+    max_active: int,
+) -> list[str]:
+    """Start again each finished run that wrote nothing, of a profile whose
+    recovery is `ai`, while the active-run limit has room: briefed with the
+    review's findings when the review refused it. After `retries` automatic
+    retries it is given up with a reason. Returns the ids of the runs
+    started."""
+    from . import document_edits, server
+
+    recovering = {
+        profile.name for profile in snapshot.profiles if profile.recovery == "ai"
+    }
+    can_run = model_settings.credentials_error("docgen") is None
+    started: list[str] = []
+    for row in conn.execute(
+        "SELECT id, guideline_set, outcome, prompt, provider, attempt, summary, "
+        "error FROM documentation_runs WHERE recovery IS NULL "
+        "AND finished_at IS NOT NULL ORDER BY finished_at"
+    ).fetchall():
+        run_id = str(row["id"])
+        if (
+            row["outcome"] == "document_written"
+            or row["guideline_set"] not in recovering
+            or row["prompt"] == document_edits.MANUAL_EDIT_PROMPT
+        ):
+            _recovered(conn, run_id, "none")
+            continue
+        if int(row["attempt"]) >= retries:
+            _recovered(
+                conn,
+                run_id,
+                "gave_up",
+                f"Gave up after {row['attempt']} automatic "
+                f"retr{'y' if row['attempt'] == 1 else 'ies'}: {row['error']}"
+                if row["attempt"]
+                else f"Gave up without an automatic retry: {row['error']}",
+            )
+            continue
+        if (not can_run and row["provider"] != "agent") or docs_store.count_active(
+            conn
+        ) >= max_active:
+            continue
+        notes = bool(
+            row["summary"] and json.loads(row["summary"]).get("review_findings")
+        )
+        try:
+            run = server.retry_documentation_run(
+                run_id, with_review_notes=notes, automatic=True
+            )
+        except Exception as exc:
+            logger.warning("could not retry %s", run_id, exc_info=True)
+            _recovered(conn, run_id, "gave_up", f"Could not retry it: {exc}")
+            continue
+        started.append(str(run["id"]))
+    return started
+
+
+def _recovered(
+    conn: sqlite3.Connection, run_id: str, recovery: str, note: str | None = None
+) -> None:
+    with conn:
+        conn.execute(
+            "UPDATE documentation_runs SET recovery = ?, recovery_note = ? "
+            "WHERE id = ? AND recovery IS NULL",
+            (recovery, note, run_id),
+        )
 
 
 # --- what people are told --------------------------------------------------------

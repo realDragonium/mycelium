@@ -428,6 +428,20 @@ def dismiss_uncovered_statement_http(
     return {"dismissed": True}
 
 
+@router.post(
+    "/api/documentation/plans/{guideline_set}/uncovered/{statement_id}/restore"
+)
+def restore_uncovered_statement_http(
+    guideline_set: str, statement_id: str, request: Request
+) -> dict[str, bool]:
+    _enforce_role(request, "writer", real_role=True)
+    try:
+        documentation_planning.restore_statement(guideline_set, statement_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"restored": True}
+
+
 class StaleDismissalBody(BaseModel):
     revision: int = PydField(ge=1, strict=True)
 

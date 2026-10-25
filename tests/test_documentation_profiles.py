@@ -481,3 +481,58 @@ def test_a_writer_sets_the_automation_policies_and_turns_them_off(db):
         profiles.save_text(
             guidelines.TYPE, "internal/delivery", "always", principal("writer")
         )
+
+
+def test_automatic_delivery_names_a_configured_destination(db):
+    from mycelium import product_settings
+    from product_settings_helpers import set_product
+
+    set_product(
+        product_settings.DocumentationSettings(
+            destinations=(
+                product_settings.DestinationSettings(
+                    name="docs",
+                    path_template="docs/{slug}.md",
+                    owner="example",
+                    repo="handbook",
+                    base_branch="main",
+                    binding="handbook",
+                ),
+            )
+        )
+    )
+    first = save()
+    assert (first.recovery, first.delivery_destination) == ("person", "")
+
+    def automate(revision: str, destination: str) -> profiles.Profile:
+        return profiles.save(
+            "internal",
+            profiles.SaveProfile(
+                revision=revision,
+                guidance="Use known facts.",
+                exposure="Keep internal.",
+                delivery="auto",
+                delivery_destination=destination,
+                recovery="ai",
+                templates=(
+                    profiles.Template(name="reference", text="Write a reference."),
+                ),
+            ),
+            principal("writer"),
+        )
+
+    with pytest.raises(ValueError, match="'elsewhere' is not configured"):
+        automate(first.revision, "elsewhere")
+    automatic = automate(first.revision, "docs")
+    snapshot = profiles.capture(db).profiles[0]
+    assert (snapshot.delivery, snapshot.delivery_destination, snapshot.recovery) == (
+        "auto",
+        "docs",
+        "ai",
+    )
+    cleared = automate(automatic.revision, "")
+    assert (cleared.delivery_destination, cleared.recovery) == ("", "ai")
+    with pytest.raises(ValueError, match="Recovery must be one of"):
+        profiles.save_text(
+            guidelines.TYPE, "internal/recovery", "always", principal("writer")
+        )

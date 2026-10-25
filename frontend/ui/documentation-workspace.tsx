@@ -29,6 +29,8 @@ interface DocumentationRun {
   target_document_id: string | null; target_revision: number | null;
   revision_base: string | null; error: string | null; draft_title?: string | null; draft_body?: string | null;
   summary: RunSummary | null; review_notes: ReviewNote[]; retryable?: boolean; agent_task?: AgentTask | null;
+  retry_of: string | null; attempt: number; recovery: 'none' | 'retried' | 'gave_up' | null; recovery_note: string | null;
+  delivery: 'none' | 'publishing' | 'published' | 'failed' | null; delivery_error: string | null;
 }
 interface RunSummary {
   activity: string | null; turns: number; duration_s: number;
@@ -70,8 +72,8 @@ interface PlanItem {
   id: string; action: 'create' | 'update'; title: string; document_type: string; anchor_entity_id: string | null; anchor_name: string | null;
   document_id: string | null; rationale: string; priority: 'high' | 'medium' | 'low'; statement_ids: string[];
   state: 'proposed' | 'approved' | 'dismissed'; run: { id: string; status: string; queue_position: number | null; document_id: string | null; review_notes: boolean } | null;
-  maintenance: boolean;
-  review: { decision: 'approve' | 'dismiss' | null; reason: string; reviewer: string | null; at: string } | null;
+  maintenance: boolean; start_error: string | null; given_up: string | null;
+  review: { decision: 'approve' | 'dismiss' | null; reason: string; reviewer: string | null; at: string; failures: number } | null;
 }
 interface PlanSummary {
   id: string; created_at: string; finished_at: string | null; outcome: 'planned' | 'failed' | null; error: string | null; activity: string | null;
@@ -82,7 +84,9 @@ interface DocumentationPlan {
   stale: { document_id: string; title: string; document_type: string; revision: number; changes: StatementChange[] }[];
   coverage: { entity_id: string; name: string; statements: number }[];
   uncovered_statements: number; uncovered: { id: string; kind: string; text: string }[]; dismissed_statements: number;
+  dismissed_uncovered: { id: string; kind: string; text: string }[];
   planning: 'off' | 'propose' | 'write'; plan_review: 'person' | 'ai'; review_task: AgentTask | null;
+  recovery: 'person' | 'ai'; recovery_note: string | null;
   visible_statements: number; new_since_plan: number | null; replan_hint: boolean; dismissed: number; approve_batch: number;
 }
 interface ApprovedItem { item_id: string; run: DocumentationRun | null; error: string | null }
@@ -456,6 +460,11 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
     : <>{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'}</>} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
     {run.target_document_id && <p>Revises <a href={'#/documentation?document=' + encodeURIComponent(run.target_document_id)}>an existing document</a>, starting from its revision {run.target_revision}.</p>}
     {run.revision_base === 'destination' && <p>This revision started from the published copy on GitHub.</p>}
+    {run.retry_of && <p>{run.attempt ? `Automatic retry ${run.attempt}` : 'Retry'} of <a href={'#/documentation?run=' + encodeURIComponent(run.retry_of)}>an earlier run</a>.</p>}
+    {run.recovery === 'retried' && <p>Retried in a later run.</p>}
+    {run.recovery === 'gave_up' && run.recovery_note && <p role="alert">{run.recovery_note}</p>}
+    {run.delivery === 'published' && <p>Published automatically after review.</p>}
+    {run.delivery === 'failed' && run.delivery_error && <p role="alert">Automatic publication failed: {run.delivery_error}</p>}
     {run.review_notes.length > 0 && <details><summary>Writer briefed with notes from an earlier review</summary><ul>{run.review_notes.map((note, index) => <li key={index}><strong>{REVIEW_CHECKS[note.check]}</strong> · {note.where}: {note.problem}</li>)}</ul></details>}
     {docActive(run) && <p role="status">{run.agent_task ? agentRunStatus(run.agent_task) : <>{run.summary?.activity ? `${run.summary.activity}. ` : ''}You can leave this screen while generation and review finish.</>}</p>}
     {docActive(run) && !!run.agent_task?.findings.length && <details><summary>Last submission refused</summary><ul>{run.agent_task.findings.map((finding, index) => <li key={index}><strong>{finding.check}</strong>{finding.where ? ` · ${finding.where}` : ''}: {finding.problem}</li>)}</ul></details>}
@@ -546,7 +555,7 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
       <div className="docw-actions"><h2>Plan documentation</h2><button onClick={refresh}>Refresh</button></div>
       <p>The planner reads what the profile's audience may see and proposes the documents that audience needs. Approving an item starts a documentation run; nothing is written before you approve.</p>
       <label>Writing profile<select value={selected} onChange={event => docNavigate({ tab: 'plan', profile: event.target.value })}>{profiles.map(name => <option key={name}>{name}</option>)}</select></label>
-      {plan && <p className="docw-meta">{plan.audience ? <>Audience: <AudienceIdentity audience={plan.audience} /> · {plan.visible_statements} visible statements</> : 'No audience'} · {PLANNING_POLICIES[plan.planning]}{plan.plan_review === 'ai' && ' · Items decided by an AI reviewer'}</p>}
+      {plan && <p className="docw-meta">{plan.audience ? <>Audience: <AudienceIdentity audience={plan.audience} /> · {plan.visible_statements} visible statements</> : 'No audience'} · {PLANNING_POLICIES[plan.planning]}{plan.plan_review === 'ai' && ' · Items decided by an AI reviewer'}{plan.recovery === 'ai' && ' · Failed AI work is retried'}</p>}
       {plan?.unavailable && <p role="alert">{plan.unavailable}</p>}
       {plan && <div className="docw-actions">
         <button type="button" disabled={!canAct || active || !!plan.unavailable} onClick={() => act(() => docPost('plans/' + encodeURIComponent(selected), {}))}>{active ? 'Planning…' : latest ? 'Plan again' : 'Plan documentation'}</button>
@@ -558,6 +567,7 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
       {plan?.review_task && <p role="status">Review of the proposed items: {agentPlanStatus(plan.review_task)}</p>}
       {plan?.replan_hint && <p role="status">{plan.new_since_plan} statements became visible to this audience since the last plan. Plan again to consider them.</p>}
       {latest?.outcome === 'failed' && <p role="alert">The last plan failed: {latest.error}</p>}
+      {plan?.recovery_note && <p role="status">{plan.recovery_note}</p>}
       {!options.can_generate && <p>Writer or admin access is required to plan and approve documents.</p>}
       {error && <p role="alert">{error}</p>}
       {notes.map(note => <p key={note} role="alert">{note}</p>)}
@@ -575,6 +585,8 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
             <strong>{item.title}</strong>
             <p className="docw-meta">{item.maintenance ? 'Bring up to date' : item.action === 'create' ? 'New' : 'Update'} {item.document_type} · {PRIORITIES[item.priority]}{item.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: item.anchor_entity_id }}>{item.anchor_name || docEntityName(item.anchor_entity_id)}</Link></>}{item.document_id && <> · updates <a href={'#/documentation?document=' + encodeURIComponent(item.document_id)}>the existing document</a></>}</p>
             <p className={item.maintenance ? 'docw-brief' : undefined}>{item.rationale}</p>
+            {item.given_up && <p role="status" className="docw-meta">{item.given_up}</p>}
+            {item.state === 'proposed' && item.start_error && !item.given_up && <p className="docw-meta">Could not start: {item.start_error}</p>}
             <details><summary>{item.statement_ids.length} {item.maintenance ? 'changed statements' : 'statements it would mainly draw on'}</summary><DocumentationSources ids={item.statement_ids} /></details>
             {item.state === 'proposed' && options.can_generate && <div className="docw-actions"><button type="button" disabled={!canAct} onClick={() => approve([item.id])}>Approve</button><button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plan-items/${encodeURIComponent(item.id)}/dismiss`, {}))}>Dismiss</button></div>}
             {item.review && <p className="docw-meta">{item.review.decision === 'approve' ? 'Approved by AI review' : item.review.decision === 'dismiss' ? 'Dismissed by AI review' : 'Not reviewed'}{item.review.reviewer && <> ({item.review.reviewer})</>}: {item.review.reason}{item.review.decision === 'approve' && item.state === 'proposed' && ' · starts when the active-run limit has room'}</p>}
@@ -600,11 +612,13 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
         </div>
       </article>)}</div>
     </section>}
-    {plan && plan.uncovered_statements > 0 && <section className="docw-panel" aria-label="Statements without a document">
+    {plan && (plan.uncovered_statements > 0 || plan.dismissed_uncovered.length > 0) && <section className="docw-panel" aria-label="Statements without a document">
       <h2>Statements without a document</h2>
       <p>{plan.uncovered_statements} statements this audience may see are cited by no document of this profile. Each plan places up to the limit under Settings → Limits in an existing document or a new one. Dismiss a statement this profile should never document{plan.dismissed_statements ? ` (${plan.dismissed_statements} dismissed)` : ''}.</p>
       <ul>{plan.uncovered.map(statement => <li key={statement.id}><Link to={{ view: 'statement', id: statement.id }}>{statement.text}</Link> <span className="docw-meta">· {statement.kind}</span>
         {options.can_generate && <> <button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plans/${encodeURIComponent(selected)}/uncovered/${encodeURIComponent(statement.id)}/dismiss`, {}))}>Dismiss</button></>}</li>)}</ul>
+      {plan.dismissed_uncovered.length > 0 && <details><summary>{plan.dismissed_uncovered.length} dismissed statements</summary><ul>{plan.dismissed_uncovered.map(statement => <li key={statement.id}><Link to={{ view: 'statement', id: statement.id }}>{statement.text}</Link> <span className="docw-meta">· {statement.kind}</span>
+        {options.can_generate && <> <button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plans/${encodeURIComponent(selected)}/uncovered/${encodeURIComponent(statement.id)}/restore`, {}))}>Undo dismissal</button></>}</li>)}</ul></details>}
       {plan.uncovered_statements > plan.uncovered.length && <p className="docw-meta">…and {plan.uncovered_statements - plan.uncovered.length} more.</p>}
     </section>}
     {plan && plan.coverage.length > 0 && <section className="docw-panel" aria-label="Coverage">

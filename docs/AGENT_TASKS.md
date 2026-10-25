@@ -58,7 +58,7 @@ back to the queue (a grant review skips the grants it labelled).
 |---|---|---|
 | `documentation` | A documentation run starts, or a document is revised, while Documentation is set to External agent | The document: title, Markdown body and the statement ids it rests on, as the server's writer emits it |
 | `document_review` | An agent's document passed its checks and Documentation's Review is **Another agent** | The review: exposure and conformance verdicts with findings |
-| `documentation_planning` | A plan is requested for a writing profile, by a person or by the profile's automatic planning, while Documentation planning is set to External agent | The proposed documents, placing the brief's uncovered statements in updates of existing documents or in new ones |
+| `documentation_planning` | A plan is requested for a writing profile, by a person or by the profile's automatic planning, while Documentation planning is set to External agent; and for each further call of a plan allowed more than one | The proposed documents, placing the brief's uncovered statements in updates of existing documents or in new ones, without proposing again what `already_proposed` lists |
 | `plan_review` | A profile whose plan items an AI reviewer decides has proposed items no review decided (checked by the maintenance sweep and when an agent claims), while Documentation planning is set to External agent | A decision for every item: `approve` or `dismiss`, with a reason |
 | `audience_labelling` | An agent asks for labelling work while Audience labelling is set to External agent | A label for each statement in the batch |
 | `audience_review` | An agent asks for review work while Audience labelling is set to External agent and **AI reviews waiting external grants** or **AI decides edited curator labels and kept grants** is on; one batch per labeller (or curator) and subject | `decisions`: confirm or reject, with a reason, for each waiting grant (`statement_id` and `audience_id`), or for each statement of an edited-label or kept-grant batch (`statement_id`) |
@@ -159,6 +159,9 @@ loop would try again:
 
 When the last retry is used, the run is recorded as nothing written, the plan
 fails, a plan review's items wait for a person, or the statements' labelling failure is counted, as for a server model.
+A writing profile that retries failed AI work then queues the work again, as
+for a server model, up to that kind's retries limit
+([When AI work fails](DOCUMENTATION_PLANNING.md#when-ai-work-fails)).
 A failed `audience_review` task counts a failure for each of its items; an item
 past **Retries of a failed AI audience decision** is not queued again until its
 statement or label changes or an admin retries it, and the task's result says
