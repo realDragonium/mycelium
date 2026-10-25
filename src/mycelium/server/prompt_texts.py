@@ -51,15 +51,11 @@ def _is_seeded(type: str, name: str) -> bool:
 
 
 def seed_prompt_texts() -> None:
-    """Seed starter profiles once and the loop doctrines when absent, then
+    """Seed the audiences once and the loop doctrines when absent, then
     bring untouched seeded texts up to this build's defaults and warn about
     saved texts that predate them (see `prompt_defaults`)."""
-    from .. import ai_prompts, prompt_defaults, prompt_store
+    from .. import ai_prompts, audience_labelling, prompt_defaults, prompt_store
 
-    try:
-        documentation_profiles.seed_starters(_prompts_db())
-    except Exception:
-        logger.warning("could not seed documentation starter profiles", exc_info=True)
     try:
         audiences.seed(_prompts_db())
     except Exception:
@@ -81,6 +77,18 @@ def seed_prompt_texts() -> None:
             logger.warning(
                 "could not seed prompt text %s/%s", type, name, exc_info=True
             )
+
+    try:
+        prompt_defaults.keep_retired_default(
+            _prompts_db(),
+            "doctrine",
+            "audience_labelling",
+            audience_labelling.PREVIOUS_DEFAULT_INSTRUCTIONS,
+        )
+    except Exception:
+        logger.warning(
+            "could not keep the previous audience labelling default", exc_info=True
+        )
 
     for action in ai_prompts.ACTIONS:
         try:
@@ -149,7 +157,7 @@ def retire_prompt_text(
 ) -> dict[str, Any]:
     """Retire a text, preserving history. Packaged loop doctrines remain protected.
 
-    Documentation starters are user-owned; only an active default's final
+    Documentation profiles are user-owned; only an active default's final
     template is protected until another default is selected. Pass expected_version
     to reject retirement when another caller has changed the text.
     """

@@ -200,17 +200,22 @@ type Delivery = 'people' | 'agents' | 'auto';
 interface Profile {
   name: string; revision: string | number; guidance: string; exposure: string; templates: Template[];
   audience: string | null; effective_audience: string | null; maintenance: Maintenance; planning: Planning;
-  plan_review: PlanReview; recovery: Recovery; delivery: Delivery; delivery_destination: string;
+  plan_review: PlanReview; recovery: Recovery; delivery: Delivery; delivery_destination: string; destinations: string[];
   retired?: boolean; ready?: boolean; issues?: string[]; retired_templates?: string[];
 }
 interface Profiles { profiles: Profile[]; default_profile: string | null; can_write: boolean; can_retire: boolean }
-interface ProfilesView extends Profiles { audiences: AudienceView[]; destinations: { name: string }[] }
-interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null; maintenance: Maintenance; planning: Planning; plan_review: PlanReview; recovery: Recovery; delivery: Delivery; delivery_destination: string }
+interface ProfilesView extends Profiles { audiences: AudienceView[]; destinations: string[] }
+interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null; maintenance: Maintenance; planning: Planning; plan_review: PlanReview; recovery: Recovery; delivery: Delivery; delivery_destination: string; destinations: string[] }
 
 export function DocumentationProfiles() {
   const { state, reload } = useAsync(useCallback(async (signal: AbortSignal): Promise<ProfilesView> => {
-    const [profiles, audiences, destinations] = await Promise.all([getJSON<Profiles>('/api/documentation/profiles', signal), getJSON<AudiencesResponse>('/api/audiences', signal), getJSON<{ destinations: { name: string }[] }>('/api/documentation/destinations', signal)]);
-    return { ...profiles, audiences: audiences.audiences, destinations: destinations.destinations };
+    const [profiles, audiences, destinations] = await Promise.all([
+      getJSON<Profiles>('/api/documentation/profiles', signal),
+      getJSON<AudiencesResponse>('/api/audiences', signal),
+      // Destination settings that fail to load must not hide the profiles.
+      getJSON<{ destinations: { name: string }[] }>('/api/documentation/destinations', signal).catch(() => ({ destinations: [] })),
+    ]);
+    return { ...profiles, audiences: audiences.audiences, destinations: destinations.destinations.map(item => item.name) };
   }, []));
   const [form, setForm] = useState<Profile | null>(null);
   const [original, setOriginal] = useState<Profile | null>(null);
@@ -233,8 +238,9 @@ export function DocumentationProfiles() {
   const create = (source: Profile | null) => {
     if (!discardOk()) return;
     const audience = source?.audience && data?.audiences.some(item => !item.retired && item.id === source.audience) ? source.audience : null;
-    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null, maintenance: source?.maintenance ?? 'manual', planning: source?.planning ?? 'off', plan_review: source?.plan_review ?? 'person', recovery: source?.recovery ?? 'person', delivery: source?.delivery ?? 'people', delivery_destination: source?.delivery_destination ?? '' }, true);
+    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null, maintenance: source?.maintenance ?? 'manual', planning: source?.planning ?? 'off', plan_review: source?.plan_review ?? 'person', recovery: source?.recovery ?? 'person', delivery: source?.delivery ?? 'people', delivery_destination: source?.delivery_destination ?? '', destinations: source?.destinations ?? [] }, true);
   };
+  const toggleDestination = (name: string, on: boolean) => form && change({ destinations: on ? [...form.destinations, name] : form.destinations.filter(item => item !== name) });
   const change = (patch: Partial<Profile>) => { setForm(f => f && { ...f, ...patch }); setMessage(null); };
   const changeTemplate = (i: number, patch: Partial<Template>) => form && change({ templates: form.templates.map((t, j) => j === i ? { ...t, ...patch } : t) });
   const duplicateTemplate = (t: Template) => form && change({ templates: [...form.templates, { name: uniqueName(form.templates, `${t.name}-copy`), text: t.text, isNew: true }] });
@@ -249,7 +255,7 @@ export function DocumentationProfiles() {
   const save = (e: FormEvent) => {
     e.preventDefault();
     if (form) {
-      const body: SaveProfile = { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })), audience: form.audience, maintenance: form.maintenance, planning: form.planning, plan_review: form.plan_review, recovery: form.recovery, delivery: form.delivery, delivery_destination: form.delivery_destination };
+      const body: SaveProfile = { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })), audience: form.audience, maintenance: form.maintenance, planning: form.planning, plan_review: form.plan_review, recovery: form.recovery, delivery: form.delivery, delivery_destination: form.delivery_destination, destinations: form.destinations };
       void act(() => putJSON<Profile>(path(form.name), body), 'Profile saved. New runs use it.');
     }
   };
@@ -302,9 +308,17 @@ export function DocumentationProfiles() {
               </select><span className="hint">Automatic delivery opens or updates the pull request for every revision that passes review, of new documents too. Merging stays with the repository.</span></label>
               {form.delivery === 'auto' && <label className="field"><span>Repository for documents not published before</span><select className="input" value={form.delivery_destination} onChange={e => change({ delivery_destination: e.target.value })}>
                 <option value="">None: only update documents published before</option>
-                {form.delivery_destination && !data.destinations.some(destination => destination.name === form.delivery_destination) && <option value={form.delivery_destination}>{form.delivery_destination} (not configured)</option>}
-                {data.destinations.map(destination => <option key={destination.name} value={destination.name}>{destination.name}</option>)}
+                {form.delivery_destination && !data.destinations.includes(form.delivery_destination) && <option value={form.delivery_destination}>{form.delivery_destination} (not configured)</option>}
+                {data.destinations.filter(name => !form.destinations.length || form.destinations.includes(name)).map(name => <option key={name} value={name}>{name}</option>)}
               </select></label>}
+              <fieldset className="stack" disabled={!creating && !data.can_retire}>
+                <legend className="section-label">Publish only to</legend>
+                {data.destinations.length === 0 && form.destinations.length === 0 && <p className="hint">No destinations are configured yet; add them under Documentation delivery.</p>}
+                {[...data.destinations, ...form.destinations.filter(name => !data.destinations.includes(name))].map(name => (
+                  <label key={name} className="check"><input type="checkbox" checked={form.destinations.includes(name)} onChange={e => toggleDestination(name, e.target.checked)} />{name}{!data.destinations.includes(name) && ' (not configured)'}</label>
+                ))}
+                <p className="hint">{form.destinations.length ? 'Documents of this profile can be published only to the checked destinations, by people, agents and automatic revisions.' : 'None checked: documents of this profile can be published to any destination.'}{!creating && !data.can_retire && ' Only administrators can change where an existing profile publishes.'}</p>
+              </fieldset>
               <label className="field"><span>Writing guidance</span><textarea className="input" rows={8} value={form.guidance} onChange={e => change({ guidance: e.target.value })} /></label>
               <label className="field"><span>Disclosure rules</span><textarea className="input" rows={6} value={form.exposure} placeholder="What may be disclosed, and what must stay internal." onChange={e => change({ exposure: e.target.value })} /></label>
               <h4 className="section-label">Document templates</h4>

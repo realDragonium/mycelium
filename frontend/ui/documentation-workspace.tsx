@@ -312,9 +312,15 @@ function DocumentationDelivery({ document, canWrite, onUpdated, onConfigure }: {
   React.useEffect(() => {
     let cancelled = false;
     setLoadError(null);
-    docGet<{ destinations: DocumentationDestination[] }>('destinations').then(value => { if (!cancelled) setDestinations(value.destinations); }).catch(error => { if (!cancelled) setLoadError(errorMessage(error)); });
+    Promise.all([
+      docGet<{ destinations: DocumentationDestination[] }>('destinations'),
+      docGet<{ destinations: string[] }>('profiles/' + encodeURIComponent(document.guideline_set)),
+    ]).then(([value, profile]) => {
+      // A profile that names its destinations publishes only there; the server refuses the rest.
+      if (!cancelled) setDestinations(profile.destinations.length ? value.destinations.filter(item => profile.destinations.includes(item.name)) : value.destinations);
+    }).catch(error => { if (!cancelled) setLoadError(errorMessage(error)); });
     return () => { cancelled = true; };
-  }, [retry]);
+  }, [retry, document.guideline_set]);
   const selected = destinations.find(item => item.name === destination);
   const coordinates = document.delivery_coordinates || selected?.coordinates;
   const reference = document.delivery_reference;

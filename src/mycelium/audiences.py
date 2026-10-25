@@ -128,7 +128,8 @@ SEEDS: tuple[tuple[str, AudienceBody], ...] = (
                 "through its interface. They need visible product behaviour: "
                 "what features do, how to use them, which settings exist and "
                 "what they change. They must not get technical internals, "
-                "integration mechanics, internal processes, the roadmap, "
+                "infrastructure, integration mechanics, internal processes, "
+                "unreleased work or the roadmap, security internals, "
                 "commercial terms, or anything about other customers."
             ),
         ),

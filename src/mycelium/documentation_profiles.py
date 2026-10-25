@@ -40,6 +40,11 @@ Delivery = Literal["people", "agents", "auto"]
 Recovery = Literal["person", "ai"]
 
 
+#: The text of the tombstones a profile retirement writes, which is how
+#: `restore` tells them from slots removed earlier.
+RETIRED_WITH_PROFILE = "retired with the profile"
+
+
 class Conflict(errors.Conflict):
     pass
 
@@ -453,6 +458,74 @@ def read(name: str, conn: sqlite3.Connection | None = None) -> Profile:
     )
 
 
+class AudienceBrief(Model):
+    id: str
+    name: str
+    scope: audiences.Scope
+    description: str
+
+
+class ProfileBrief(Model):
+    """A profile as an agent working one of its documentation tasks reads it."""
+
+    name: str
+    revision: str
+    #: The audience the profile writes for; None when it was retired.
+    audience: AudienceBrief | None
+    guidance: str
+    exposure: str
+    templates: tuple[Template, ...]
+    maintenance: Maintenance
+    planning: Planning
+    plan_review: PlanReview
+    delivery: Delivery
+    delivery_destination: str
+    recovery: Recovery
+    destinations: tuple[str, ...]
+
+
+def audience_brief(audience: Audience | None) -> AudienceBrief | None:
+    if audience is None:
+        return None
+    return AudienceBrief(
+        id=audience.id,
+        name=audience.name,
+        scope=audience.scope,
+        description=audience.description,
+    )
+
+
+def brief(
+    name: str, document_type: str | None = None, conn: sqlite3.Connection | None = None
+) -> ProfileBrief:
+    """The profile, with only `document_type`'s template when one is named."""
+    db = conn if conn is not None else prompt_store.connection()
+    profile = read(name, db)
+    audience = next(
+        (item for item in audiences.live(db) if item.id == profile.effective_audience),
+        None,
+    )
+    return ProfileBrief(
+        name=profile.name,
+        revision=profile.revision,
+        audience=audience_brief(audience),
+        guidance=profile.guidance,
+        exposure=profile.exposure,
+        templates=tuple(
+            item
+            for item in profile.templates
+            if document_type is None or item.name == document_type
+        ),
+        maintenance=profile.maintenance,
+        planning=profile.planning,
+        plan_review=profile.plan_review,
+        delivery=profile.delivery,
+        delivery_destination=profile.delivery_destination,
+        recovery=profile.recovery,
+        destinations=profile.destinations,
+    )
+
+
 def _default(conn: sqlite3.Connection) -> str | None:
     from . import product_settings
 
@@ -626,11 +699,50 @@ def retire(name: str, revision: str, principal: auth.Principal) -> Profile:
                     conn,
                     type=guidelines.TYPE,
                     name=row["name"],
-                    text="",
+                    text=RETIRED_WITH_PROFILE,
                     deleted=1,
                     created_by=_actor(principal),
                 )
         return read(name, conn)
+
+
+def restore(name: str, revision: str, principal: auth.Principal) -> Profile:
+    """Bring a retired profile back with the texts it held when it was
+    retired; slots removed before then stay removed."""
+    _authorize(principal, "admin")
+    _part(name)
+    conn = prompt_store.connection()
+    with store.write_lock(), prompt_store._writing(conn):
+        current = read(name, conn)
+        if current.revision != revision:
+            raise Conflict("This profile changed. Reload before restoring.")
+        if not current.retired:
+            raise ValueError(f"Profile '{name}' is not retired.")
+        slots: dict[str, list[sqlite3.Row]] = {}
+        for row in conn.execute(
+            "SELECT * FROM prompt_texts WHERE type = ? AND substr(name, 1, ?) = ? "
+            "ORDER BY version DESC",
+            (guidelines.TYPE, len(name) + 1, f"{name}/"),
+        ):
+            slots.setdefault(str(row["name"]), []).append(row)
+        for slot, history in sorted(slots.items()):
+            # Newest first: the retirement's tombstone, then the text it retired.
+            if history[0]["text"] == RETIRED_WITH_PROFILE and len(history) > 1:
+                prompt_store._append(
+                    conn,
+                    type=guidelines.TYPE,
+                    name=slot,
+                    text=str(history[1]["text"]),
+                    deleted=0,
+                    created_by=_actor(principal),
+                )
+        restored = read(name, conn)
+        if restored.retired:
+            raise ValueError(
+                f"Profile '{name}' was retired before it could be restored as a "
+                "whole; restore its texts from their history."
+            )
+        return restored
 
 
 def validate_key(type: str, name: str) -> tuple[str, str]:
@@ -776,21 +888,3 @@ def editable_key(type: str, name: str) -> None:
         raise ValueError(
             "This editor supports documentation profiles and the existing loop instructions."
         )
-
-
-def seed_starters(conn: sqlite3.Connection) -> None:
-    """Bootstrap one user-owned starter set; history, even retired, takes precedence."""
-    with store.write_lock(), prompt_store._writing(conn):
-        if conn.execute(
-            "SELECT 1 FROM prompt_texts WHERE type = ? LIMIT 1", (guidelines.TYPE,)
-        ).fetchone():
-            return
-        for name, text in guidelines.read_rows().items():
-            prompt_store._append(
-                conn,
-                type=guidelines.TYPE,
-                name=name,
-                text=text,
-                deleted=0,
-                created_by="seed",
-            )

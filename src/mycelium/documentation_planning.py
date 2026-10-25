@@ -1012,10 +1012,11 @@ def _prepare_agent_task(
         plan = doc_plans.get_plan(drafts, str(task.subject_id))
         if plan is None:
             raise Unavailable("This documentation plan no longer exists.")
+        planned = _agent_target(task)
         inputs = _inputs(
             drafts,
             store.substrate_connection(),
-            _agent_target(task),
+            planned,
             product_settings.get(product_settings.DocumentationPlanningSettings),
             _Progress.of(task.state),
             automatic=bool(plan["automatic"]),
@@ -1032,7 +1033,12 @@ def _prepare_agent_task(
             input=inputs.task.prompt,
             result="The documents to propose, most valuable first.",
             schema=Proposal,
-        ),
+        )
+        | {
+            "profile": documentation_profiles.brief(planned.guideline_set).model_dump(
+                mode="json"
+            )
+        },
     )
     return agent_tasks.get(drafts, task.id)
 
