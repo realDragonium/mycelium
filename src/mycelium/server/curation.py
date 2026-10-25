@@ -395,6 +395,9 @@ def claim_curation_work(
             answer_retries=product_settings.get(
                 product_settings.ReviewSettings
             ).answer_retries,
+            skip_retries=product_settings.get(
+                product_settings.ConnectSettings
+            ).skip_retries,
         )
     items: list[WorkItem] = []
     for candidate in chosen:
@@ -469,6 +472,9 @@ def release_curation_work(
             now=datetime.now(UTC),
             reason=reason,
             draft_id=draft_id,
+            skip_retries=product_settings.get(
+                product_settings.ConnectSettings
+            ).skip_retries,
         )
     return {"released": released, "outcome": outcome}
 

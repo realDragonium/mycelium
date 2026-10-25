@@ -120,6 +120,37 @@ def test_released_items_are_not_offered_again_until_they_change(conn, drafts):
     assert _claim(conn, drafts)[0] == ["stm_a"]
 
 
+def test_an_item_skipped_and_let_run_out_past_its_retries_stops_until_it_changes(
+    conn, drafts
+):
+    def claim(who, now):
+        chosen, _, _ = curation.claim(
+            conn, drafts, "isolated", limit=5, claimant=who, now=now, skip_retries=1
+        )
+        return [c.id for c in chosen]
+
+    def release(item, outcome, who):
+        curation.release(conn, [item], outcome, claimant=who, now=NOW, skip_retries=1)
+
+    assert claim("agent-1", NOW) == ["stm_a", "stm_b", "stm_c"]
+    release("stm_a", "proposed", "agent-1")
+    release("stm_c", "proposed", "agent-1")
+    release("stm_b", "skipped", "agent-1")
+    assert claim("agent-2", NOW) == ["stm_b"]
+
+    later = NOW + curation.LEASE
+    assert claim("agent-3", later) == []
+    [stop] = automation_stops.stops(conn)
+    assert (stop.kind, stop.item_id, stop.failures) == ("curation", "stm_b", 2)
+    assert stop.reason == "The claim by agent-2 ran out."
+
+    conn.execute(
+        "UPDATE statements SET text = 'The workspace has SSO enabled.' "
+        "WHERE id = 'stm_b'"
+    )
+    assert claim("agent-3", later) == ["stm_b"]
+
+
 def test_the_connect_pass_shares_the_memory(conn, drafts):
     knowledge_health.record_attempts(conn, {"stm_a": []})
 
