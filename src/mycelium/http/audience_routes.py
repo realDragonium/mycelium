@@ -1,41 +1,28 @@
 """Documentation audiences, statement audience labels and the labelling backfill.
 
 Reads need an authenticated caller. Audiences and the backfill are admin
-configuration; a curator's label decision needs a real writer.
+configuration; a curator's label decision needs a real writer. Each route calls
+the function the matching MCP tool calls (`server.audience_tools`).
 """
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Literal
 
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import (
-    audience_labelling,
-    audiences,
-    grant_confirmation,
-    product_settings,
-    server,
-    store,
-)
+from .. import audience_labelling, audiences, grant_confirmation, store
 from ..request_timing import TimedRoute
+from ..server import audience_tools as tools
 from .access import _enforce_role, _require_principal
 
 router = APIRouter(route_class=TimedRoute)
 
 
-class AudiencesResponse(audiences.AudiencesView):
-    labelling: audience_labelling.Status
-
-
 @router.get("/api/audiences")
-def list_audiences_http(request: Request) -> AudiencesResponse:
-    view = audiences.view(_require_principal(request), server._db())
-    return AudiencesResponse(
-        **view.model_dump(), labelling=audience_labelling.status(server._db())
-    )
+def list_audiences_http(request: Request) -> tools.AudiencesResponse:
+    return tools.audiences_view(_require_principal(request))
 
 
 @router.post("/api/audiences")
@@ -65,7 +52,7 @@ def retire_audience_http(
 @router.get("/api/audiences/labelling")
 def labelling_status_http(request: Request) -> audience_labelling.Status:
     _require_principal(request)
-    return audience_labelling.status(server._db())
+    return audience_labelling.status(store.substrate_connection())
 
 
 class BackfillBody(BaseModel):
@@ -82,87 +69,11 @@ def backfill_http(body: BackfillBody, request: Request) -> audience_labelling.Ba
 # --- statement labels ----------------------------------------------------------
 
 
-class Label(BaseModel):
-    audiences: list[str]
-    source: Literal["ai", "curator"]
-    reason: str
-    model: str | None
-    labelled_at: str
-    labelled_by: str | None
-    text_changed_at: str | None
-    pending: list[str]
-    #: Set when the AI's relabel after an edit took the statement away from
-    #: audiences that saw it, with the reason it gave.
-    narrowed: store.audience_labels.Narrowed | None
-    #: Set while confirmed external grants an edit kept wait for a spot check.
-    spot_check: store.audience_labels.SpotCheck | None
-
-
-class AudienceVisibility(BaseModel):
-    id: str
-    name: str
-    scope: audiences.Scope
-    visible: bool
-    pending: bool
-
-
-class StatementAudiences(BaseModel):
-    statement_id: str
-    label: Label | None
-    queued: bool
-    audiences: list[AudienceVisibility]
-    can_curate: bool
-
-
-def _label(row: sqlite3.Row | None) -> Label | None:
-    if row is None:
-        return None
-    return Label(
-        audiences=store.audience_labels.label_audiences(row),
-        source=row["source"],
-        reason=row["reason"],
-        model=row["model"],
-        labelled_at=row["labelled_at"],
-        labelled_by=row["labelled_by"],
-        text_changed_at=row["text_changed_at"],
-        pending=store.audience_labels.label_pending(row),
-        narrowed=store.audience_labels.label_narrowed(row),
-        spot_check=store.audience_labels.label_spot_check(row),
-    )
-
-
-def _statement_audiences(statement_id: str, request: Request) -> StatementAudiences:
-    from .. import auth
-
-    principal = _require_principal(request)
-    conn = server._db()
-    if store.get_statement(conn, statement_id) is None:
-        raise ValueError(f"Statement {statement_id} does not exist.")
-    row = store.audience_labels.get_label(conn, statement_id)
-    pending = set(store.audience_labels.label_pending(row)) if row else set()
-    return StatementAudiences(
-        statement_id=statement_id,
-        label=_label(row),
-        queued=store.audience_labels.is_queued(conn, statement_id),
-        audiences=[
-            AudienceVisibility(
-                id=item.id,
-                name=item.name,
-                scope=item.scope,
-                visible=store.audience_labels.label_visible(
-                    row, item.sees, item.internal
-                ),
-                pending=item.id in pending,
-            )
-            for item in audiences.live()
-        ],
-        can_curate=auth.principal_has_real_role(principal, "writer"),
-    )
-
-
 @router.get("/api/statements/{statement_id}/audiences")
-def statement_audiences_http(statement_id: str, request: Request) -> StatementAudiences:
-    return _statement_audiences(statement_id, request)
+def statement_audiences_http(
+    statement_id: str, request: Request
+) -> tools.StatementAudiences:
+    return tools.statement_audiences(statement_id, _require_principal(request))
 
 
 class CuratorLabelBody(BaseModel):
@@ -174,7 +85,7 @@ class CuratorLabelBody(BaseModel):
 @router.put("/api/statements/{statement_id}/audiences")
 def set_statement_audiences_http(
     statement_id: str, body: CuratorLabelBody, request: Request
-) -> StatementAudiences:
+) -> tools.StatementAudiences:
     _enforce_role(request, "writer", real_role=True)
     audience_labelling.set_curator_label(
         statement_id,
@@ -182,44 +93,30 @@ def set_statement_audiences_http(
         body.reason,
         curator=_require_principal(request).id,
     )
-    return _statement_audiences(statement_id, request)
+    return tools.statement_audiences(statement_id, _require_principal(request))
 
 
 @router.post("/api/statements/{statement_id}/audiences/confirm")
 def confirm_statement_audiences_http(
     statement_id: str, request: Request
-) -> StatementAudiences:
+) -> tools.StatementAudiences:
     _enforce_role(request, "writer", real_role=True)
     audience_labelling.confirm_curator_label(
         statement_id, curator=_require_principal(request).id
     )
-    return _statement_audiences(statement_id, request)
+    return tools.statement_audiences(statement_id, _require_principal(request))
 
 
 @router.delete("/api/statements/{statement_id}/audiences")
 def clear_statement_audiences_http(
     statement_id: str, request: Request
-) -> StatementAudiences:
+) -> tools.StatementAudiences:
     _enforce_role(request, "writer", real_role=True)
     audience_labelling.clear_curator_label(statement_id)
-    return _statement_audiences(statement_id, request)
+    return tools.statement_audiences(statement_id, _require_principal(request))
 
 
 # --- filter --------------------------------------------------------------------
-
-
-class LabelledStatement(BaseModel):
-    id: str
-    kind: str
-    text: str
-    label: Label | None
-    queued: bool
-
-
-class LabelledStatements(BaseModel):
-    statements: list[LabelledStatement]
-    total: int
-    can_curate: bool
 
 
 @router.get("/api/audiences/statements")
@@ -230,87 +127,33 @@ def labelled_statements_http(
     state: store.audience_labels.LabelState | None = None,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
-) -> LabelledStatements:
+) -> tools.LabelledStatements:
     """Statements by what an audience sees and by label state."""
-    from .. import auth
-
-    principal = _require_principal(request)
-    chosen = None
-    if visibility is not None:
-        chosen = next((item for item in audiences.live() if item.id == audience), None)
-        if chosen is None:
-            raise ValueError("Choose a live audience to filter by visibility.")
-    conn = server._db()
-    rows, total = store.audience_labels.list_labelled_statements(
-        conn,
-        sees=chosen.sees if chosen else None,
-        internal=chosen.internal if chosen else False,
+    return tools.labelled_statements(
+        _require_principal(request),
+        audience=audience,
         visibility=visibility,
         state=state,
         offset=offset,
         limit=limit,
-    )
-    return LabelledStatements(
-        statements=[
-            LabelledStatement(
-                id=row["id"],
-                kind=row["kind"],
-                text=row["text"],
-                label=_label(store.audience_labels.get_label(conn, row["id"])),
-                queued=row["queued"] is not None,
-            )
-            for row in rows
-        ],
-        total=total,
-        can_curate=auth.principal_has_real_role(principal, "writer"),
     )
 
 
 # --- pending external grants ---------------------------------------------------
 
 
-class PendingGrants(BaseModel):
-    audience_id: str
-    total: int
-    groups: list[grant_confirmation.PendingGroup]
-    can_curate: bool
-    sample_size: int
-    min_sample_precision_percent: int
-
-
 @router.get("/api/audiences/{audience_id}/pending")
-def pending_grants_http(audience_id: str, request: Request) -> PendingGrants:
+def pending_grants_http(audience_id: str, request: Request) -> tools.PendingGrants:
     """The audience's grants waiting for a curator, grouped by concept."""
-    from .. import auth
-
-    principal = _require_principal(request)
-    audience = grant_confirmation.live_audience(audience_id)
-    groups = grant_confirmation.groups(server._db(), audience.id)
-    limits = product_settings.get(product_settings.AudienceLabellingSettings)
-    return PendingGrants(
-        audience_id=audience.id,
-        total=sum(len(group.statements) for group in groups),
-        groups=groups,
-        can_curate=auth.principal_has_real_role(principal, "writer"),
-        sample_size=limits.sample_size,
-        min_sample_precision_percent=limits.min_sample_precision_percent,
-    )
-
-
-class PendingSample(BaseModel):
-    groups: list[grant_confirmation.PendingGroup]
+    return tools.pending_grants(audience_id, _require_principal(request))
 
 
 @router.get("/api/audiences/{audience_id}/pending/sample")
-def pending_sample_http(audience_id: str, request: Request) -> PendingSample:
+def pending_sample_http(audience_id: str, request: Request) -> tools.PendingSample:
     """A fresh random sample of the audience's pending grants, stratified by
     concept."""
     _require_principal(request)
-    audience = grant_confirmation.live_audience(audience_id)
-    limits = product_settings.get(product_settings.AudienceLabellingSettings)
-    return PendingSample(
-        groups=grant_confirmation.sample(server._db(), audience.id, limits.sample_size)
-    )
+    return tools.pending_sample(audience_id)
 
 
 class DecideBody(BaseModel):
@@ -319,22 +162,16 @@ class DecideBody(BaseModel):
     decision: Literal["confirm", "reject"]
 
 
-class Decided(BaseModel):
-    decided: int
-
-
 @router.post("/api/audiences/{audience_id}/pending/decide")
 def decide_pending_http(
     audience_id: str, body: DecideBody, request: Request
-) -> Decided:
+) -> tools.Decided:
     _enforce_role(request, "writer", real_role=True)
-    return Decided(
-        decided=grant_confirmation.decide(
-            audience_id,
-            body.statement_ids,
-            confirm=body.decision == "confirm",
-            curator=_require_principal(request).id,
-        )
+    return tools.decide_pending(
+        audience_id,
+        body.statement_ids,
+        body.decision,
+        _require_principal(request).id,
     )
 
 
@@ -356,21 +193,10 @@ def accept_rest_http(
 # --- spot checks after edits ----------------------------------------------------
 
 
-class SpotChecks(BaseModel):
-    statements: list[grant_confirmation.SpotCheck]
-    can_curate: bool
-
-
 @router.get("/api/audiences/spot-checks")
-def spot_checks_http(request: Request) -> SpotChecks:
+def spot_checks_http(request: Request) -> tools.SpotChecks:
     """Recently edited statements whose confirmed external grants stayed in force."""
-    from .. import auth
-
-    principal = _require_principal(request)
-    return SpotChecks(
-        statements=grant_confirmation.spot_checks(server._db()),
-        can_curate=auth.principal_has_real_role(principal, "writer"),
-    )
+    return tools.spot_checks(_require_principal(request))
 
 
 class SpotCheckBody(BaseModel):
@@ -381,14 +207,8 @@ class SpotCheckBody(BaseModel):
 @router.post("/api/statements/{statement_id}/audiences/spot-check")
 def decide_spot_check_http(
     statement_id: str, body: SpotCheckBody, request: Request
-) -> Decided:
+) -> tools.Decided:
     _enforce_role(request, "writer", real_role=True)
-    return Decided(
-        decided=int(
-            grant_confirmation.decide_spot_check(
-                statement_id,
-                confirm=body.decision == "confirm",
-                curator=_require_principal(request).id,
-            )
-        )
+    return tools.decide_spot_check(
+        statement_id, body.decision, _require_principal(request).id
     )

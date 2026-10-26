@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 57 of its 95 registered tools over MCP. Every
+question. Mycelium therefore advertises 84 of its 117 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -11,22 +11,48 @@ The list lives in `server.MCP_TOOLS`. `tests/test_mcp_surface.py` keeps this fil
 that set, and the registered tools in agreement.
 
 Role filtering still applies: `tools/list` shows a caller only the tools their role
-can invoke. The minimum role is reader: a reader sees 22 tools. A drafter sees 43
-because their writes are queued on a draft, but they do not see `list_drafts`,
-`review_draft`, `reopen_draft`, `request_documentation`, `revise_document`, `request_documentation_plan`,
-`deliver_document`, `save_writing_profile` or the tools that claim and do
-agent tasks. A writer sees 52 and does not see the admin-only
+can invoke. The minimum role is reader: a reader sees 33 tools. A drafter sees 57
+because their writes are queued on a draft, but they do not see the tools that
+land live and so need a real writer: `list_drafts`, `review_draft`,
+`reopen_draft`, `request_draft_review`,
+`answer_draft_review`, the
+documentation tools that start runs, edit, retry, plan, decide or deliver,
+`save_writing_profile`, `edit_prompt_text`, `edit_names`, `edit_media`,
+`curate_audiences`, `update_knowledge_gap`, the admin tools below, or the tools
+that claim and do agent tasks. A writer sees 76 and does not see the admin-only
 `delete_statement`, `merge_statements`, `merge_entities`,
-`retire_writing_profile` or `restore_writing_profile`. An admin sees all
-57. While Ask is set to External agent, `ask` is listed to no one, so each
+`retire_writing_profile`, `restore_writing_profile`, `manage_audiences`,
+`manage_draft_review_backlog` or `unblock_automation`. An admin sees all
+84. While Ask is set to External agent, `ask` is listed to no one, so each
 count is one lower.
+
+A grouped tool can hold an action a stricter role takes: `edit_names` merges
+and removes, `edit_media` deletes and `edit_vocabulary` deletes only for an
+admin, and `get_settings` shows the setup checklist and AI usage only to an
+admin, as the web app does.
+
+## Web app parity
+
+Every action a person can take on the knowledge base in the web app is also an
+MCP tool. `mycelium.http.mcp_parity` names, for every HTTP route, the tool that
+offers its action, or why it has none: the action is about operating the server
+(signing in, OAuth, users and tokens, provider and model choices, limits, the
+setup checklist, traces, the GitHub app connection), it is no action a person
+takes (browser pages and bootstraps, rendering a preview, the reviewer's
+in-process steps, CI provenance).
+`tests/test_mcp_parity.py` walks the app's routes and fails on a route with
+none of these, so a new screen cannot leave agents out. The route and its tool
+call the same server function, so they share role rules, validation, revision
+checks and audit records; saving settings stays in the web app because it
+operates the server, while `get_settings` lets an agent read them.
 
 ## Over MCP
 
-MCP covers the read path, statement and entity authoring, drafts and deciding
-them, writing profiles, and the model-backed entry points a client cannot
-reproduce itself. Reviewed application and the reviewer's own records stay off
-MCP: they run in-process.
+MCP covers the read path, statement and entity authoring, names and the
+glossary, drafts and deciding them, knowledge health and gaps, audiences, media, documentation
+and its plans, writing profiles and the texts that steer the AI, and the
+model-backed entry points a client cannot reproduce itself. The reviewer's own
+records stay off MCP: they run in-process.
 
 | Tool | Why it is on MCP |
 | --- | --- |
@@ -42,6 +68,8 @@ MCP: they run in-process.
 | `list_link_types` | Lists the statement link vocabulary and its direction rules, which writers need. |
 | `list_statement_kinds` | Lists the statement kind vocabulary. |
 | `list_entity_link_types` | Lists the entity link vocabulary that appears in `get_entity`. |
+| `list_link_type_aliases` | Lists the phrasings each link type accepts, as the Glossary shows them. |
+| `get_history` | Reads the Activity feed: who created, edited, linked or deleted what, with before and after snapshots, filtered by operation, kind or id. |
 | `ask` | Runs the server's answer loop. Hidden while Ask is set to External agent. |
 | `ingest` | Turns prose into a reviewable draft, submitted at once while internal draft review is on. While Ingest is set to External agent it queues the work for an outside agent instead. |
 | `upsert_entity` | Creates or describes the entity a statement names. |
@@ -56,6 +84,11 @@ MCP: they run in-process.
 | `merge_statements` | Consolidates a duplicate the caller found. Requires admin. |
 | `merge_entities` | The same consolidation for entities. Splitting the two merges across two surfaces would trip agents up. Requires admin. |
 | `delete_statement` | Removes a statement. Requires admin. |
+| `edit_vocabulary` | Edits the Glossary: saves or deletes a statement kind, link type, link-type alias or entity link type. A drafter's edit is queued on their draft; deleting needs an admin. |
+| `get_mention_candidates` | Finds text matches across a concept's aliases (derived, approved or possible), as the names workspace shows them. |
+| `find_entity_duplicates` | Lists concepts that may be duplicates, as the names workspace does. |
+| `get_names_workspace` | Reads the Names & aliases workspace: the catalogue, one concept with the `revision` an edit needs, dismissed duplicate pairs, and the AI's alias suggestions. |
+| `edit_names` | Edits names as the workspace does, landing live: preview and apply an add, correct, prefer, move, split, merge or remove (merge and remove need an admin), dismiss or restore a duplicate pair, ask the AI for alias suggestions, and review one (a human writer). Real writers and admins only. |
 | `submit_draft` | Submits the caller's draft and starts internal review. |
 | `get_draft` | Inspects a draft and its review assessment. |
 | `discard_draft_op` | Lets the author correct their open draft. |
@@ -64,9 +97,22 @@ MCP: they run in-process.
 | `review_draft` | Decides a submitted draft another principal created, as a curator does in the UI: approve, approve with corrections in the reviewer's precise shape, reject with a reason, or ask a person a question. An agent with the product's code can check each operation, which the server's reviewer cannot, so it needs to decide on what it found under any review setting. Real writers and admins only; see [Deciding drafts](DRAFT_REVIEW.md#deciding-drafts). |
 | `reopen_draft` | Returns a rejected draft, the automatic reviewer's rejections included, to submitted so it can be decided again. Without it a wrong rejection is final. Real writers and admins only. |
 | `set_draft_review_evidence` | Lets the draft creator give the reviewer evidence that only the creator has. |
+| `withdraw_draft` | Withdraws an open or submitted draft, as its creator or a real writer may on the Drafts screen. |
+| `answer_draft_review` | Answers the internal reviewer's questions on a draft, as a curator does in the draft view, and has it reviewed again. Real writers and admins only; an agent answering with code evidence uses the curation queue's `question` items. |
+| `request_draft_review` | Runs the internal reviewer on a draft again, as **Review again** does. Real writers and admins only. |
+| `manage_draft_review_backlog` | Lists, starts, pauses or resumes the review of submitted drafts the reviewer has not reached. Real admins only. |
 | `set_operation_evidence` | Lets the draft creator back one operation with what they checked in the product: code, UI or doc location, an excerpt and the claim it shows. The reviewer accepts a link a concrete code excerpt supports, and judges one without evidence more strictly. |
-| `list_media` | Lists the screenshots and recordings attached to a statement or concept, with alt text, caption and the URL of the bytes. An agent checks what is already illustrated before uploading. |
+| `get_knowledge_health` | Reads the Knowledge health screen: the counts, how much knowledge there is, whether the connect pass can run, curation claims, uncovered statements per profile and `stopped` automatic work; with `which`, one page of isolated, unmentioned or unlabelled statements or undescribed or unused concepts. |
+| `unblock_automation` | Frees an abandoned agent's curation claims, or retries automatic work that stopped after too many failures. Real admins only. |
+| `connect_statements` | Runs the AI connect pass over chosen statements as a reviewed draft, as **Connect** on the Knowledge health screen does. Uses model tokens under the connect action's limits; refused when the connect action has no model or credentials. |
+| `list_knowledge_gaps` | Lists gap reports as the Gaps page does, by status. |
+| `update_knowledge_gap` | Resolves, dismisses or reopens a gap. Real writers and admins only. |
+| `get_audiences` | Reads audiences and labels: each audience with its counts and the backfill's progress, one statement's label, statements by label state or visibility, an audience's pending external grants or a sample of them, and spot checks. |
+| `manage_audiences` | Creates, saves, retires an audience or runs the labelling backfill, as Settings → Audiences does. Real admins only. |
+| `curate_audiences` | A curator's label decisions: set, confirm or clear a statement's label, decide a spot check, confirm or reject pending external grants, or accept the rest after a sample. Real writers and admins only. |
+| `list_media` | Lists the screenshots and recordings attached to a statement or concept, one item, or the media library by filter, with alt text, caption and the URL of the bytes. An agent checks what is already illustrated before uploading. |
 | `create_media_upload` | Returns a single-use upload link for a screenshot or recording an agent captured; the agent cites the resulting `media_id` as `media` evidence on a draft operation. See [Uploading media](#uploading-media). |
+| `edit_media` | Changes a media item as the library does: details, label, confirm a label, attach or detach, an upload link for new content, or delete (an admin). Real writers and admins only. |
 | `claim_curation_work` | Hands an agent working in the product's code a batch of knowledge-health work (isolated or unnamed statements, rephrase requests, open gaps, the draft reviewer's questions for a person, duplicate statement or concept pairs, concepts without a description or without statements) on a 30-minute lease, with each item's concepts, nearest statements and the link vocabulary. Only that agent can tell from the code whether two statements relate. See [Curation work for outside agents](KNOWLEDGE_HEALTH.md#curation-work-for-outside-agents). |
 | `release_curation_work` | Records what came of claimed items (`proposed` with the draft, `no_link` with a reason, or `skipped`) in the memory the connect pass shares, so they are not offered again until they change; a skipped item is offered again until it was skipped, or its claim ran out, more often than its limit. Closes a gap as `resolved` by an applied draft or `not_applicable` with a reason, and answers a reviewer's question as `answered` with evidence, which starts the draft's fresh review. |
 | `report_knowledge_gap` | Lets an agent report knowledge it could not find, optionally naming the statement, draft or generated document it is about. A report about a draft is resolved when that draft is applied. |
@@ -82,11 +128,18 @@ MCP: they run in-process.
 | `request_documentation_plan` | Starts the same plan as **Documents → Plan** for a writing profile, on the server's model or as a `documentation_planning` agent task. An agent keeping documentation current needs to ask which documents are missing, not only write the ones it already knows. Writers and admins only. See [Documentation planning](DOCUMENTATION_PLANNING.md). |
 | `get_documentation_plan` | Reads a writing profile's plan as **Documents → Plan** shows it: the items with their state, the AI reviewer's decisions and reasons, the runs approved items started and why one could not start, out-of-date documents, coverage gaps and the uncovered and dismissed statements. An agent keeping documentation current needs to see what was proposed and decided before it plans again or follows the runs. |
 | `deliver_document` | Opens or updates the document's GitHub pull request, as **Create / update GitHub PR** does. Refused unless the document's writing profile lets agents deliver (`agents`, or `auto`, where the server also publishes each reviewed revision itself; off by default), so publishing outside the instance stays a person's decision until a writer hands it to agents for that profile, and refused for a destination the profile does not publish to. Merging stays with the destination repository. Writers and admins only. |
+| `list_documentation` | Lists what the Documents workspace shows: documents, runs, destinations, the options a run may use, and the maintenance feed. |
+| `get_document_history` | Reads a document's revisions, one revision, or its diff against the one before. |
+| `edit_document` | Saves a person's own edit of a saved document or an unsaved run's result, reviewed as a run. Real writers and admins only. |
+| `retry_documentation` | Starts a run or a plan item's run that wrote nothing again, optionally briefed with the review's findings. Real writers and admins only. |
+| `decide_documentation_plan` | Approves or dismisses plan items, dismisses or restores an uncovered statement, and dismisses an out-of-date document, as Documents → Plan does. Real writers and admins only. |
 | `list_writing_profiles` | Lists the writing profiles with their audience, policies, destinations, template names, readiness and `revision`. A writer or admin agent managing documentation needs to see what profiles exist before it plans or writes. |
 | `get_writing_profile` | Reads one profile in full (guidance, disclosure rules, every template, policies, destinations, `revision`) and the description of the audience it writes for. An agent reads the profile it writes for here, and an editor reads the `revision` a save needs. |
 | `save_writing_profile` | Creates or updates a profile with its whole content, through the same validation, role rules and revision check as **Settings → Documentation**: a stale `revision` is refused, and removing a template or changing an existing profile's audience or destinations needs an admin. Real writers and admins only; it lands live and never queues on a draft. |
 | `retire_writing_profile` | Retires a profile, keeping its history and documents, as **Retire profile** does. The default profile cannot be retired. Real admins only. |
 | `restore_writing_profile` | Brings a retired profile back with the texts it held when it was retired. Real admins only. |
+| `get_settings` | Reads a Settings screen: product limits, the model per AI action, draft review, the setup checklist and AI usage (admins), the AI instructions with a preview, and a text's saved versions. Saving settings stays in the web app. |
+| `edit_prompt_text` | Saves or restores one writing profile slot or AI instruction text at its revision, as Settings does. Real writers and admins only. |
 
 ### Uploading media
 
@@ -108,46 +161,41 @@ the server the agent is connected to. See [Media](MEDIA.md).
 
 ## HTTP and in-process only
 
-These tools are configuration, curation, review machinery, or composites that the
-in-process loops need and that an MCP client can build from the tools above. They
-remain registered functions. Leaving MCP is reversible: add the name back to
-`MCP_TOOLS`.
+These tools are covered by a tool above, are review machinery, or are composites
+the in-process loops need. They remain registered functions, and
+`mycelium.http.mcp_parity` names the tool that covers each one's route or why
+none does. Leaving MCP is reversible: add the name back to `MCP_TOOLS`.
 
 | Tool | Why it is not on MCP |
 | --- | --- |
 | `retrieve_context` | Combines name lookup, entity reads, search, and fetch for the Ask loop's turn budget. It is a distinct primitive, but MCP clients can run the same reads. |
 | `find_duplicates` | Audits the whole substrate in near-quadratic time and takes no candidate text. This is curation, not retrieval, so it does not satisfy the Ingest reconcile floor. |
-| `find_entity_duplicates` | Audits entity names. This is curation; the Names & aliases workspace lists its results. |
-| `connect_statements` | Curation from the Knowledge health screen: proposes links and concept mentions for statements nothing reaches, as a reviewed draft. Each call uses model tokens under the connect action's limits, so it stays where a curator chooses the batch. Refused before collecting evidence when the connect action has no model chosen or its provider has no credentials. |
-| `get_mention_candidates` | Discovery view for the names workspace (`GET /api/mention-candidates`). |
 | `replace_text` | `patch_statement(id, text=...)` covers it. The UI and draft replay use it. A failed embedding is reported as `embedding_pending: true`. |
-| `move_name` | Alias curation in the names workspace. |
-| `rename_name` | Alias curation in the names workspace. |
-| `delete_name` | Alias curation in the names workspace. |
-| `delete_entity` | Entity curation in the glossary UI. |
-| `upsert_statement_kind` | Vocabulary administration. |
-| `delete_statement_kind` | Vocabulary administration. |
-| `upsert_link_type` | Vocabulary administration. |
-| `delete_link_type` | Vocabulary administration. |
-| `upsert_link_type_alias` | Vocabulary administration. |
-| `delete_link_type_alias` | Vocabulary administration. |
-| `list_link_type_aliases` | Vocabulary administration. |
-| `upsert_entity_link_type` | Vocabulary administration. |
-| `delete_entity_link_type` | Vocabulary administration. |
-| `get_prompt_text` | Prompt configuration. |
-| `list_prompt_texts` | Prompt configuration. |
-| `retire_prompt_text` | Prompt configuration. |
-| `list_documentation_models` | Provider configuration. `request_documentation` uses saved settings when the provider is omitted. |
-| `list_documentation_runs` | Run history for the documentation workspace. |
-| `list_generated_documents` | Document library browsing. |
-| `list_document_revisions` | Document history. |
-| `get_document_revision` | Document history. |
-| `list_documentation_destinations` | Deployment configuration. |
+| `move_name` | `edit_names` moves an alias through the workspace's checks. |
+| `rename_name` | `edit_names` corrects an alias through the workspace's checks. |
+| `delete_name` | `edit_names` removes an alias through the workspace's checks. |
+| `delete_entity` | No screen deletes a concept outright; drafts replay it, and `merge_entities` and `edit_names` consolidate concepts. |
+| `upsert_statement_kind` | `edit_vocabulary` saves a statement kind. |
+| `delete_statement_kind` | `edit_vocabulary` deletes a statement kind. |
+| `upsert_link_type` | `edit_vocabulary` saves a link type. |
+| `delete_link_type` | `edit_vocabulary` deletes a link type. |
+| `upsert_link_type_alias` | `edit_vocabulary` saves a link-type alias. |
+| `delete_link_type_alias` | `edit_vocabulary` deletes a link-type alias. |
+| `upsert_entity_link_type` | `edit_vocabulary` saves an entity link type. |
+| `delete_entity_link_type` | `edit_vocabulary` deletes an entity link type. |
+| `get_prompt_text` | Raw prompt-store rows; `get_writing_profile` and `get_settings` read the texts Settings edits. |
+| `list_prompt_texts` | Raw prompt-store rows; `get_writing_profile` and `get_settings` read the texts Settings edits. |
+| `retire_prompt_text` | Raw prompt-store rows; `retire_writing_profile` retires a profile. |
+| `list_documentation_models` | `list_documentation` returns it as part of `options`. |
+| `list_documentation_runs` | `list_documentation` lists runs. |
+| `list_generated_documents` | `list_documentation` lists documents. |
+| `list_document_revisions` | `get_document_history` lists revisions. |
+| `get_document_revision` | `get_document_history` reads one revision. |
+| `list_documentation_destinations` | `list_documentation` lists destinations. |
 | `attach_draft_source` | Records CI pull request provenance. Pipeline steps call it over HTTP. |
 | `find_my_draft_by_source` | Looks up a draft by CI provenance. Pipeline steps call it over HTTP. |
 | `revise_draft_operation` | Curator correction. Internal review calls it in-process; over MCP, `review_draft` corrections change operations. |
 | `strike_draft_operation` | Curator correction. Internal review calls it in-process; over MCP, a `strike` correction in `review_draft` removes one. |
-| `request_draft_review` | Review control. The UI calls it through `POST /api/drafts/{id}/review`. |
 | `get_draft_review_run` | Review internals. `get_draft` already carries the latest assessment. |
 | `inspect_draft_review` | Review machinery. Internal review calls it in-process. |
 | `append_draft_correction` | Review machinery. Internal review calls it in-process. |

@@ -19,7 +19,7 @@ from .. import server, store
 from ..draft_review_store import Application, Label
 from ..request_timing import TimedRoute
 from ..server import draft_decisions
-from ..server.draft_queue import _require_draft_owner
+from ..server.drafts import submit, withdraw
 from .access import _enforce_curator, _require_principal
 
 router = APIRouter(route_class=TimedRoute)
@@ -143,24 +143,10 @@ def remove_draft_op_http(
 
 @router.post("/api/drafts/{draft_id}/submit")
 def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
-    p = _require_principal(request)
-    from .. import drafts_store
-
-    conn = server._drafts_db()
-    row = drafts_store.get_draft(conn, draft_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="draft not found")
-    _require_draft_owner(p, row)
-    if drafts_store.status_for(row) != "open":
-        raise HTTPException(
-            status_code=400,
-            detail="only open drafts can be submitted",
-        )
-    with store.transaction(conn):
-        drafts_store.set_submitted(conn, draft_id)
-    from .. import draft_review_runs
-
-    draft_review_runs.on_submitted(draft_id)
+    try:
+        submit(draft_id, _require_principal(request))
+    except LookupError as ex:
+        raise HTTPException(status_code=404, detail="draft not found") from ex
     return {"ok": True}
 
 
@@ -230,22 +216,8 @@ def reopen_draft(
 
 @router.post("/api/drafts/{draft_id}/withdraw")
 def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
-    p = _require_principal(request)
-    from .. import drafts_store
-
-    conn = server._drafts_db()
-    row = drafts_store.get_draft(conn, draft_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="draft not found")
-    _require_draft_owner(p, row)
-    if drafts_store.status_for(row) not in ("open", "submitted"):
-        raise HTTPException(
-            status_code=400,
-            detail="only open or submitted drafts can be withdrawn",
-        )
-    with store.transaction(conn):
-        try:
-            drafts_store.set_decision(conn, draft_id, decision="withdrawn", by=p.id)
-        except drafts_store.ActiveApplicationError as ex:
-            raise HTTPException(status_code=409, detail=str(ex)) from ex
+    try:
+        withdraw(draft_id, _require_principal(request))
+    except LookupError as ex:
+        raise HTTPException(status_code=404, detail=str(ex)) from ex
     return {"ok": True}

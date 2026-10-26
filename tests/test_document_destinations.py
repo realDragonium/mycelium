@@ -1686,14 +1686,14 @@ def test_the_delivery_tool_delivers_only_for_a_profile_that_lets_agents(
 
     try:
         with pytest.raises(PermissionError, match="does not let agents deliver"):
-            server.deliver_document(document_id, "knowledge-base")
+            server.deliver_document(document_id, "knowledge-base", 1)
         prompt_store.save(
             prompt_store.connection(),
             type=guidelines.TYPE,
             name="kb-authoring/delivery",
             text="agents",
         )
-        result = server.deliver_document(document_id, "knowledge-base")
+        result = server.deliver_document(document_id, "knowledge-base", 1)
         document = docs_store.serialize_document(
             docs_store.get_document(conn, document_id)
         )
@@ -1834,7 +1834,7 @@ def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
             server.deliver_document,
         ):
             with pytest.raises(ValueError) as excinfo:
-                deliver_document(TOKEN, "knowledge-base")
+                deliver_document(TOKEN, "knowledge-base", 1)
 
             rendered_traceback = "".join(
                 traceback.format_exception(
@@ -1847,7 +1847,11 @@ def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
         with TestClient(app) as client:
             response = client.post(
                 "/deliver-document",
-                json={"document_id": TOKEN, "destination": "knowledge-base"},
+                json={
+                    "document_id": TOKEN,
+                    "destination": "knowledge-base",
+                    "expected_revision": 1,
+                },
             )
 
         assert response.status_code == 400
@@ -1884,7 +1888,7 @@ def test_delivering_an_unknown_document_refuses_before_contacting_a_destination(
     monkeypatch.setattr(destinations, "deliver_document", unexpected_delivery)
     try:
         with pytest.raises(ValueError, match="generated document not found"):
-            server.deliver_document("gdc_missing", "knowledge-base")
+            server.deliver_document("gdc_missing", "knowledge-base", 1)
         assert contacted is False
     finally:
         drafts_store.reset()
@@ -1903,7 +1907,7 @@ def test_a_drafter_cannot_trigger_document_delivery():
     )
     try:
         with pytest.raises(PermissionError):
-            server.deliver_document("gdc_missing", "knowledge-base")
+            server.deliver_document("gdc_missing", "knowledge-base", 1)
     finally:
         auth.current_principal.reset(token)
 

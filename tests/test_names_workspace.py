@@ -7,6 +7,7 @@ import pytest
 
 from mycelium import auth, backup, docs_store, embed, mention_worker, server, store
 from mycelium import names_workspace as names
+from mycelium.server import names_workspace as workspace_tools
 from mycelium.server import runtime
 from test_auth import _app
 
@@ -492,3 +493,41 @@ def test_preferred_name_selection_matches_existing_nocase_order(selection):
         assert store.substrate_dump(conn)["entities"][0]["name"] == previous_label
     finally:
         conn.close()
+
+
+def test_agents_edit_names_with_the_workspace_rules(srv):
+    invoices = entity("Invoice")
+    bills = entity("Bill")
+    merge = names.MergeConcepts(
+        kind="merge",
+        entity_id=bills,
+        target_entity_id=invoices,
+        preferred_name_id=names.concept(server._db(), invoices).names[0].id,
+        description="A request for payment.",
+    )
+    preview = workspace_tools.Preview(action="preview", change=merge)
+
+    def as_(role: str):
+        principal = auth.Principal(id=role, name=role, role=role, type="human")
+        return auth.current_principal.set(principal)
+
+    for role in ("drafter", "writer"):
+        token = as_(role)
+        try:
+            with pytest.raises(auth.RoleRequired):
+                server.edit_names(preview)
+        finally:
+            auth.current_principal.reset(token)
+    token = as_("admin")
+    try:
+        revision = server.edit_names(preview)["revision"]
+        applied = server.edit_names(
+            workspace_tools.Apply(
+                action="apply", change=merge, expected_revision=str(revision)
+            )
+        )
+    finally:
+        auth.current_principal.reset(token)
+
+    assert applied["entity_id"] == invoices
+    assert store.get_entity_by_id(server._db(), bills) is None

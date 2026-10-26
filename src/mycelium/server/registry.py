@@ -189,6 +189,8 @@ MCP_TOOLS = frozenset(
         "list_link_types",
         "list_statement_kinds",
         "list_entity_link_types",
+        "list_link_type_aliases",
+        "get_history",
         "ask",
         # Author
         "ingest",
@@ -204,6 +206,12 @@ MCP_TOOLS = frozenset(
         "merge_statements",
         "merge_entities",
         "delete_statement",
+        "edit_vocabulary",
+        # Names and aliases
+        "get_mention_candidates",
+        "find_entity_duplicates",
+        "get_names_workspace",
+        "edit_names",
         # Drafts
         "submit_draft",
         "get_draft",
@@ -214,10 +222,25 @@ MCP_TOOLS = frozenset(
         "reopen_draft",
         "set_draft_review_evidence",
         "set_operation_evidence",
+        "withdraw_draft",
+        "request_draft_review",
+        "answer_draft_review",
+        "manage_draft_review_backlog",
+        # Knowledge health and gaps
+        "get_knowledge_health",
+        "unblock_automation",
+        "connect_statements",
         "report_knowledge_gap",
+        "list_knowledge_gaps",
+        "update_knowledge_gap",
+        # Audiences
+        "get_audiences",
+        "manage_audiences",
+        "curate_audiences",
         # Media
         "list_media",
         "create_media_upload",
+        "edit_media",
         # Curation queue
         "claim_curation_work",
         "release_curation_work",
@@ -235,12 +258,20 @@ MCP_TOOLS = frozenset(
         "request_documentation_plan",
         "get_documentation_plan",
         "deliver_document",
+        "list_documentation",
+        "get_document_history",
+        "edit_document",
+        "retry_documentation",
+        "decide_documentation_plan",
         # Writing profiles
         "list_writing_profiles",
         "get_writing_profile",
         "save_writing_profile",
         "retire_writing_profile",
         "restore_writing_profile",
+        # Settings and the texts that steer the AI
+        "get_settings",
+        "edit_prompt_text",
     }
 )
 

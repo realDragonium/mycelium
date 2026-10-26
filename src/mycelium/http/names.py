@@ -2,7 +2,8 @@
 
 Reads are open to any authenticated caller. Edits need a real writer, and
 merging or removing a name an admin; alias suggestions are reviewed by a real
-writer.
+writer. Each route calls the function the matching MCP tool calls
+(`server.names_workspace`).
 """
 
 from __future__ import annotations
@@ -10,9 +11,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from pydantic import JsonValue
 
-from .. import alias_suggestions, auth, names_workspace, server
+from .. import alias_suggestions, names_workspace, server
 from ..request_timing import TimedRoute
-from .access import _enforce_curator, _enforce_role, _require_admin, _require_principal
+from ..server import names_workspace as workspace
+from .access import _enforce_curator, _enforce_role, _require_principal
 
 router = APIRouter(route_class=TimedRoute)
 
@@ -27,14 +29,7 @@ def mention_candidates(
 
 @router.get("/api/names-workspace")
 def names_catalogue_http(request: Request, q: str = "") -> names_workspace.Catalogue:
-    principal = _require_principal(request)
-    result = names_workspace.catalogue(server._db(), q)
-    result.can_write = auth.principal_has_real_role(principal, "writer")
-    if result.can_write:
-        result.allowed_actions = ["add", "correct", "prefer", "move", "split"]
-    if auth.principal_has_real_role(principal, "admin"):
-        result.allowed_actions.extend(("merge", "remove"))
-    return result
+    return workspace.catalogue(_require_principal(request), q)
 
 
 @router.post("/api/names-workspace/preview")
@@ -42,8 +37,7 @@ def names_preview_http(
     body: names_workspace.PreviewRequest, request: Request
 ) -> names_workspace.Preview:
     _enforce_curator(request, "editing names and aliases")
-    if body.action.kind in {"merge", "remove"}:
-        _require_admin(request)
+    workspace.require_name_edit(body.action)
     return names_workspace.preview(server._db(), body.action)
 
 
@@ -52,8 +46,7 @@ def names_apply_http(
     body: names_workspace.ApplyRequest, request: Request
 ) -> names_workspace.Applied:
     _enforce_curator(request, "editing names and aliases")
-    if body.action.kind in {"merge", "remove"}:
-        _require_admin(request)
+    workspace.require_name_edit(body.action)
     return names_workspace.apply(body)
 
 

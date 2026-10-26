@@ -486,15 +486,24 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+class _UploadIntent(Details):
+    #: The item whose content the upload replaces; None creates one.
+    replaces: str | None = None
+
+
 def create_upload(
     details: Details,
     *,
     actor: str | None,
     base_url: str,
+    replaces: str | None = None,
 ) -> Upload:
     """A single-use link that turns the bytes posted to it into a media item
-    with these details. The link is the credential, so it expires soon."""
-    if not details.alt_text:
+    with these details, or into new content for the item it `replaces`. The
+    link is the credential, so it expires soon."""
+    if replaces is not None:
+        _require(replaces)
+    elif not details.alt_text:
         raise ValueError("Say what the media shows in alt_text.")
     token = secrets.token_urlsafe(32)
     created = datetime.now(UTC)
@@ -509,7 +518,9 @@ def create_upload(
             "created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
             (
                 _token_hash(token),
-                details.model_dump_json(),
+                _UploadIntent(
+                    **details.model_dump(), replaces=replaces
+                ).model_dump_json(),
                 actor,
                 timestamps.of(created),
                 expires,
@@ -523,8 +534,13 @@ def create_upload(
         how=(
             f"POST the file's bytes as the request body, for example "
             f"`curl --fail --data-binary @screenshot.png {url}`, within 15 "
-            "minutes. The response holds the media id; cite it in "
-            "set_operation_evidence as evidence of kind 'media'."
+            "minutes. "
+            + (
+                f"They become the new content of {replaces}."
+                if replaces is not None
+                else "The response holds the media id; cite it in "
+                "set_operation_evidence as evidence of kind 'media'."
+            )
         ),
     )
 
@@ -540,12 +556,16 @@ def complete_upload(token: str, data: bytes) -> MediaView:
         ).fetchone()
         if row is None:
             raise LookupError("This upload link is unknown, used or expired.")
-        created = create(
-            data,
-            Details.model_validate_json(row["metadata_json"]),
-            origin="agent",
-            actor=row["created_by"],
-        )
+        intent = _UploadIntent.model_validate_json(row["metadata_json"])
+        if intent.replaces is not None:
+            created = replace_content(intent.replaces, data, actor=row["created_by"])
+        else:
+            created = create(
+                data,
+                Details(**intent.model_dump(exclude={"replaces"})),
+                origin="agent",
+                actor=row["created_by"],
+            )
         conn.execute(
             "DELETE FROM media_uploads WHERE token_hash = ?", (row["token_hash"],)
         )

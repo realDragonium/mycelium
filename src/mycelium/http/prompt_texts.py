@@ -1,7 +1,8 @@
 """Editable prompt texts: documentation profiles, their prompts and the AI instructions.
 
 Every route here needs an authenticated caller; whether a save is allowed is
-decided by `documentation_profiles` and `ai_prompts` from that principal.
+decided by `documentation_profiles` and `ai_prompts` from that principal. The
+MCP tools `get_settings` and `edit_prompt_text` call the same functions.
 """
 
 from __future__ import annotations
@@ -10,8 +11,9 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
-from .. import ai_prompts, auth, documentation_profiles
+from .. import ai_prompts, documentation_profiles
 from ..request_timing import TimedRoute
+from ..server import settings
 from .access import _require_principal
 
 router = APIRouter(route_class=TimedRoute)
@@ -49,49 +51,28 @@ def retire_documentation_profile_http(
 @router.get("/api/documentation/prompts/history")
 def documentation_prompt_history_http(
     type: str, name: str, request: Request
-) -> dict[str, object]:
+) -> settings.TextHistory:
     _require_principal(request)
-    documentation_profiles.editable_key(type, name)
-    from .. import prompt_store
-
-    return {
-        "versions": [
-            documentation_profiles.text_version(row).model_dump()
-            for row in prompt_store.history(prompt_store.connection(), type, name)
-        ]
-    }
+    return settings.text_history(type, name)
 
 
 @router.put("/api/documentation/prompts")
 def save_documentation_prompt_http(
     body: documentation_profiles.SaveText, request: Request
 ) -> documentation_profiles.TextVersion:
-    documentation_profiles.editable_key(body.type, body.name)
-    return documentation_profiles.save_text(
-        body.type,
-        body.name,
-        body.text,
-        _require_principal(request),
-        revision=body.revision,
-    )
+    return settings.save_text(body, _require_principal(request))
 
 
 @router.post("/api/documentation/prompts/restore")
 def restore_documentation_prompt_http(
     body: documentation_profiles.RestoreText, request: Request
 ) -> documentation_profiles.TextVersion:
-    documentation_profiles.editable_key(body.type, body.name)
-    return documentation_profiles.restore_text(body, _require_principal(request))
+    return settings.restore_text(body, _require_principal(request))
 
 
 @router.get("/api/ai-instructions")
-def ai_instructions_http(request: Request) -> dict[str, object]:
-    principal = _require_principal(request)
-    return {
-        "names": documentation_profiles.INSTRUCTIONS,
-        "actions": [summary.model_dump() for summary in ai_prompts.summaries()],
-        "can_write": auth.principal_has_real_role(principal, "writer"),
-    }
+def ai_instructions_http(request: Request) -> settings.AiInstructions:
+    return settings.ai_instructions(_require_principal(request))
 
 
 @router.get("/api/ai-instructions/{action}")

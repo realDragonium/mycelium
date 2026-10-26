@@ -96,6 +96,37 @@ def test_edits_keep_history_and_only_admins_make_them(prompts):
         audiences.save("external-technical", request, ADMIN)
 
 
+def test_an_admin_agent_configures_audiences_through_the_web_app_checks(prompts):
+    token = auth.current_principal.set(ADMIN)
+    try:
+        created = server.manage_audiences(
+            {
+                "action": "create",
+                "name": "Partners",
+                "scope": "external",
+                "description": "Reseller partners.",
+            }
+        )
+        saved = server.manage_audiences(
+            {
+                "action": "save",
+                "audience_id": created["id"],
+                "name": "Partners",
+                "scope": "external",
+                "description": "Reseller partners and their developers.",
+                "revision": 1,
+            }
+        )
+        server.manage_audiences(
+            {"action": "retire", "audience_id": saved["id"], "revision": 2}
+        )
+    finally:
+        auth.current_principal.reset(token)
+
+    assert created == {"id": "partners"}
+    assert "partners" not in {item.id for item in audiences.live(prompts)}
+
+
 def test_the_last_internal_audience_cannot_be_retired_or_made_external(prompts):
     audiences.retire(
         "internal-non-technical", audiences.RetireAudience(revision=1), ADMIN

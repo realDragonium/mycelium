@@ -11,7 +11,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from .. import store, vector
+from .. import auth, store, vector
 from ..app_context import AppContext
 from ..layout_baker import LayoutBaker
 
@@ -98,3 +98,9 @@ def _baker() -> LayoutBaker:
     """The entity-layout baker for this substrate. Built by `init`; raises
     if reached before the server is initialized."""
     return _context().layout_baker
+
+
+def _caller() -> auth.Principal:
+    """Who is calling. Local stdio has no principal and acts as the local
+    admin, as every tool's role gate already lets it."""
+    return auth.current_principal.get() or auth.LOCAL_ADMIN

@@ -510,7 +510,7 @@ def get_documentation_plan(guideline_set: str) -> PlanView:
 def deliver_document(
     document_id: str,
     destination: str,
-    expected_revision: int | None = None,
+    expected_revision: int,
 ) -> dict[str, object]:
     """Publish a selected internal version through its GitHub review flow:
     open or update the document's pull request. Merging it stays with the
@@ -528,6 +528,8 @@ def deliver_document(
     from .. import auth, docs_store, documentation_profiles
     from ..docgen import publication
 
+    if expected_revision < 1:
+        raise ValueError("expected_revision must be a revision number from 1")
     row = docs_store.get_document(_drafts_db(), document_id)
     if row is None:
         raise ValueError("generated document not found")

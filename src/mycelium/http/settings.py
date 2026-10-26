@@ -3,6 +3,8 @@ AI usage and the setup checklist.
 
 Anyone authenticated may read them; only an admin may save. A conflicting save
 answers 409 through the shared conflict handler, and unavailable settings 503.
+Agents read the same views through `get_settings`; saving settings operates
+the server and stays here.
 """
 
 from __future__ import annotations

@@ -4,8 +4,8 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from mycelium import docs_store, embed, mention_worker, server, store
-from mycelium.http.history import _history_target_id
 from mycelium.server import runtime
+from mycelium.server.history import _history_target_id
 
 
 def fake_embed_factory():

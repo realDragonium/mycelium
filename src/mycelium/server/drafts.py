@@ -10,13 +10,14 @@ operation — and never touch the substrate. Applying a reviewed draft lives in
 from __future__ import annotations
 
 import sqlite3
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from .. import auth as _auth
 from .. import drafts_store, media, store
 from ..auth import Principal as AuthPrincipal
+from ..draft_review_runs import BacklogJob
 from ..draft_review_store import Application as AssessmentApplication
 from ..draft_review_store import Label as AssessmentLabel
 from .draft_queue import _require_draft_owner
@@ -61,20 +62,27 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
         if row is None:
             raise ValueError("no open draft to submit for this caller")
         draft_id = row["id"]
+        _submit_for_review(draft_id)
     else:
-        row = drafts_store.get_draft(_drafts_db(), draft_id)
-        if row is None:
-            raise ValueError(f"draft '{draft_id}' not found")
-        if drafts_store.status_for(row) != "open":
-            raise ValueError(
-                f"draft '{draft_id}' is {drafts_store.status_for(row)}; "
-                f"only open drafts can be submitted"
-            )
-        _require_draft_owner(principal, row)
-
-    _submit_for_review(draft_id)
+        submit(draft_id, principal)
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
     return {"draft_id": draft_id, "op_count": len(ops)}
+
+
+def submit(draft_id: str, principal: AuthPrincipal | None) -> None:
+    """Submit `principal`'s open draft, or any open draft for a curator."""
+    from .. import drafts_store
+
+    row = drafts_store.get_draft(_drafts_db(), draft_id)
+    if row is None:
+        raise LookupError(f"draft '{draft_id}' not found")
+    _require_draft_owner(principal, row)
+    if drafts_store.status_for(row) != "open":
+        raise ValueError(
+            f"draft '{draft_id}' is {drafts_store.status_for(row)}; "
+            f"only open drafts can be submitted"
+        )
+    _submit_for_review(draft_id)
 
 
 def _submit_for_review(draft_id: str) -> None:
@@ -475,3 +483,109 @@ def discard_draft_op(
         "removed": True,
         "revision": revision,
     }
+
+
+@tool(role="drafter")
+def withdraw_draft(draft_id: str) -> dict[str, Any]:
+    """Withdraw an open or submitted draft, as Withdraw does on the Drafts
+    screen: nothing in it is applied and its review stops. Only the draft's
+    creator, or a real writer or admin, may withdraw it."""
+    from .. import auth as _auth
+
+    withdraw(draft_id, _auth.current_principal.get())
+    return {"ok": True}
+
+
+def withdraw(draft_id: str, principal: AuthPrincipal | None) -> None:
+    from .. import auth as _auth
+    from .. import drafts_store
+
+    conn = _drafts_db()
+    row = drafts_store.get_draft(conn, draft_id)
+    if row is None:
+        raise LookupError("draft not found")
+    _require_draft_owner(principal, row)
+    if drafts_store.status_for(row) not in ("open", "submitted"):
+        raise ValueError("only open or submitted drafts can be withdrawn")
+    with store.transaction(conn):
+        drafts_store.set_decision(
+            conn,
+            draft_id,
+            decision="withdrawn",
+            by=principal.id if principal is not None else _auth.LOCAL_ADMIN_ID,
+        )
+
+
+def answer_review(
+    draft_id: str, run_id: str, answer: str, principal: AuthPrincipal
+) -> dict[str, JsonValue]:
+    from pydantic import ValidationError
+
+    from .. import draft_review_runs
+
+    try:
+        run = draft_review_runs.answer(draft_id, run_id, answer, principal)
+    except ValidationError as exc:
+        raise ValueError("answer must be 1 to 6000 characters") from exc
+    return run.model_dump(mode="json")
+
+
+@tool(role="writer", real_role=True)
+def answer_draft_review(
+    draft_id: str, run_id: str, answer: str
+) -> dict[str, JsonValue]:
+    """Answer the internal reviewer's questions on a draft, as a curator does
+    in the draft view; the draft is reviewed again with the answer. `run_id`
+    is the review run that asked (`review_assessment` in `get_draft`). Real
+    writers and admins only. An agent answering from the product's code
+    with evidence uses the curation queue's `question` items instead.
+    Returns the new review run."""
+    from .. import auth as _auth
+
+    return answer_review(
+        draft_id, run_id, answer, _auth.current_principal.get() or _auth.LOCAL_ADMIN
+    )
+
+
+class ReviewBacklog(BaseModel):
+    #: Submitted drafts the current review configuration has not reached,
+    #: oldest first.
+    draft_ids: list[str]
+    #: Reviews are queued for an external agent instead of run here.
+    external_agent: bool
+    #: The backlog review this process last started.
+    job: BacklogJob | None
+
+
+def review_backlog() -> ReviewBacklog:
+    from .. import draft_review_runs
+    from .. import draft_review_settings as review_settings
+
+    return ReviewBacklog(
+        draft_ids=draft_review_runs.backlog(),
+        external_agent=review_settings.load().external_agent,
+        job=draft_review_runs.backlog_job(),
+    )
+
+
+@tool(role="admin", real_role=True)
+def manage_draft_review_backlog(
+    action: Literal["status", "start", "pause", "resume"] = "status",
+) -> dict[str, JsonValue]:
+    """Review the submitted drafts the internal reviewer has not reached, as
+    Settings → Draft review offers once review is switched on. Real admins
+    only.
+
+    `status` lists them with the backlog review this server last started;
+    `start` reviews them oldest first, one draft at a time; `pause` stops
+    after the draft under review; `resume` carries on. Returns the
+    backlog and its job."""
+    from .. import draft_review_runs
+
+    if action == "start":
+        draft_review_runs.review_backlog()
+    elif action == "pause":
+        draft_review_runs.pause_backlog()
+    elif action == "resume":
+        draft_review_runs.resume_backlog()
+    return review_backlog().model_dump(mode="json")

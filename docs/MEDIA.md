@@ -108,7 +108,12 @@ every item.
 
 ## Agents (MCP)
 
-- `list_media` lists what is attached to one statement or concept.
+- `list_media` lists what is attached to one statement or concept, reads one
+  item, or lists the library with the same filters as the web app.
+- `edit_media` makes a curator's changes for a real writer: details, label,
+  confirming a label, attaching and detaching, and deleting for an admin.
+  Its `replace_content` returns an upload link like `create_media_upload`'s,
+  whose bytes become the item's new content.
 - `create_media_upload` returns a single-use upload link for an image or
   recording the agent captured. The agent POSTs the bytes there and cites the
   returned `media_id` as `{"kind": "media", "media_id": …, "claim": …}` evidence

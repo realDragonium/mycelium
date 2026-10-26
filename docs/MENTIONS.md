@@ -11,8 +11,8 @@ Existing approval decisions remain effective while their name still matches the
 statement. Historical decisions travel with new backups; older archives that did
 not export them cannot reconstruct those decisions.
 
-`get_mention_candidates(entity_id, after=0, limit=50)` is available through its HTTP
-mirror; it is not advertised over MCP. `GET /api/mention-candidates` exposes the same read-only operation.
+`get_mention_candidates(entity_id, after=0, limit=50)` is an MCP tool with an HTTP
+mirror. `GET /api/mention-candidates` exposes the same read-only operation.
 It returns statement text, matched names, and a match label: `derived`, `approved`
 (historical), or `possible`. These labels explain matching, not factual confidence.
 Names and aliases management uses this discovery view for statement examples.
