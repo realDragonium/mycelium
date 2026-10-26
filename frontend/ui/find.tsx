@@ -50,8 +50,10 @@ function ResultRow({ r, rank, mode, query, tail }: { r: FindRow; rank: number; m
         <EditableStatementText statement={statement} className="r-text" highlightQuery={grep ? query : ''} compact />
       </div>
       <div className="r-right">
-        {/* Grep has no relevance score; show how it matched instead. */}
-        {grep
+        {/* An id match and grep have no relevance score; show how it matched instead. */}
+        {r.via === 'id'
+          ? <span className="r-sub" title="the query is this statement's id">exact id</span>
+          : grep
           ? <span className="r-sub" title={`matched via ${r.via || 'text'}`}>{r.via || 'text'}{r.occurrences > 0 && <> · {r.occurrences}×</>}</span>
           : <ScoreMeter score={r.score} />}
       </div>
@@ -107,8 +109,9 @@ export function FindResults({ query, mode }: { query: string; mode: FindMode }) 
 
   const rows = state.status === 'ready' ? state.data.rows : [];
   // Survey has no score floor: split the strong head from the faded tail.
-  const head = mode === 'survey' ? rows.filter(r => (r.score ?? 0) >= 0.4) : rows;
-  const tail = mode === 'survey' ? rows.filter(r => (r.score ?? 0) < 0.4) : [];
+  const strong = (r: FindRow) => r.score === null || r.score >= 0.4;
+  const head = mode === 'survey' ? rows.filter(strong) : rows;
+  const tail = mode === 'survey' ? rows.filter(r => !strong(r)) : [];
 
   return (
     <main className="page narrow">
