@@ -5,18 +5,28 @@ touches an index brackets it with a `.dirty` marker: present from the first
 index mutation until the persisted file and the outermost commit both land. A
 marker found at startup means the file may disagree with the database, and
 `init` rebuilds that index by re-embedding.
+
+A copy of the index files is only safe to restore beside the database it was
+taken with. `snapshot_indexes` copies them under a file lock every index write
+holds, so another process can take the copy while the server runs, and records
+a fingerprint of the vector-id mappings and their texts in each copied sidecar.
+`init` loads such a copy only while the restored database still has that
+fingerprint, and rebuilds it otherwise.
 """
 
 from __future__ import annotations
 
 import contextlib
+import fcntl
+import hashlib
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import tempfile
 import time
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -33,6 +43,69 @@ _EARLIER_FORMAT = "<an earlier index format>"
 #: is rebuilt once. 2: `Index.add` could leave a vector id on a stale slot or
 #: on none.
 INDEX_FORMAT = 2
+STATEMENT_INDEX = "mycelium.vec"
+NAME_INDEX = "mycelium-names.vec"
+_FILES_LOCK = "mycelium-vec.lock"
+_INDEXES: dict[str, Callable[[sqlite3.Connection], list[sqlite3.Row]]] = {
+    STATEMENT_INDEX: store.statement_vector_texts,
+    NAME_INDEX: store.name_vector_texts,
+}
+#: Guarded by `store.write_lock`, which every in-process lock holder takes first.
+_files_lock_depth = 0
+
+
+class SnapshotRefused(Exception):
+    """The live index files may not match the database, so no copy was taken."""
+
+
+@dataclass(frozen=True)
+class Fingerprint:
+    """The database state an index copy reflects: its vector-id mappings and
+    their texts. A text edit keeps the mapping but replaces the vector, so the
+    text belongs in it."""
+
+    vectors: int
+    sha256: str
+
+
+def fingerprint(rows: Iterable[sqlite3.Row]) -> Fingerprint:
+    digest = hashlib.sha256()
+    count = 0
+    for row in rows:
+        digest.update(json.dumps([row["vector_id"], row["text"]]).encode())
+        digest.update(b"\n")
+        count += 1
+    return Fingerprint(count, digest.hexdigest())
+
+
+@contextlib.contextmanager
+def _flock(data_dir: Path) -> Iterator[None]:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    with open(data_dir / _FILES_LOCK, "a") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        yield
+
+
+@contextlib.contextmanager
+def _index_files_lock(data_dir: Path) -> Iterator[None]:
+    """Hold the lock over the index files in `data_dir` for an index write.
+
+    Callers hold `store.write_lock`, which excludes this process's other
+    writers and makes this reentrant; the flock excludes `snapshot_indexes`."""
+    global _files_lock_depth
+    if _files_lock_depth:
+        _files_lock_depth += 1
+        try:
+            yield
+        finally:
+            _files_lock_depth -= 1
+        return
+    with _flock(data_dir):
+        _files_lock_depth = 1
+        try:
+            yield
+        finally:
+            _files_lock_depth = 0
 
 
 def _try_embed(text: str) -> list[float] | None:
@@ -182,27 +255,28 @@ def _rebuild_vector_index(
         )
 
 
-def _log_index_rebuild_reason(
-    label: str,
-    index_path: Path,
-    *,
-    dirty: bool,
-    recorded_identity: str,
+def _rebuild_reason(
+    path: Path,
+    mapped: Callable[[sqlite3.Connection], list[sqlite3.Row]],
     configured_identity: str,
-) -> None:
-    if dirty:
-        logger.warning(
-            "rebuilding %s vector index: dirty marker indicates a crash "
-            "before the index was persisted",
-            label,
+) -> str | None:
+    """Why the index at `path` cannot be loaded, or None when it can."""
+    if not path.exists():
+        return "no index file"
+    if _dirty_marker_path(path).exists():
+        return "dirty marker indicates a crash before the index was persisted"
+    recorded_identity, recorded = _read_index_meta(path)
+    if recorded_identity != configured_identity:
+        return f"built by {recorded_identity}, configured embedder is {configured_identity}"
+    if recorded is None:
+        return None
+    current = fingerprint(mapped(_db()))
+    if current != recorded:
+        return (
+            f"snapshot reflects {recorded.vectors} mapped vector(s) of another "
+            f"database state; the database maps {current.vectors}"
         )
-    elif index_path.exists() and recorded_identity != configured_identity:
-        logger.warning(
-            "rebuilding %s vector index: built by %s, configured embedder is %s",
-            label,
-            recorded_identity,
-            configured_identity,
-        )
+    return None
 
 
 def load_or_rebuild(
@@ -210,6 +284,7 @@ def load_or_rebuild(
     *,
     label: str,
     rows: Callable[[sqlite3.Connection], list[sqlite3.Row]],
+    mapped: Callable[[sqlite3.Connection], list[sqlite3.Row]],
     get_id: Callable[[sqlite3.Connection, str], int | None],
     next_id: Callable[[sqlite3.Connection], int],
     set_id: Callable[[sqlite3.Connection, str, int], None],
@@ -217,33 +292,36 @@ def load_or_rebuild(
 ) -> vector.Index:
     """Load a clean, compatible index or durably rebuild it from the substrate.
 
-    Fetch rebuild rows inside the substrate transaction.
+    A snapshot's sidecar carries the fingerprint of `mapped`; it loads only
+    when the database still has it. Fetch rebuild rows inside the substrate
+    transaction.
     """
     configured_identity = embed.identity()
-    dirty = _dirty_marker_path(path).exists()
-    recorded_identity = _read_index_identity(path)
-    if path.exists() and not dirty and recorded_identity == configured_identity:
-        index = vector.Index.load(path)
-        if on_load is not None:
-            on_load(index, path)
-        return index
+    with store.write_lock(), _index_files_lock(path.parent):
+        reason = _rebuild_reason(path, mapped, configured_identity)
+        if reason is None:
+            index = vector.Index.load(path)
+            if _read_index_meta(path)[1] is not None:
+                logger.info("loaded %s vector index from a matching snapshot", label)
+                # Writes from here on leave the fingerprint behind.
+                _write_index_identity(path, configured_identity)
+            if on_load is not None:
+                on_load(index, path)
+            return index
 
-    _log_index_rebuild_reason(
-        label,
-        path,
-        dirty=dirty,
-        recorded_identity=recorded_identity,
-        configured_identity=configured_identity,
-    )
-    _write_dirty_marker(path)
-    index = vector.Index.empty()
-    with store.transaction(_db()):
-        _rebuild_vector_index(index, rows(_db()), get_id, next_id, set_id, label=label)
-    index.save(path)
-    _fsync_file(path)
-    _write_index_identity(path, configured_identity)
-    _clear_dirty_marker(path)
-    return index
+        if path.exists():
+            logger.warning("rebuilding %s vector index: %s", label, reason)
+        _write_dirty_marker(path)
+        index = vector.Index.empty()
+        with store.transaction(_db()):
+            _rebuild_vector_index(
+                index, rows(_db()), get_id, next_id, set_id, label=label
+            )
+        index.save(path)
+        _fsync_file(path)
+        _write_index_identity(path, configured_identity)
+        _clear_dirty_marker(path)
+        return index
 
 
 def prune_stranded_name_vectors(index: vector.Index, path: Path) -> None:
@@ -255,6 +333,7 @@ def prune_stranded_name_vectors(index: vector.Index, path: Path) -> None:
     ]
     if stranded:
         logger.info("pruning %d stranded name vector(s)", len(stranded))
+        # Called from `load_or_rebuild`, which holds the index files lock.
         _write_dirty_marker(path)
         for vid in stranded:
             index.delete(vid)
@@ -280,29 +359,53 @@ def _meta_path(index_path: Path) -> Path:
 
 
 def _read_index_identity(index_path: Path) -> str:
+    return _read_index_meta(index_path)[0]
+
+
+def _read_index_meta(index_path: Path) -> tuple[str, Fingerprint | None]:
+    """The recorded embedder identity, and the fingerprint a snapshot records."""
     path = _meta_path(index_path)
     if not path.exists():
-        return _EARLIER_FORMAT
+        return _EARLIER_FORMAT, None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return _INVALID_IDENTITY
+        return _INVALID_IDENTITY, None
     if not isinstance(payload, dict):
-        return _INVALID_IDENTITY
+        return _INVALID_IDENTITY, None
     if payload.get("format") != INDEX_FORMAT:
-        return _EARLIER_FORMAT
+        return _EARLIER_FORMAT, None
     identity = payload.get("embedder")
-    return identity if isinstance(identity, str) else _INVALID_IDENTITY
+    if not isinstance(identity, str):
+        return _INVALID_IDENTITY, None
+    if "database" not in payload:
+        return identity, None
+    recorded = payload["database"]
+    if (
+        not isinstance(recorded, dict)
+        or not isinstance(recorded.get("vectors"), int)
+        or not isinstance(recorded.get("sha256"), str)
+    ):
+        return _INVALID_IDENTITY, None
+    return identity, Fingerprint(recorded["vectors"], recorded["sha256"])
 
 
-def _write_index_identity(index_path: Path, identity: str) -> None:
+def _write_index_identity(
+    index_path: Path, identity: str, database: Fingerprint | None = None
+) -> None:
     path = _meta_path(index_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temp_path = Path(temp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as file:
-            json.dump({"embedder": identity, "format": INDEX_FORMAT}, file)
+            payload: dict[str, object] = {"embedder": identity, "format": INDEX_FORMAT}
+            if database is not None:
+                payload["database"] = {
+                    "vectors": database.vectors,
+                    "sha256": database.sha256,
+                }
+            json.dump(payload, file)
             file.write("\n")
             file.flush()
             os.fsync(file.fileno())
@@ -378,7 +481,7 @@ def _persisted_index_write(
     but only startup reconciliation clears it. If commit fails, DRA-418 rolls
     the DB back and the next startup heals the divergent index.
     """
-    with store.write_lock():
+    with store.write_lock(), _index_files_lock(_idx_path().parent):
         conn = _db()
         outermost = not store.in_transaction(conn)
         statement_marker_preexisting = (
@@ -441,3 +544,39 @@ def _restore_index_snapshots(
                 snapshot_path,
                 snapshot_path,
             )
+
+
+def snapshot_indexes(data_dir: Path, out_dir: Path) -> None:
+    """Copy both index files and their sidecars from `data_dir` into `out_dir`,
+    recording in each sidecar the fingerprint of the database they match.
+
+    Safe while a server writes to `data_dir`: the copy holds the index files
+    lock, so it sees no index write in flight. Raises `SnapshotRefused` when an
+    index is missing or may disagree with the database."""
+    database = data_dir / "mycelium.db"
+    if not database.exists():
+        raise SnapshotRefused(f"no database at {database}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with (
+        _flock(data_dir),
+        contextlib.closing(
+            sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
+        ) as conn,
+    ):
+        conn.row_factory = sqlite3.Row
+        identities = [_snapshot_identity(data_dir / name) for name in _INDEXES]
+        for (name, mapped), identity in zip(_INDEXES.items(), identities, strict=True):
+            shutil.copyfile(data_dir / name, out_dir / name)
+            _write_index_identity(out_dir / name, identity, fingerprint(mapped(conn)))
+
+
+def _snapshot_identity(live: Path) -> str:
+    if not live.exists():
+        raise SnapshotRefused(f"{live} does not exist")
+    if _dirty_marker_path(live).exists():
+        # Left by a crashed or failed write; only a restart clears it.
+        raise SnapshotRefused(f"{live} is marked dirty")
+    identity = _read_index_identity(live)
+    if identity in (_EARLIER_FORMAT, _INVALID_IDENTITY):
+        raise SnapshotRefused(f"{live} has no current sidecar")
+    return identity

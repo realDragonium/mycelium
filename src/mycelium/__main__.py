@@ -6,6 +6,8 @@ Subcommands:
     export             write a .tar.gz snapshot of the whole instance
     import             restore a snapshot into the data dir
     databases          print the database files a deployment must restore
+    snapshot-indexes   copy the vector indexes consistently, for a restore
+                       beside the database they match
     users list         show all users + their roles
     users set-role     change a user's role by email
 """
@@ -54,6 +56,17 @@ def _cmd_databases(args: argparse.Namespace) -> None:
     from . import databases
 
     print("\n".join(databases.FILES))
+
+
+def _cmd_snapshot_indexes(args: argparse.Namespace) -> None:
+    from .server import indexes
+
+    try:
+        indexes.snapshot_indexes(args.data_dir, args.out_dir)
+    except indexes.SnapshotRefused as exc:
+        print(f"no snapshot taken: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"wrote {args.out_dir}", file=sys.stderr)
 
 
 def _auth_db_path(data_dir: Path) -> Path:
@@ -206,6 +219,14 @@ def main() -> None:
         help="print the database files a deployment must replicate and restore",
     )
     p_databases.set_defaults(func=_cmd_databases)
+
+    p_snapshot = sub.add_parser(
+        "snapshot-indexes",
+        help="copy the vector indexes with the fingerprint of the database they "
+        "match; safe while the server runs",
+    )
+    p_snapshot.add_argument("out_dir", type=Path, help="directory to write into")
+    p_snapshot.set_defaults(func=_cmd_snapshot_indexes)
 
     p_users = sub.add_parser("users", help="manage user roles in the auth DB")
     users_sub = p_users.add_subparsers(dest="users_cmd")

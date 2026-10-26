@@ -22,7 +22,12 @@ from ..app_context import AppContext
 from ..layout_baker import LayoutBaker
 from . import runtime
 from .draft_application import substrate_application_result
-from .indexes import load_or_rebuild, prune_stranded_name_vectors
+from .indexes import (
+    NAME_INDEX,
+    STATEMENT_INDEX,
+    load_or_rebuild,
+    prune_stranded_name_vectors,
+)
 from .prompt_texts import seed_prompt_texts
 from .runtime import _auth_db, _db, _drafts_db, _prompts_db
 
@@ -185,24 +190,27 @@ def _init(data_dir: Path) -> None:
     # The .vec files are re-derivable from the substrate, so a backup may omit
     # them while keeping the *_vector_ids mappings in the DB. When a .vec is
     # missing (a fresh checkout, or a restore of such a backup), marked dirty,
-    # or built by another embedder, rebuild the index by re-embedding, or search
-    # could silently use vectors that diverge from the populated substrate.
+    # built by another embedder, or a snapshot of another database state, rebuild
+    # the index by re-embedding, or search could silently use vectors that
+    # diverge from the populated substrate.
     _report("indexing", "Loading the vector indexes")
-    index_path = data_dir / "mycelium.vec"
+    index_path = data_dir / STATEMENT_INDEX
     index = load_or_rebuild(
         index_path,
         label="statement",
         rows=store.all_statements_with_text,
+        mapped=store.statement_vector_texts,
         get_id=store.get_vector_id,
         next_id=store.next_vector_id,
         set_id=store.set_vector_id,
     )
 
-    name_index_path = data_dir / "mycelium-names.vec"
+    name_index_path = data_dir / NAME_INDEX
     name_index = load_or_rebuild(
         name_index_path,
         label="name",
         rows=store.list_all_names,
+        mapped=store.name_vector_texts,
         get_id=store.get_name_vector_id,
         next_id=store.next_name_vector_id,
         set_id=store.set_name_vector_id,
