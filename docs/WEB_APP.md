@@ -20,7 +20,7 @@ focuses it.
 |---|---|---|---|
 | | Home | `#/` | Ask or Find, what is waiting for a person, what the knowledge base holds |
 | | Ask | `#/ask?q=…` | A reasoned answer with confidence, gaps, provenance and a trace; report a gap from it |
-| | Find | `#/find?q=…&mode=semantic\|grep\|survey` | Raw scored statements, plus entities whose names match |
+| | Find | `#/find?q=…&mode=semantic\|grep\|survey` | Raw scored statements, plus entities whose names match. A pasted statement id comes first, marked exact id |
 | Explore | Browse | `#/browse` | Every statement, entity and name as a table |
 | | Statement | `#/s/<id>` | Text (editable), mentions, connections graph or list, conditions, lineage, audiences with their label's source and reason (curators override; a curator label whose text changed since the decision is flagged to confirm or hand back to AI; a curator confirms or rejects an external grant waiting for confirmation; a relabel after an edit that narrowed the audiences shows why), media (writers upload, edit, label and detach; readers see it) |
 | | Entity | `#/e/<id>` | Aliases, mentioning statements, entity links, media |

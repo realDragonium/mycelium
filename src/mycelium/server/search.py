@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 from typing import Any, Literal
 
 from pydantic import JsonValue
@@ -35,6 +36,26 @@ def _entity_ids_for_names(name_texts: list[str]) -> set[str]:
             raise ValueError(f"name {text!r} does not exist")
         entity_ids.add(row["entity_id"])
     return entity_ids
+
+
+def _statement_id_match(
+    query: str, *, kind: str | None, required_entity_ids: set[str]
+) -> sqlite3.Row | None:
+    """The statement `query` is the id of, when it passes the filters.
+
+    The lookup reads through `_db()`, so inside an audience scope an id the
+    audience cannot see is not found, exactly as search would not rank it."""
+    statement_id = query.strip()
+    if not statement_id.startswith("stm_"):
+        return None
+    row = store.get_statement(_db(), statement_id)
+    if row is None or (kind is not None and row["kind"] != kind):
+        return None
+    if required_entity_ids and not required_entity_ids.issubset(
+        m["entity_id"] for m in store.get_mentions(_db(), statement_id)
+    ):
+        return None
+    return row
 
 
 #: Truncation cap for `text` snippets returned in `near_duplicates` and
@@ -405,6 +426,12 @@ def search_statements(
     the union comes back deduped: statements surfaced by more parts first,
     then by best score. The result can therefore hold more than `limit` hits.
 
+    A `query` that is exactly a statement id (surrounding whitespace
+    ignored) returns that statement as the first hit, marked
+    `matched_via: "id"` and carrying no `score`; the text search still
+    fills the rest. The `mentions` and `kind` filters apply to it. An id
+    that does not exist is searched as text.
+
     If embedding is unavailable, keyword matching is used, hits carry
     `retrieval: "keyword"`, and scores are the fraction of query words matched.
 
@@ -418,6 +445,11 @@ def search_statements(
                          default (0.5 for nomic-embed-text).
     """
     _check_limit(limit)
+    id_match = _statement_id_match(
+        query,
+        kind=kind,
+        required_entity_ids=_entity_ids_for_names(mentions) if mentions else set(),
+    )
     if decompose:
         ranked, keyword_fallback = _decomposed_candidates(
             query,
@@ -443,12 +475,21 @@ def search_statements(
         ranked = [(sid, final) for sid, final, _cos in scored]
 
     direct: list[dict[str, Any]] = []
+    if id_match is not None:
+        id_hit = _hydrate_statement_full(
+            id_match["id"], score=None, reverse_cap=_REVERSE_EDGE_CAP
+        )
+        id_hit["matched_via"] = "id"
+        direct.append(id_hit)
+        ranked = [(sid, score) for sid, score in ranked if sid != id_match["id"]]
+        if not decompose:
+            ranked = ranked[: limit - 1]
     for sid, score in ranked:
         hit = _hydrate_statement_full(sid, score=score, reverse_cap=_REVERSE_EDGE_CAP)
         if keyword_fallback:
             hit["retrieval"] = "keyword"
         direct.append(hit)
-    seen = {sid for sid, _score in ranked}
+    seen = {hit["id"] for hit in direct}
 
     if depth <= 0:
         return direct

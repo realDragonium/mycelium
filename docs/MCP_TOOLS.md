@@ -56,10 +56,10 @@ records stay off MCP: they run in-process.
 
 | Tool | Why it is on MCP |
 | --- | --- |
-| `search_statements` | Semantic retrieval with alias boost and graph expansion. `decompose` searches each part of a multi-part question and ranks statements several parts surface first. This is the main read. While the embedding provider is down it falls back to keyword matching and marks hits `retrieval: "keyword"`. |
+| `search_statements` | Semantic retrieval with alias boost and graph expansion. `decompose` searches each part of a multi-part question and ranks statements several parts surface first. This is the main read. While the embedding provider is down it falls back to keyword matching and marks hits `retrieval: "keyword"`. A query that is exactly a statement id returns that statement first, marked `matched_via: "id"` with no score. |
 | `get_statements` | Hydrates known ids and follows links. |
 | `find_statement_connections` | Finds bounded routes between statements. It cannot be composed cheaply from other reads. |
-| `grep_statements` | Literal lookup for identifiers and quoted strings that semantic search misses. |
+| `grep_statements` | Literal lookup for identifiers and quoted strings that semantic search misses. A statement id as the query returns that statement first, `matched_via: "id"`. |
 | `list_statements` | Enumerates statements that mention an entity or have a kind, without a query. |
 | `discover_facts` | Checks many candidate texts in one call before writing (`exists` / `near` / `new`). The repository's authoring and draft skills depend on it. |
 | `get_entity` | Hydrates an entity's names and entity links. |

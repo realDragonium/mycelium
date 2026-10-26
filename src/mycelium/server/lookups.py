@@ -18,7 +18,7 @@ from .entities import get_entity, list_entities, search_entities
 from .hydration import _hydrate_statement_full
 from .registry import draft_listing_tool, tool
 from .runtime import _db
-from .search import search_statements
+from .search import _statement_id_match, search_statements
 from .specs import ResultLimit, _check_limit
 
 
@@ -216,6 +216,7 @@ def grep_statements(
       `"mention"` — statement mentions an entity whose name contains
                     the query; statement text does not.
       `"both"`    — both of the above.
+      `"id"`      — the query is this statement's id (see below).
 
     Set `match_aliased_mentions=False` to get only text-matches (the
     pre-alias-awareness behavior).
@@ -230,6 +231,11 @@ def grep_statements(
     specifies the mention scope. A `name` or `entity_id` that does not
     exist is a filter matching nothing, not a failure: you get
     `total: 0` and the unresolved value in `missing`.
+
+    A `query` that is exactly a statement id (surrounding whitespace
+    ignored) returns that statement first with `matched_via: "id"`; the
+    `kind` and entity filters apply to it. An id that does not exist is
+    matched as text.
 
     Returns `{total, statements: [{id, kind, text, matched_via}], missing}`.
     `missing` is always present and empty when the filters resolved. Use
@@ -247,6 +253,54 @@ def grep_statements(
     if entity_id is not None and store.get_entity_by_id(_db(), entity_id) is None:
         return {"total": 0, "statements": [], "missing": [entity_id]}
 
+    id_match = _statement_id_match(
+        query,
+        kind=kind,
+        required_entity_ids={entity_id} if entity_id is not None else set(),
+    )
+    if id_match is None:
+        return _grep_page(
+            query,
+            case_sensitive,
+            entity_id,
+            kind,
+            match_aliased_mentions,
+            limit,
+            offset,
+        )
+    # The id hit is row 0 of the result, so the text rows shift down by one.
+    page = _grep_page(
+        query,
+        case_sensitive,
+        entity_id,
+        kind,
+        match_aliased_mentions,
+        limit - 1 if offset == 0 else limit,
+        max(offset - 1, 0),
+    )
+    rows = [row for row in page["statements"] if row["id"] != id_match["id"]]
+    if offset == 0:
+        rows.insert(
+            0,
+            {
+                "id": id_match["id"],
+                "kind": id_match["kind"],
+                "text": id_match["text"],
+                "matched_via": "id",
+            },
+        )
+    return {"missing": [], "total": page["total"] + 1, "statements": rows}
+
+
+def _grep_page(
+    query: str,
+    case_sensitive: bool,
+    entity_id: str | None,
+    kind: str | None,
+    match_aliased_mentions: bool,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
     # Text-match path — the historical behavior. When entity_id is set,
     # this is the only path; explicit filters suppress alias expansion.
     text_rows = store.grep_statements(
