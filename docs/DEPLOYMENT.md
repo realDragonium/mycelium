@@ -838,8 +838,10 @@ changes. Each index file records the embedder that built it in a
 provider or model is discarded and rebuilt by re-embedding every statement and
 name; vectors from two models are never mixed. The rebuild's progress is
 logged and shown as the startup step in `/api/server-info`, and the server
-answers `503` until it finishes. An index without the file predates it and is
-treated as built by `nomic-embed-text`.
+answers `503` until it finishes. The file also records the index format. An
+index without the file, or with an earlier format, is rebuilt the same way
+once: indexes written before format 2 could lose statements from semantic
+search.
 
 Switching back rebuilds again. Exports carry the `.meta.json` files with the
 indexes.
