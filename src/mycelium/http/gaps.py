@@ -2,46 +2,23 @@
 
 Humans report through the UI, agents through the `report_knowledge_gap` tool.
 Reading gaps is open to every authenticated user; resolving, dismissing or
-reopening one takes a real writer. Nothing here deletes one.
+reopening one takes a real writer. Nothing here deletes one. Each route calls
+the function the matching MCP tool calls (`server.gaps`).
 """
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from .. import auth, store
+from .. import server
 from ..request_timing import TimedRoute
+from ..server.gaps import is_gap_action, is_gap_status
 from .access import _enforce_curator, _require_principal
 
 router = APIRouter(route_class=TimedRoute)
-
-
-def _serialize_gap(row: sqlite3.Row) -> dict[str, Any]:
-    if row["resolved_at"]:
-        status = "resolved"
-    elif row["dismissed_at"]:
-        status = "dismissed"
-    else:
-        status = "open"
-    return {
-        "id": row["id"],
-        "text": row["text"],
-        "status": status,
-        "created_at": row["created_at"],
-        "created_by": row["created_by"],
-        "resolved_at": row["resolved_at"],
-        "resolved_by": row["resolved_by"],
-        "dismissed_at": row["dismissed_at"],
-        "dismissed_by": row["dismissed_by"],
-        "draft_id": row["draft_id"],
-        "statement_id": row["statement_id"],
-        "document_id": row["document_id"],
-        "closing_reason": row["closing_reason"],
-    }
 
 
 @router.get("/api/knowledge-gaps")
@@ -53,26 +30,17 @@ def list_knowledge_gaps(request: Request, status: str | None = None) -> dict[str
     The status column is virtual: derived from which terminal
     timestamp is set.
     """
-    p = _require_principal(request)
-    conn = store.substrate_connection()
+    _require_principal(request)
     status = status or "all"
-    if status not in ("all", "open", "resolved", "dismissed"):
+    if not is_gap_status(status):
         raise HTTPException(
             status_code=400,
             detail="status must be one of: all, open, resolved, dismissed",
         )
-    rows = store.list_knowledge_gaps(conn, status=status)
-    return {
-        "gaps": [_serialize_gap(r) for r in rows],
-        "can_write": auth.principal_has_real_role(p, "writer"),
-    }
+    return server.list_knowledge_gaps(status)
 
 
 class GapUpdateBody(BaseModel):
-    # One of:
-    #   {"action": "resolve"}    → set resolved_at + resolved_by
-    #   {"action": "dismiss"}    → set dismissed_at + dismissed_by
-    #   {"action": "reopen"}     → clear both terminal timestamps
     action: str
 
 
@@ -80,15 +48,13 @@ class GapUpdateBody(BaseModel):
 def update_knowledge_gap(
     gap_id: str, body: GapUpdateBody, request: Request
 ) -> dict[str, Any]:
-    p = _enforce_curator(request, "changing a knowledge gap's status")
-    conn = store.substrate_connection()
-    if store.get_knowledge_gap(conn, gap_id) is None:
-        raise HTTPException(status_code=404, detail="gap not found")
-    if body.action not in ("resolve", "dismiss", "reopen"):
+    _enforce_curator(request, "changing a knowledge gap's status")
+    if not is_gap_action(body.action):
         raise HTTPException(
             status_code=400,
             detail="action must be one of: resolve, dismiss, reopen",
         )
-    with store.transaction(conn):
-        updated = store.set_knowledge_gap_status(conn, gap_id, body.action, p.id)
-    return {"gap": _serialize_gap(updated)}
+    try:
+        return server.update_knowledge_gap(gap_id, body.action)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -7,6 +7,7 @@ import struct
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 
 import media_samples
 from mycelium import (
@@ -347,3 +348,27 @@ def test_media_reaches_the_audiences_that_include_its_label(client):
     # External technical includes external non-technical, not the reverse.
     assert served("external-technical") == [True, True]
     assert served("external-non-technical") == [True, False]
+
+
+def test_a_curator_agent_replaces_and_an_admin_deletes_media(client):
+    writer, drafter, admin = _bearer("writer"), _bearer("drafter"), _bearer("admin")
+    statement = _statement(client, writer, "Invoices can be exported as CSV.")
+    item = _upload(client, writer, statement, media_samples.png())
+
+    def edit(headers: dict[str, str], **request: object) -> Response:
+        return client.post(
+            "/edit-media",
+            headers=headers,
+            json={"request": {"media_id": item["id"], **request}},
+        )
+
+    assert edit(drafter, action="confirm_label").status_code == 403
+    link = edit(writer, action="replace_content")
+    assert link.status_code == 200, link.text
+    done = client.post(link.json()["upload_url"], content=media_samples.png())
+    assert done.json()["media_id"] == item["id"]
+    assert media.get(str(item["id"])).content_version == 2
+    assert edit(writer, action="delete").status_code == 403
+    assert edit(admin, action="delete").json() == {"deleted": True}
+    listed = client.post("/list-media", headers=writer, json={"show": "all"})
+    assert listed.json() == []

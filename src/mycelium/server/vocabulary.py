@@ -9,9 +9,12 @@ as any other write.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from .. import link_rules, store
+from .draft_queue import DraftReceipt
 from .registry import draft_listing_tool, draftable_tool, tool
 from .runtime import _db
 
@@ -367,3 +370,98 @@ def delete_entity_link_type(link_type: str) -> dict[str, str]:
     with store.transaction(_db()):
         store.delete_entity_link_type_glossary(_db(), link_type)
     return {"link_type": link_type}
+
+
+class _Change(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SaveStatementKind(_Change):
+    action: Literal["save_statement_kind"]
+    kind: str
+    description: str
+    when_to_use: str | None = None
+
+
+class SaveLinkType(_Change):
+    action: Literal["save_link_type", "save_entity_link_type"]
+    link_type: str
+    description: str
+
+
+class SaveLinkTypeAlias(_Change):
+    action: Literal["save_link_type_alias"]
+    link_type: str
+    alias: str
+    direction: Literal["forward", "reverse"] = "forward"
+
+
+class DeleteStatementKind(_Change):
+    action: Literal["delete_statement_kind"]
+    kind: str
+
+
+class DeleteLinkType(_Change):
+    action: Literal["delete_link_type", "delete_entity_link_type"]
+    link_type: str
+
+
+class DeleteLinkTypeAlias(_Change):
+    action: Literal["delete_link_type_alias"]
+    link_type: str
+    alias: str
+
+
+VocabularyChange = Annotated[
+    SaveStatementKind
+    | SaveLinkType
+    | SaveLinkTypeAlias
+    | DeleteStatementKind
+    | DeleteLinkType
+    | DeleteLinkTypeAlias,
+    Field(discriminator="action"),
+]
+#: The HTTP mirror and in-process callers pass `request` as a dict.
+_vocabulary_change: TypeAdapter[VocabularyChange] = TypeAdapter(VocabularyChange)
+
+
+@tool
+def edit_vocabulary(request: VocabularyChange) -> dict[str, Any] | DraftReceipt:
+    """Edit the glossary as the Glossary screen does: statement kinds, link
+    types, link-type aliases and entity link types.
+
+    `save_statement_kind` (kind, description, when_to_use),
+    `save_link_type` and `save_entity_link_type` (link_type, description)
+    and `save_link_type_alias` (link_type, alias, direction forward or
+    reverse) create or update an entry; `delete_statement_kind`,
+    `delete_link_type`, `delete_entity_link_type` and
+    `delete_link_type_alias` remove one, which needs an admin. Deleting an
+    entry leaves stored statements and links as they are. A drafter's edit
+    is queued on their draft for review, as their other writes are, and
+    answers with the draft receipt."""
+    request = _vocabulary_change.validate_python(request)
+    if isinstance(request, SaveStatementKind):
+        return upsert_statement_kind(
+            request.kind, request.description, request.when_to_use
+        )
+    if isinstance(request, SaveLinkType):
+        save = (
+            upsert_link_type
+            if request.action == "save_link_type"
+            else upsert_entity_link_type
+        )
+        return save(request.link_type, request.description)
+    if isinstance(request, SaveLinkTypeAlias):
+        return upsert_link_type_alias(
+            request.link_type, request.alias, direction=request.direction
+        )
+    if isinstance(request, DeleteStatementKind):
+        return delete_statement_kind(request.kind)
+    if isinstance(request, DeleteLinkType):
+        delete = (
+            delete_link_type
+            if request.action == "delete_link_type"
+            else delete_entity_link_type
+        )
+        return delete(request.link_type)
+    return delete_link_type_alias(request.link_type, request.alias)

@@ -4,11 +4,12 @@ delivering them to a destination.
 Reads are open to any authenticated caller; anything that starts a run or
 delivers needs a real writer. The shared conflict handler answers 409 for a stale
 `expected_revision` or edits on both sides, preserving the latter's response code.
+Each route calls the function the matching MCP tool calls (`server.documentation`
+and `server.documentation_work`).
 """
 
 from __future__ import annotations
 
-import difflib
 from collections.abc import Sequence
 from typing import Literal
 
@@ -17,16 +18,15 @@ from pydantic import BaseModel
 from pydantic import Field as PydField
 
 from .. import (
-    auth,
     document_maintenance,
     documentation_planning,
     media,
-    product_settings,
     server,
 )
 from ..docgen import publication
 from ..docgen.schema import ManualDocument
 from ..request_timing import TimedRoute
+from ..server import documentation_work as work
 from .access import _enforce_role, _require_principal
 
 router = APIRouter(route_class=TimedRoute)
@@ -42,32 +42,7 @@ class DocumentationRequestBody(BaseModel):
 
 @router.get("/api/documentation/options")
 def documentation_options(request: Request) -> dict[str, object]:
-    principal = _require_principal(request)
-    from .. import guidelines, prompt_store
-    from ..docgen.config import DocgenConfig
-
-    return {
-        **server.list_documentation_models(),
-        "can_generate": auth.principal_has_real_role(principal, "writer"),
-        "guideline_sets": guidelines.catalogue(prompt_store.connection()),
-        "profile_audiences": _profile_audiences(),
-        "max_prompt_chars": DocgenConfig.from_env().limits.max_prompt_chars,
-    }
-
-
-def _profile_audiences() -> dict[str, dict[str, str] | None]:
-    """Which audience each profile writes for, so the generate form can say."""
-    from .. import documentation_profiles
-
-    snapshot = documentation_profiles.capture()
-    return {
-        profile.name: (
-            {"id": audience.id, "name": audience.name, "scope": audience.scope}
-            if (audience := snapshot.audience(profile.name)) is not None
-            else None
-        )
-        for profile in snapshot.profiles
-    }
+    return work.documentation_options(_require_principal(request))
 
 
 @router.post("/api/documentation/runs")
@@ -128,37 +103,27 @@ def preview_document_edit(body: ManualDocument, request: Request) -> dict[str, o
 def edit_saved_document_http(
     document_id: str, body: SavedDocumentEditBody, request: Request
 ) -> dict[str, object]:
-    from .. import document_edits
-
     _enforce_role(request, "writer", real_role=True)
-    principal = _require_principal(request)
-    run_id = document_edits.start_document_edit(
-        server._drafts_db(),
+    return work.edit_saved(
         document_id,
         body.expected_revision,
         ManualDocument(title=body.title, body=body.body),
-        created_by=principal.id,
-        provider=body.provider,
+        body.provider,
+        _require_principal(request).id,
     )
-    return server.get_documentation_run(run_id)
 
 
 @router.post("/api/documentation/runs/{run_id}/edits")
 def edit_document_draft_http(
     run_id: str, body: DocumentEditBody, request: Request
 ) -> dict[str, object]:
-    from .. import document_edits
-
     _enforce_role(request, "writer", real_role=True)
-    principal = _require_principal(request)
-    new_run_id = document_edits.start_draft_edit(
-        server._drafts_db(),
+    return work.edit_draft(
         run_id,
         ManualDocument(title=body.title, body=body.body),
-        created_by=principal.id,
-        provider=body.provider,
+        body.provider,
+        _require_principal(request).id,
     )
-    return server.get_documentation_run(new_run_id)
 
 
 class DocumentRevisionBody(BaseModel):
@@ -254,58 +219,16 @@ def document_revision_http(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-_DIFF_OPS: dict[str, Literal["+", "-", " "]] = {"+": "+", "-": "-", " ": " "}
-
-
-class DiffLine(BaseModel):
-    #: "+" added, "-" removed, " " unchanged context, "@" a hunk header.
-    op: Literal["+", "-", " ", "@"]
-    text: str
-
-
-class RevisionDiff(BaseModel):
-    document_id: str
-    from_revision: int
-    to_revision: int
-    lines: list[DiffLine]
-
-
 @router.get("/api/documentation/documents/{document_id}/revisions/{revision}/diff")
 def document_revision_diff_http(
     document_id: str, revision: int, request: Request
-) -> RevisionDiff:
+) -> work.RevisionDiff:
     """A revision's body against the one it was revised from."""
-    from .. import docs_store
-
     _require_principal(request)
-    conn = server._drafts_db()
-    new = docs_store.get_revision(conn, document_id, revision)
-    if new is None:
-        raise HTTPException(status_code=404, detail="revision not found")
-    previous_revision = int(new["parent_revision"] or revision - 1)
-    old = docs_store.get_revision(conn, document_id, previous_revision)
-    if old is None:
-        raise HTTPException(status_code=404, detail="no earlier revision to compare")
-    diff = list(
-        difflib.unified_diff(
-            str(old["body"]).splitlines(),
-            str(new["body"]).splitlines(),
-            lineterm="",
-            n=2,
-        )
-    )[2:]  # the ---/+++ file headers
-    lines = [
-        DiffLine(op="@", text=line)
-        if line.startswith("@@")
-        else DiffLine(op=_DIFF_OPS[line[0]], text=line[1:])
-        for line in diff
-    ]
-    return RevisionDiff(
-        document_id=document_id,
-        from_revision=previous_revision,
-        to_revision=revision,
-        lines=lines,
-    )
+    try:
+        return work.revision_diff(document_id, revision)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/api/documentation/maintenance")
@@ -357,34 +280,14 @@ class PlanItemsBody(BaseModel):
     item_ids: list[str] = PydField(min_length=1)
 
 
-class ApprovedItem(BaseModel):
-    item_id: str
-    run: dict[str, object] | None = None
-    error: str | None = None
-
-
 @router.post("/api/documentation/plan-items/approve")
 def approve_plan_items_http(
     body: PlanItemsBody, request: Request
-) -> list[ApprovedItem]:
+) -> list[work.ApprovedItem]:
     """Approve several items; each starts its own run, and one that cannot
     start reports why without stopping the rest."""
     _enforce_role(request, "writer", real_role=True)
-    limit = product_settings.get(
-        product_settings.DocumentationPlanningSettings
-    ).approve_batch
-    if len(body.item_ids) > limit:
-        raise ValueError(f"Approve at most {limit} items at a time.")
-    principal = _require_principal(request)
-    results: list[ApprovedItem] = []
-    for item_id in dict.fromkeys(body.item_ids):
-        try:
-            run = documentation_planning.approve(item_id, decided_by=principal.id)
-        except (ValueError, LookupError) as exc:
-            results.append(ApprovedItem(item_id=item_id, error=str(exc)))
-        else:
-            results.append(ApprovedItem(item_id=item_id, run=run))
-    return results
+    return work.approve_items(body.item_ids, _require_principal(request).id)
 
 
 @router.post("/api/documentation/plan-items/{item_id}/retry")

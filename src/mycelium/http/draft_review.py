@@ -15,16 +15,10 @@ from .. import server
 from ..draft_review_runs import BacklogJob
 from ..draft_review_store import Correction
 from ..request_timing import TimedRoute
+from ..server.drafts import ReviewBacklog, review_backlog
 from .access import _enforce_curator, _require_admin
 
 router = APIRouter(route_class=TimedRoute)
-
-
-class Backlog(BaseModel):
-    draft_ids: list[str]
-    #: Reviews are queued for an external agent instead of run here.
-    external_agent: bool
-    job: BacklogJob | None
 
 
 class BacklogJobBody(BaseModel):
@@ -32,23 +26,15 @@ class BacklogJobBody(BaseModel):
 
 
 @router.get("/api/draft-review/backlog")
-def draft_review_backlog(request: Request) -> Backlog:
+def draft_review_backlog(request: Request) -> ReviewBacklog:
     """Submitted drafts the current review configuration has not reached,
     oldest first, to offer reviewing them once when review is switched on,
     with the backlog review this process last started."""
-    from .. import draft_review_runs
-
     _require_admin(request)
     try:
-        draft_ids = draft_review_runs.backlog()
-        external = review_settings.load().external_agent
+        return review_backlog()
     except review_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
-    return Backlog(
-        draft_ids=draft_ids,
-        external_agent=external,
-        job=draft_review_runs.backlog_job(),
-    )
 
 
 @router.post("/api/draft-review/backlog")

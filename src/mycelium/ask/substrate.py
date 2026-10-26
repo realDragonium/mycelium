@@ -63,6 +63,14 @@ _NON_READ_READER_TOOLS = frozenset(
         "get_prompt_text",  # prompt configuration
         "list_writing_profiles",  # documentation configuration
         "get_writing_profile",  # documentation configuration
+        "list_documentation",  # documentation workspace state
+        "get_document_history",  # generated document history
+        "get_knowledge_health",  # curation state
+        "list_knowledge_gaps",  # curation state
+        "get_history",  # the instance's change log
+        "get_names_workspace",  # curation state
+        "get_audiences",  # audience configuration and labels
+        "get_settings",  # instance configuration
         # Ignores audience labels; a documentation run is offered its
         # audience's media by its harness.
         "list_media",

@@ -29,6 +29,7 @@ _DESCRIPTION_LIMIT = 1536
 _FIELDS = {
     "connect_error",
     "read_tools",
+    "retry_of",
     "review_assessment",
     "review_evidence",
     "review_notes",

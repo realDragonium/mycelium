@@ -5,7 +5,8 @@ string, so the server needs no multipart parser; the body is read up to the
 configured cap and no further. Changing media needs a real writer, as a
 curator's audience label does; deleting it needs an admin. The bytes are
 served only as one of the sniffed media types, sandboxed and never sniffed
-by the browser.
+by the browser. Agents reach the same `mycelium.media` functions through
+`list_media`, `create_media_upload` and `edit_media`.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import media, media_formats
 from ..media_store import TargetKind
 from ..request_timing import TimedRoute
+from ..server import media as media_tools
 from .access import _enforce_role, _require_admin, _require_principal
 
 router = APIRouter(route_class=TimedRoute)
@@ -130,9 +132,7 @@ def update_media_http(
     media_id: str, body: media.Details, request: Request
 ) -> media.MediaView:
     _enforce_role(request, "writer", real_role=True)
-    if not body.alt_text:
-        raise ValueError("Say what the media shows in the alt text.")
-    return media.update(media_id, body, actor=_actor(request))
+    return media_tools.update_details(media_id, body, _actor(request))
 
 
 @router.put("/api/media/{media_id}/content")

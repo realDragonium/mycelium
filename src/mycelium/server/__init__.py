@@ -17,6 +17,7 @@ from .agent_tasks import (
     release_agent_task,
     submit_agent_task,
 )
+from .audience_tools import curate_audiences, get_audiences, manage_audiences
 from .authoring import (
     delete_statement,
     merge_statements,
@@ -41,6 +42,13 @@ from .documentation import (
     request_documentation_plan,
     retry_documentation_run,
     revise_document,
+)
+from .documentation_work import (
+    decide_documentation_plan,
+    edit_document,
+    get_document_history,
+    list_documentation,
+    retry_documentation,
 )
 from .draft_application import (
     DraftOpsRejectedError,
@@ -71,12 +79,14 @@ from .drafts import (
     get_draft_review_run,
     list_drafts,
     list_my_drafts,
+    manage_draft_review_backlog,
     request_draft_review,
     revise_draft_operation,
     set_draft_review_evidence,
     set_operation_evidence,
     strike_draft_operation,
     submit_draft,
+    withdraw_draft,
 )
 from .entities import (
     add_entity_links,
@@ -88,10 +98,12 @@ from .entities import (
     search_entities,
     upsert_entity,
 )
-from .gaps import report_knowledge_gap
+from .gaps import list_knowledge_gaps, report_knowledge_gap, update_knowledge_gap
+from .health import get_knowledge_health, unblock_automation
+from .history import get_history
 from .links import add_links, remove_links
 from .lookups import get_statements, grep_statements, list_statements, retrieve_context
-from .media import create_media_upload, list_media
+from .media import create_media_upload, edit_media, list_media
 from .model_loops import ask, connect_statements, ingest
 from .names import (
     delete_name,
@@ -101,6 +113,7 @@ from .names import (
     rename_name,
     upsert_name,
 )
+from .names_workspace import edit_names, get_names_workspace
 from .prompt_texts import (
     get_prompt_text,
     list_prompt_texts,
@@ -115,6 +128,7 @@ from .search import (
     find_statement_connections,
     search_statements,
 )
+from .settings import edit_prompt_text, get_settings
 from .specs import (
     BatchStatementSpec,
     EdgeSpec,
@@ -130,6 +144,7 @@ from .vocabulary import (
     delete_link_type,
     delete_link_type_alias,
     delete_statement_kind,
+    edit_vocabulary,
     list_entity_link_types,
     list_link_type_aliases,
     list_link_types,
@@ -177,6 +192,11 @@ __all__ = [
     "get_generated_document",
     "deliver_document",
     "list_documentation_destinations",
+    "list_documentation",
+    "get_document_history",
+    "edit_document",
+    "retry_documentation",
+    "decide_documentation_plan",
     "upsert_entity",
     "upsert_statement",
     "upsert_statements",
@@ -215,8 +235,19 @@ __all__ = [
     "list_link_type_aliases",
     "upsert_entity_link_type",
     "delete_entity_link_type",
+    "edit_vocabulary",
     "grep_statements",
     "report_knowledge_gap",
+    "list_knowledge_gaps",
+    "update_knowledge_gap",
+    "get_knowledge_health",
+    "unblock_automation",
+    "get_history",
+    "get_names_workspace",
+    "edit_names",
+    "get_audiences",
+    "manage_audiences",
+    "curate_audiences",
     "get_prompt_text",
     "list_prompt_texts",
     "retire_prompt_text",
@@ -225,6 +256,8 @@ __all__ = [
     "save_writing_profile",
     "retire_writing_profile",
     "restore_writing_profile",
+    "get_settings",
+    "edit_prompt_text",
     "submit_draft",
     "request_draft_review",
     "get_draft_review_run",
@@ -232,6 +265,7 @@ __all__ = [
     "set_operation_evidence",
     "list_media",
     "create_media_upload",
+    "edit_media",
     "list_my_drafts",
     "list_drafts",
     "review_draft",
@@ -242,6 +276,8 @@ __all__ = [
     "revise_draft_operation",
     "strike_draft_operation",
     "discard_draft_op",
+    "withdraw_draft",
+    "manage_draft_review_backlog",
     "inspect_draft_review",
     "append_draft_correction",
     "record_draft_review",
