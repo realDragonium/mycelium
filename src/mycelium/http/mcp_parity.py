@@ -192,6 +192,9 @@ ROUTES: dict[tuple[str, str], Parity] = {
     # --- media ---------------------------------------------------------------
     ("GET", "/api/media"): Tool("list_media"),
     ("GET", "/api/media/{media_id}"): Tool("list_media"),
+    # A drafter may also make an upload link, to cite the media as draft
+    # evidence; the item stays unattached and internal until a real writer
+    # attaches or labels it with `edit_media`.
     ("POST", "/api/media"): Tool("create_media_upload"),
     ("POST", "/api/media/uploads/{token}"): Tool("create_media_upload"),
     ("PATCH", "/api/media/{media_id}"): Tool("edit_media"),
@@ -241,6 +244,8 @@ ROUTES: dict[tuple[str, str], Parity] = {
     ("POST", "/api/documentation/documents/{document_id}/revisions"): Tool(
         "revise_document"
     ),
+    # Agents deliver only for a writing profile that lets them: publishing
+    # outside the instance stays a person's call until a writer hands it over.
     ("POST", "/api/documentation/documents/{document_id}/delivery"): Tool(
         "deliver_document"
     ),
@@ -269,7 +274,9 @@ ROUTES: dict[tuple[str, str], Parity] = {
         Tool("decide_documentation_plan")
     ),
     # --- drafts and their review ---------------------------------------------
-    ("GET", "/api/drafts"): Tool("list_drafts"),
+    # `list_drafts` is for real writers, while the route lists every draft to
+    # any caller; its filters and roles are that branch's.
+    ("GET", "/api/drafts"): Elsewhere(_DRAFT_DECISIONS, "list_drafts filters"),
     ("GET", "/api/drafts/{draft_id}"): Tool("get_draft"),
     ("PATCH", "/api/drafts/{draft_id}/ops/{seq}"): Elsewhere(
         _DRAFT_DECISIONS, "editing a submitted draft's operations"
@@ -288,9 +295,7 @@ ROUTES: dict[tuple[str, str], Parity] = {
     ),
     ("POST", "/api/drafts/{draft_id}/withdraw"): Tool("withdraw_draft"),
     ("POST", "/api/drafts/{draft_id}/review"): Tool("request_draft_review"),
-    # An agent answers the reviewer through the curation queue, which asks it
-    # for the evidence it checked; both call `draft_review_runs.answer`.
-    ("POST", "/api/drafts/{draft_id}/review/answer"): Tool("release_curation_work"),
+    ("POST", "/api/drafts/{draft_id}/review/answer"): Tool("answer_draft_review"),
     ("POST", "/api/drafts/{draft_id}/review/accept"): Elsewhere(
         _DRAFT_DECISIONS, "review_draft: approve with corrections"
     ),

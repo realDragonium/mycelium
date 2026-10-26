@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from .. import server
+from .. import server, store
 from ..request_timing import TimedRoute
 from ..server.gaps import is_gap_action, is_gap_status
 from .access import _enforce_curator, _require_principal
@@ -49,6 +49,8 @@ def update_knowledge_gap(
     gap_id: str, body: GapUpdateBody, request: Request
 ) -> dict[str, Any]:
     _enforce_curator(request, "changing a knowledge gap's status")
+    if store.get_knowledge_gap(store.substrate_connection(), gap_id) is None:
+        raise HTTPException(status_code=404, detail="gap not found")
     if not is_gap_action(body.action):
         raise HTTPException(
             status_code=400,

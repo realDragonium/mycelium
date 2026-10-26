@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 81 of its 114 registered tools over MCP. Every
+question. Mycelium therefore advertises 82 of its 115 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -13,15 +13,16 @@ that set, and the registered tools in agreement.
 Role filtering still applies: `tools/list` shows a caller only the tools their role
 can invoke. The minimum role is reader: a reader sees 33 tools. A drafter sees 57
 because their writes are queued on a draft, but they do not see the tools that
-land live and so need a real writer: `list_drafts`, `request_draft_review`, the
+land live and so need a real writer: `list_drafts`, `request_draft_review`,
+`answer_draft_review`, the
 documentation tools that start runs, edit, retry, plan, decide or deliver,
 `save_writing_profile`, `edit_prompt_text`, `edit_names`, `edit_media`,
 `curate_audiences`, `update_knowledge_gap`, the admin tools below, or the tools
-that claim and do agent tasks. A writer sees 73 and does not see the admin-only
+that claim and do agent tasks. A writer sees 74 and does not see the admin-only
 `delete_statement`, `merge_statements`, `merge_entities`,
 `retire_writing_profile`, `restore_writing_profile`, `manage_audiences`,
 `manage_draft_review_backlog` or `unblock_automation`. An admin sees all
-81. While Ask is set to External agent, `ask` is listed to no one, so each
+82. While Ask is set to External agent, `ask` is listed to no one, so each
 count is one lower.
 
 A grouped tool can hold an action a stricter role takes: `edit_names` merges
@@ -96,6 +97,7 @@ records stay off MCP: they run in-process.
 | `reopen_draft` | Returns a rejected draft, the automatic reviewer's rejections included, to submitted so it can be decided again. Without it a wrong rejection is final. Real writers and admins only. |
 | `set_draft_review_evidence` | Lets the draft creator give the reviewer evidence that only the creator has. |
 | `withdraw_draft` | Withdraws an open or submitted draft, as its creator or a real writer may on the Drafts screen. |
+| `answer_draft_review` | Answers the internal reviewer's questions on a draft, as a curator does in the draft view, and has it reviewed again. Real writers and admins only; an agent answering with code evidence uses the curation queue's `question` items. |
 | `request_draft_review` | Runs the internal reviewer on a draft again, as **Review again** does. Real writers and admins only. |
 | `manage_draft_review_backlog` | Lists, starts, pauses or resumes the review of submitted drafts the reviewer has not reached. Real admins only. |
 | `set_operation_evidence` | Lets the draft creator back one operation with what they checked in the product: code, UI or doc location, an excerpt and the claim it shows. The reviewer accepts a link a concrete code excerpt supports, and judges one without evidence more strictly. |

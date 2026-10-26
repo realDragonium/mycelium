@@ -87,7 +87,7 @@ Statements are typed claims. Their `kind` describes the shape of the claim,
 such as `event`, `state`, or `capability`. Entity mentions are derived from
 names found in statement text. Statement links use `to_id` and `from_id`.
 
-MCP advertises 81 tools: every action a person can take on the knowledge base
+MCP advertises 82 tools: every action a person can take on the knowledge base
 in the web app is also an MCP tool. Every registered tool also has an HTTP
 route. See [the MCP tool manifest](docs/MCP_TOOLS.md) for which tools are
 advertised over MCP and why.

@@ -72,6 +72,7 @@ from .draft_review import (
     record_draft_review,
 )
 from .drafts import (
+    answer_draft_review,
     attach_draft_source,
     discard_draft_op,
     find_my_draft_by_source,
@@ -277,6 +278,7 @@ __all__ = [
     "strike_draft_operation",
     "discard_draft_op",
     "withdraw_draft",
+    "answer_draft_review",
     "manage_draft_review_backlog",
     "inspect_draft_review",
     "append_draft_correction",

@@ -224,6 +224,7 @@ MCP_TOOLS = frozenset(
         "set_operation_evidence",
         "withdraw_draft",
         "request_draft_review",
+        "answer_draft_review",
         "manage_draft_review_backlog",
         # Knowledge health and gaps
         "get_knowledge_health",

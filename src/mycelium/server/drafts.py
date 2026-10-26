@@ -76,12 +76,12 @@ def submit(draft_id: str, principal: AuthPrincipal | None) -> None:
     row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
         raise LookupError(f"draft '{draft_id}' not found")
+    _require_draft_owner(principal, row)
     if drafts_store.status_for(row) != "open":
         raise ValueError(
             f"draft '{draft_id}' is {drafts_store.status_for(row)}; "
             f"only open drafts can be submitted"
         )
-    _require_draft_owner(principal, row)
     _submit_for_review(draft_id)
 
 
@@ -514,6 +514,37 @@ def withdraw(draft_id: str, principal: AuthPrincipal | None) -> None:
             decision="withdrawn",
             by=principal.id if principal is not None else _auth.LOCAL_ADMIN_ID,
         )
+
+
+def answer_review(
+    draft_id: str, run_id: str, answer: str, principal: AuthPrincipal
+) -> dict[str, JsonValue]:
+    from pydantic import ValidationError
+
+    from .. import draft_review_runs
+
+    try:
+        run = draft_review_runs.answer(draft_id, run_id, answer, principal)
+    except ValidationError as exc:
+        raise ValueError("answer must be 1 to 6000 characters") from exc
+    return run.model_dump(mode="json")
+
+
+@tool(role="writer", real_role=True)
+def answer_draft_review(
+    draft_id: str, run_id: str, answer: str
+) -> dict[str, JsonValue]:
+    """Answer the internal reviewer's questions on a draft, as a curator does
+    in the draft view; the draft is reviewed again with the answer. `run_id`
+    is the review run that asked (`review_assessment` in `get_draft`). Real
+    writers and admins only. An agent answering from the product's code
+    with evidence uses the curation queue's `question` items instead.
+    Returns the new review run."""
+    from .. import auth as _auth
+
+    return answer_review(
+        draft_id, run_id, answer, _auth.current_principal.get() or _auth.LOCAL_ADMIN
+    )
 
 
 class ReviewBacklog(BaseModel):

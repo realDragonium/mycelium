@@ -15,7 +15,7 @@ from .. import server
 from ..draft_review_runs import BacklogJob
 from ..draft_review_store import Correction
 from ..request_timing import TimedRoute
-from ..server.drafts import ReviewBacklog, review_backlog
+from ..server.drafts import ReviewBacklog, answer_review, review_backlog
 from .access import _enforce_curator, _require_admin
 
 router = APIRouter(route_class=TimedRoute)
@@ -87,16 +87,8 @@ def answer_draft_review_http(
     draft_id: str, body: DraftReviewAnswerBody, request: Request
 ) -> dict[str, dict[str, JsonValue]]:
     """Answer the internal reviewer's questions; the draft is reviewed again."""
-    from pydantic import ValidationError
-
-    from .. import draft_review_runs
-
     principal = _enforce_curator(request, action="answering the internal reviewer")
-    try:
-        run = draft_review_runs.answer(draft_id, body.run_id, body.answer, principal)
-    except ValidationError as exc:
-        raise ValueError("answer must be 1 to 6000 characters") from exc
-    return {"review": run.model_dump(mode="json")}
+    return {"review": answer_review(draft_id, body.run_id, body.answer, principal)}
 
 
 class DraftReviewAcceptBody(BaseModel):
