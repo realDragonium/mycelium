@@ -132,6 +132,31 @@ def test_upgrade_updates_untouched_doctrines_and_reports_edited_ones(
     runtime._ctx = None
 
 
+def test_an_instance_that_served_a_retired_default_keeps_it(tmp_path, monkeypatch):
+    from mycelium import audience_labelling
+
+    previous = audience_labelling.PREVIOUS_DEFAULT_INSTRUCTIONS
+    monkeypatch.setattr(embed, "embed", instance_scenario.embed)
+    monkeypatch.setenv("MYCELIUM_AUTH", "off")
+    fresh, served = tmp_path / "fresh", tmp_path / "served"
+    served.mkdir()
+    with closing(prompt_store.connect(served / "mycelium-prompts.db")) as conn:
+        prompt_store.migrate(conn)
+        conn.execute(
+            "INSERT INTO shipped_prompt_texts VALUES (?, ?, ?, ?)",
+            ("doctrine", "audience_labelling", digest(previous), NOW),
+        )
+
+    for data_dir in (fresh, served, served):
+        runtime._ctx = None
+        server.init(data_dir)
+
+    assert _versions(fresh, "audience_labelling") == []
+    assert ai_prompts.resolve("audience_labelling").text == previous
+    assert _versions(served, "audience_labelling") == [(previous, "upgrade")]
+    runtime._ctx = None
+
+
 def test_editor_works_when_the_configured_doctrine_file_is_missing(
     tmp_path, monkeypatch
 ):

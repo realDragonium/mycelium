@@ -110,12 +110,17 @@ def _select_agent(http, admin, action: str, **extra) -> None:
 
 def _external_documentation(http, admin, monkeypatch, *, review="server"):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
-    prompt_store.save(
-        prompt_store.connection(),
-        type="guideline-set",
-        name="kb-authoring/audience",
-        text="external-technical",
-    )
+    for slot, text in (
+        ("guidance", "Write for integrators."),
+        ("how-to", "# {Task}\n\n1. {Step}\n"),
+        ("audience", "external-technical"),
+    ):
+        prompt_store.save(
+            prompt_store.connection(),
+            type="guideline-set",
+            name=f"kb-authoring/{slot}",
+            text=text,
+        )
     _select_agent(http, admin, "docgen", agent_review=review)
 
 
@@ -173,6 +178,12 @@ def test_an_external_agent_writes_inside_the_audience_and_its_gates(
     [task] = _call(client, writer, "claim_agent_task", kind="documentation")["tasks"]
     assert task["subject_id"] == run["id"]
     assert task["brief"]["audience"]["id"] == "external-technical"
+    profile = task["brief"]["profile"]
+    assert profile["name"] == "kb-authoring"
+    assert profile["guidance"] == "Write for integrators."
+    assert [t["name"] for t in profile["templates"]] == ["how-to"]
+    assert profile["audience"]["description"].startswith("Developers")
+    assert profile["maintenance"] == "manual"
     assert SECRET not in str(task["brief"])
 
     read = _call(
@@ -242,6 +253,8 @@ def test_an_agent_review_is_never_the_writer_and_its_refusal_returns_findings(
     [review] = _call(client, reviewer, "claim_agent_task", kind="document_review")[
         "tasks"
     ]
+    assert review["brief"]["profile"]["guidance"] == "Write for integrators."
+    assert review["brief"]["profile"]["audience"]["id"] == "external-technical"
     failing = {
         "exposure": {"status": "pass", "findings": []},
         "conformance": {

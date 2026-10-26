@@ -138,6 +138,13 @@ from .vocabulary import (
     upsert_link_type_alias,
     upsert_statement_kind,
 )
+from .writing_profiles import (
+    get_writing_profile,
+    list_writing_profiles,
+    restore_writing_profile,
+    retire_writing_profile,
+    save_writing_profile,
+)
 
 #: The public names, tools first: their order here is the order `publish` gives
 #: `TOOLS`, and so the order of every surface built from it.
@@ -212,6 +219,11 @@ __all__ = [
     "get_prompt_text",
     "list_prompt_texts",
     "retire_prompt_text",
+    "list_writing_profiles",
+    "get_writing_profile",
+    "save_writing_profile",
+    "retire_writing_profile",
+    "restore_writing_profile",
     "submit_draft",
     "request_draft_review",
     "get_draft_review_run",

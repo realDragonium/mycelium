@@ -87,7 +87,13 @@ needs a documentation model. Asking for a run with an explicit `provider`
    - `read_tools`: the reads it could make (documentation, ingest and
      connect);
    - `result` and `result_schema`: what to submit;
-   - for documentation, the `guideline_set`, `document_type` and `audience`.
+   - for documentation, the `guideline_set`, `document_type` and `audience`;
+   - for documentation, document review, documentation planning and plan
+     review, `profile`: the whole writing profile the task is for (name,
+     audience with its description, guidance, disclosure rules, the chosen
+     template or every template for planning, policies and destinations),
+     as `get_writing_profile` would return it. The skills tell the agent to
+     follow it and carry no writing advice of their own.
 
    `findings` hold why the last submission was refused.
 2. **Read** (documentation, ingest and connect). `read_for_agent_task(task_id,

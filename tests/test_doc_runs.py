@@ -1106,28 +1106,6 @@ def test_named_set_and_type_must_exist(_stores):
     assert row["document_type"] == "reference"
 
 
-def test_the_shipped_set_validates_as_the_convention_says(_stores):
-    """Against the rows startup actually seeds, not hand-written stand-ins:
-    the `<set>/<slot>` parse here has to agree with the names in
-    `guidelines.SOURCES`, or the one set that ships would be unrequestable."""
-    from mycelium import guidelines
-
-    _, prompts_conn = _stores
-    for name, text in guidelines.read_rows().items():
-        prompt_store.save(prompts_conn, type=guidelines.TYPE, name=name, text=text)
-    doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: _document()
-
-    row = server.request_documentation(
-        "p", guideline_set=guidelines.SET_NAME, document_type="how-to"
-    )
-    assert row["guideline_set"] == "kb-authoring"
-
-    with pytest.raises(ValueError, match="no template for document type"):
-        server.request_documentation(
-            "p", guideline_set=guidelines.SET_NAME, document_type="guidance"
-        )
-
-
 def test_a_document_type_without_a_set_is_left_to_the_run(_stores):
     """Nothing to check it against until a set is chosen, and refusing on a
     guess would be worse than letting the run resolve both."""

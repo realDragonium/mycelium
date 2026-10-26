@@ -40,6 +40,11 @@ Delivery = Literal["people", "agents", "auto"]
 Recovery = Literal["person", "ai"]
 
 
+#: The text of the tombstones a profile retirement writes, which is how
+#: `restore` tells them from slots removed earlier.
+RETIRED_WITH_PROFILE = "retired with the profile"
+
+
 class Conflict(errors.Conflict):
     pass
 
@@ -67,8 +72,8 @@ class Template(Model):
         if value in guidelines.NON_TYPE_SLOTS:
             raise ValueError(
                 "guidance, exposure, audience, maintenance, planning, "
-                "plan_review, delivery, delivery_destination and recovery are "
-                "reserved names."
+                "plan_review, delivery, delivery_destination, recovery and "
+                "destinations are reserved names."
             )
         return value
 
@@ -94,6 +99,9 @@ class ProfileBody(Model):
     #: to; blank delivers only documents published before.
     delivery_destination: str = Field(default="", max_length=200)
     recovery: Recovery = "person"
+    #: The destinations the profile's documents may be published to; empty
+    #: allows every configured destination.
+    destinations: tuple[str, ...] = ()
     templates: tuple[Template, ...] = ()
 
     @model_validator(mode="after")
@@ -101,6 +109,15 @@ class ProfileBody(Model):
         if len({item.name for item in self.templates}) != len(self.templates):
             raise ValueError("Template names must be unique.")
         return self
+
+    @field_validator("destinations")
+    @classmethod
+    def valid_destinations(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value) or any(
+            not item.strip() or item != item.strip() or "\n" in item for item in value
+        ):
+            raise ValueError("Destination names must be unique and nonblank.")
+        return value
 
 
 class SaveProfile(ProfileBody):
@@ -187,6 +204,10 @@ class ProfileSnapshot:
     delivery: Delivery = "people"
     delivery_destination: str = ""
     recovery: Recovery = "person"
+    destinations: tuple[str, ...] = ()
+
+    def may_publish_to(self, destination: str) -> bool:
+        return not self.destinations or destination in self.destinations
 
 
 @dataclass(frozen=True)
@@ -289,6 +310,7 @@ def capture(conn: sqlite3.Connection | None = None) -> CatalogueSnapshot:
                 delivery(slots.get(guidelines.DELIVERY_SLOT)),
                 _text(slots.get(guidelines.DELIVERY_DESTINATION_SLOT)),
                 recovery(slots.get(guidelines.RECOVERY_SLOT)),
+                destinations(slots.get(guidelines.DESTINATIONS_SLOT)),
             )
             for name, slots in sorted(grouped.items())
         ),
@@ -325,6 +347,12 @@ def recovery(slot: PromptRevision | str | None) -> Recovery:
     """The stored policy; an unknown text leaves failed work to a person."""
     text = _text(slot)
     return cast(Recovery, text) if text in get_args(Recovery) else "person"
+
+
+def destinations(slot: PromptRevision | str | None) -> tuple[str, ...]:
+    """The stored destination names, one per line."""
+    text = slot.text if isinstance(slot, PromptRevision) else slot or ""
+    return tuple(line.strip() for line in text.splitlines() if line.strip())
 
 
 def _text(slot: PromptRevision | str | None) -> str:
@@ -403,6 +431,7 @@ def _profile(
         delivery=delivery(live.get(guidelines.DELIVERY_SLOT)),
         delivery_destination=_text(live.get(guidelines.DELIVERY_DESTINATION_SLOT)),
         recovery=recovery(live.get(guidelines.RECOVERY_SLOT)),
+        destinations=destinations(live.get(guidelines.DESTINATIONS_SLOT)),
         effective_audience=effective.id if effective else None,
         templates=tuple(templates),
         retired=bool(rows) and not live,
@@ -426,6 +455,74 @@ def read(name: str, conn: sqlite3.Connection | None = None) -> Profile:
         name,
         [row for row in _rows(db) if str(row["name"]).partition("/")[0] == name],
         audiences.live(db),
+    )
+
+
+class AudienceBrief(Model):
+    id: str
+    name: str
+    scope: audiences.Scope
+    description: str
+
+
+class ProfileBrief(Model):
+    """A profile as an agent working one of its documentation tasks reads it."""
+
+    name: str
+    revision: str
+    #: The audience the profile writes for; None when it was retired.
+    audience: AudienceBrief | None
+    guidance: str
+    exposure: str
+    templates: tuple[Template, ...]
+    maintenance: Maintenance
+    planning: Planning
+    plan_review: PlanReview
+    delivery: Delivery
+    delivery_destination: str
+    recovery: Recovery
+    destinations: tuple[str, ...]
+
+
+def audience_brief(audience: Audience | None) -> AudienceBrief | None:
+    if audience is None:
+        return None
+    return AudienceBrief(
+        id=audience.id,
+        name=audience.name,
+        scope=audience.scope,
+        description=audience.description,
+    )
+
+
+def brief(
+    name: str, document_type: str | None = None, conn: sqlite3.Connection | None = None
+) -> ProfileBrief:
+    """The profile, with only `document_type`'s template when one is named."""
+    db = conn if conn is not None else prompt_store.connection()
+    profile = read(name, db)
+    audience = next(
+        (item for item in audiences.live(db) if item.id == profile.effective_audience),
+        None,
+    )
+    return ProfileBrief(
+        name=profile.name,
+        revision=profile.revision,
+        audience=audience_brief(audience),
+        guidance=profile.guidance,
+        exposure=profile.exposure,
+        templates=tuple(
+            item
+            for item in profile.templates
+            if document_type is None or item.name == document_type
+        ),
+        maintenance=profile.maintenance,
+        planning=profile.planning,
+        plan_review=profile.plan_review,
+        delivery=profile.delivery,
+        delivery_destination=profile.delivery_destination,
+        recovery=profile.recovery,
+        destinations=profile.destinations,
     )
 
 
@@ -484,7 +581,7 @@ def _protect_default(
         )
 
 
-def _check_destination(name: str) -> None:
+def _check_destination(name: str, allowed: tuple[str, ...]) -> None:
     if not name:
         return
     from . import product_settings
@@ -492,11 +589,14 @@ def _check_destination(name: str) -> None:
     configured = product_settings.get(product_settings.DocumentationSettings)
     if name not in {item.name for item in configured.destinations}:
         raise ValueError(f"Destination {name!r} is not configured.")
+    if allowed and name not in allowed:
+        raise ValueError(
+            f"Destination {name!r} is not one this profile may publish to."
+        )
 
 
-def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
-    _authorize(principal)
-    _part(name)
+def _texts(request: SaveProfile) -> dict[str, str]:
+    """The slots a save stores, before its policy slots."""
     desired = {item.name: item.text for item in request.templates}
     if request.guidance.strip():
         desired["guidance"] = request.guidance
@@ -504,11 +604,20 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
         desired["exposure"] = request.exposure
     if request.audience is not None:
         desired[guidelines.AUDIENCE_SLOT] = request.audience
+    if request.destinations:
+        desired[guidelines.DESTINATIONS_SLOT] = "\n".join(request.destinations)
+    return desired
+
+
+def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
+    _authorize(principal)
+    _part(name)
+    desired = _texts(request)
     if not desired:
         raise ValueError(
             "Add guidance or a template to create a profile; use Retire to remove one."
         )
-    _check_destination(request.delivery_destination.strip())
+    _check_destination(request.delivery_destination.strip(), request.destinations)
     conn = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(conn):
         rows = [
@@ -525,10 +634,12 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
             item.id for item in audiences.live(conn)
         }:
             raise ValueError(f"Audience {request.audience!r} is not live.")
-        if live and live.get(guidelines.AUDIENCE_SLOT) != desired.get(
-            guidelines.AUDIENCE_SLOT
+        if live and any(
+            live.get(slot) != desired.get(slot)
+            for slot in (guidelines.AUDIENCE_SLOT, guidelines.DESTINATIONS_SLOT)
         ):
-            # The audience decides what a profile's documents may disclose.
+            # The audience decides what a profile's documents may disclose,
+            # and the destinations who gets to read them.
             _authorize(principal, "admin")
         # Going back to manual rewrites the slot rather than retiring it, so
         # it needs no more than the writer who turned automation on.
@@ -588,11 +699,50 @@ def retire(name: str, revision: str, principal: auth.Principal) -> Profile:
                     conn,
                     type=guidelines.TYPE,
                     name=row["name"],
-                    text="",
+                    text=RETIRED_WITH_PROFILE,
                     deleted=1,
                     created_by=_actor(principal),
                 )
         return read(name, conn)
+
+
+def restore(name: str, revision: str, principal: auth.Principal) -> Profile:
+    """Bring a retired profile back with the texts it held when it was
+    retired; slots removed before then stay removed."""
+    _authorize(principal, "admin")
+    _part(name)
+    conn = prompt_store.connection()
+    with store.write_lock(), prompt_store._writing(conn):
+        current = read(name, conn)
+        if current.revision != revision:
+            raise Conflict("This profile changed. Reload before restoring.")
+        if not current.retired:
+            raise ValueError(f"Profile '{name}' is not retired.")
+        slots: dict[str, list[sqlite3.Row]] = {}
+        for row in conn.execute(
+            "SELECT * FROM prompt_texts WHERE type = ? AND substr(name, 1, ?) = ? "
+            "ORDER BY version DESC",
+            (guidelines.TYPE, len(name) + 1, f"{name}/"),
+        ):
+            slots.setdefault(str(row["name"]), []).append(row)
+        for slot, history in sorted(slots.items()):
+            # Newest first: the retirement's tombstone, then the text it retired.
+            if history[0]["text"] == RETIRED_WITH_PROFILE and len(history) > 1:
+                prompt_store._append(
+                    conn,
+                    type=guidelines.TYPE,
+                    name=slot,
+                    text=str(history[1]["text"]),
+                    deleted=0,
+                    created_by=_actor(principal),
+                )
+        restored = read(name, conn)
+        if restored.retired:
+            raise ValueError(
+                f"Profile '{name}' was retired before it could be restored as a "
+                "whole; restore its texts from their history."
+            )
+        return restored
 
 
 def validate_key(type: str, name: str) -> tuple[str, str]:
@@ -606,7 +756,8 @@ def validate_key(type: str, name: str) -> tuple[str, str]:
                 "Guideline names must use profile/template, profile/guidance, "
                 "profile/exposure, profile/audience, profile/maintenance, "
                 "profile/planning, profile/plan_review, profile/delivery, "
-                "profile/delivery_destination or profile/recovery."
+                "profile/delivery_destination, profile/recovery or "
+                "profile/destinations."
             )
         _part(profile)
         _part(slot)
@@ -638,8 +789,9 @@ def save_text(
     type, name = validate_key(type, name)
     if not text.strip():
         raise ValueError("Text is required.")
-    if _is_audience_slot(type, name):
+    if _is_admin_slot(type, name):
         _authorize(principal, "admin")
+    if _is_audience_slot(type, name):
         if text.strip() not in {item.id for item in audiences.live()}:
             raise ValueError(f"Audience {text.strip()!r} is not live.")
     policy = _POLICIES.get(name.partition("/")[2]) if type == guidelines.TYPE else None
@@ -724,26 +876,15 @@ def _is_audience_slot(type: str, name: str) -> bool:
     )
 
 
+def _is_admin_slot(type: str, name: str) -> bool:
+    return type == guidelines.TYPE and name.partition("/")[2] in {
+        guidelines.AUDIENCE_SLOT,
+        guidelines.DESTINATIONS_SLOT,
+    }
+
+
 def editable_key(type: str, name: str) -> None:
     if type != guidelines.TYPE and (type != "doctrine" or name not in INSTRUCTIONS):
         raise ValueError(
             "This editor supports documentation profiles and the existing loop instructions."
         )
-
-
-def seed_starters(conn: sqlite3.Connection) -> None:
-    """Bootstrap one user-owned starter set; history, even retired, takes precedence."""
-    with store.write_lock(), prompt_store._writing(conn):
-        if conn.execute(
-            "SELECT 1 FROM prompt_texts WHERE type = ? LIMIT 1", (guidelines.TYPE,)
-        ).fetchone():
-            return
-        for name, text in guidelines.read_rows().items():
-            prompt_store._append(
-                conn,
-                type=guidelines.TYPE,
-                name=name,
-                text=text,
-                deleted=0,
-                created_by="seed",
-            )

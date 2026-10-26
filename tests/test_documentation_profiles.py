@@ -156,16 +156,6 @@ def test_staged_prompt_saves_remain_compatible_and_invalidate_editor(db):
         save(revision=incomplete.revision)
 
 
-def test_starter_seeding_respects_any_history_including_retirement(db):
-    profiles.seed_starters(db)
-    for row in prompt_store.list_current(db, guidelines.TYPE):
-        prompt_store.delete(db, type=guidelines.TYPE, name=row["name"])
-    count = db.execute("SELECT COUNT(*) FROM prompt_texts").fetchone()[0]
-    profiles.seed_starters(db)
-    assert db.execute("SELECT COUNT(*) FROM prompt_texts").fetchone()[0] == count
-    assert profiles.capture(db).catalogue() == {}
-
-
 def test_profile_and_prompt_routes_share_versions_and_validation(tmp_path, monkeypatch):
     with _app(tmp_path, monkeypatch) as client:
         assert (
@@ -536,3 +526,145 @@ def test_automatic_delivery_names_a_configured_destination(db):
         profiles.save_text(
             guidelines.TYPE, "internal/recovery", "always", principal("writer")
         )
+    with pytest.raises(ValueError, match="not one this profile may publish to"):
+        profiles.save(
+            "internal",
+            profiles.SaveProfile(
+                revision=cleared.revision,
+                guidance="Use known facts.",
+                exposure="Keep internal.",
+                delivery="auto",
+                delivery_destination="docs",
+                destinations=("staff-wiki",),
+                templates=(
+                    profiles.Template(name="reference", text="Write a reference."),
+                ),
+            ),
+            principal("admin"),
+        )
+
+
+def _with_destinations(revision: str, *names: str) -> profiles.SaveProfile:
+    return profiles.SaveProfile(
+        revision=revision,
+        guidance="Use known facts.",
+        exposure="Keep internal.",
+        destinations=names,
+        templates=(profiles.Template(name="reference", text="Write a reference."),),
+    )
+
+
+def test_only_admins_choose_where_an_existing_profile_publishes(db):
+    created = profiles.save(
+        "internal", _with_destinations("", "staff-wiki"), principal("writer")
+    )
+    assert created.destinations == ("staff-wiki",)
+    snapshot = profiles.capture(db).profiles[0]
+    assert snapshot.may_publish_to("staff-wiki")
+    assert not snapshot.may_publish_to("help-site")
+    assert profiles.capture(db).catalogue() == {"internal": ["reference"]}
+    with pytest.raises(auth.RoleRequired):
+        profiles.save(
+            "internal", _with_destinations(created.revision), principal("writer")
+        )
+    with pytest.raises(auth.RoleRequired):
+        profiles.save_text(
+            guidelines.TYPE, "internal/destinations", "help-site", principal("writer")
+        )
+    widened = profiles.save(
+        "internal", _with_destinations(created.revision), principal("admin")
+    )
+    assert widened.destinations == ()
+    assert profiles.capture(db).profiles[0].may_publish_to("help-site")
+    with pytest.raises(ValueError):
+        _with_destinations("", "staff-wiki", "staff-wiki")
+
+
+def test_publishing_refuses_a_destination_the_profile_does_not_name(db, tmp_path):
+    from mycelium import docs_store
+    from mycelium.docgen import publication
+
+    profiles.save("internal", _with_destinations("", "staff-wiki"), principal("admin"))
+    drafts = docs_store.connect(tmp_path / "mycelium-drafts.db")
+    docs_store.migrate(drafts)
+    document = docs_store.upsert_document(
+        drafts,
+        slug="roles",
+        title="Workspace roles",
+        body="# Workspace roles\n",
+        guideline_set="internal",
+        document_type="reference",
+        statement_ids=["stm_1"],
+    )
+    with pytest.raises(ValueError, match="publishes only to staff-wiki"):
+        publication.publish(drafts, document, "help-site")
+    assert docs_store.get_document(drafts, document)["delivery_destination"] is None
+    drafts.close()
+
+
+def _over_mcp(role: str):
+    return auth.current_principal.set(principal(role))
+
+
+def test_writing_profiles_are_managed_over_mcp_with_the_editor_checks(db):
+    templates = [{"name": "how-to", "text": "1. {Step}"}]
+    token = _over_mcp("writer")
+    try:
+        created = server.save_writing_profile(
+            "help",
+            "",
+            templates,
+            guidance="Short steps.",
+            audience="internal-technical",
+        )
+        assert [p["name"] for p in server.list_writing_profiles()["profiles"]] == [
+            "help"
+        ]
+        read = server.get_writing_profile("help")
+        assert read["profile"]["guidance"] == "Short steps."
+        assert read["audience"]["id"] == "internal-technical"
+        with pytest.raises(profiles.Conflict):
+            server.save_writing_profile("help", "", templates, guidance="Other.")
+        with pytest.raises(auth.RoleRequired):
+            server.save_writing_profile(
+                "help",
+                created["revision"],
+                templates,
+                guidance="Short steps.",
+                audience="external-non-technical",
+            )
+        with pytest.raises(auth.RoleRequired):
+            server.retire_writing_profile("help", created["revision"])
+    finally:
+        auth.current_principal.reset(token)
+    token = _over_mcp("admin")
+    try:
+        retired = server.retire_writing_profile("help", created["revision"])
+        assert retired["retired"] and profiles.capture(db).catalogue() == {}
+        restored = server.restore_writing_profile("help", retired["revision"])
+        assert restored["guidance"] == "Short steps."
+        assert restored["audience"] == "internal-technical"
+        assert profiles.capture(db).catalogue() == {"help": ["how-to"]}
+    finally:
+        auth.current_principal.reset(token)
+
+
+def test_restoring_a_profile_leaves_out_what_was_removed_before_it_was_retired(db):
+    two = (
+        profiles.Template(name="how-to", text="1. {Step}"),
+        profiles.Template(name="reference", text="| Field |"),
+    )
+    admin = principal("admin")
+    first = profiles.save(
+        "help", profiles.SaveProfile(revision="", templates=two), admin
+    )
+    narrowed = profiles.save(
+        "help", profiles.SaveProfile(revision=first.revision, templates=two[:1]), admin
+    )
+    retired = profiles.retire("help", narrowed.revision, admin)
+    with pytest.raises(auth.RoleRequired):
+        profiles.restore("help", retired.revision, principal("writer"))
+    restored = profiles.restore("help", retired.revision, admin)
+    assert [t.name for t in restored.templates] == ["how-to"]
+    with pytest.raises(ValueError, match="not retired"):
+        profiles.restore("help", restored.revision, admin)

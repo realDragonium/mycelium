@@ -61,6 +61,8 @@ _NON_READ_READER_TOOLS = frozenset(
         "list_documentation_destinations",  # deployment configuration
         "list_prompt_texts",  # prompt configuration
         "get_prompt_text",  # prompt configuration
+        "list_writing_profiles",  # documentation configuration
+        "get_writing_profile",  # documentation configuration
         # Ignores audience labels; a documentation run is offered its
         # audience's media by its harness.
         "list_media",

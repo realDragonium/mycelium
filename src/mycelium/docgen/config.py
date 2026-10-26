@@ -94,8 +94,8 @@ class DocgenConfig:
     #: The set this instance prefers when the request named none. It is a
     #: preference the resolution step is told about, not an override: the
     #: request wins, and a prompt that plainly asks for another configured
-    #: set wins too. Defaults to the one set that ships, so an instance that
-    #: has only ever been booted (never configured) still has a preference.
+    #: set wins too. An instance never configured prefers `SET_NAME`, which
+    #: names no profile until someone creates one by that name.
     guideline_set: str = SET_NAME
     limits: product_settings.DocgenSettings = field(
         default_factory=product_settings.DocgenSettings

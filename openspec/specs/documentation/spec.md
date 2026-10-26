@@ -6,7 +6,7 @@ Project accepted knowledge into audience-scoped, reviewed documents: writing pro
 ## Requirements
 
 ### Requirement: Writing profiles are guideline-set rows
-The system SHALL store each writing profile (guideline set) as prompt-store rows of type `guideline-set` named `<set>/<slot>`, where the slot is `guidance`, `exposure`, `audience`, one of the policy slots `maintenance`, `planning`, `plan_review`, `delivery`, `delivery_destination` and `recovery`, or a document type whose row is that type's template; any other slot name is a document type the set can write.
+The system SHALL store each writing profile (guideline set) as prompt-store rows of type `guideline-set` named `<set>/<slot>`, where the slot is `guidance`, `exposure`, `audience`, `destinations`, one of the policy slots `maintenance`, `planning`, `plan_review`, `delivery`, `delivery_destination` and `recovery`, or a document type whose row is that type's template; any other slot name is a document type the set can write. The `destinations` row holds destination names, one per line.
 
 #### Scenario: Listing what a profile can write
 - **WHEN** the live rows are `billing-docs/guidance`, `billing-docs/exposure`, `billing-docs/how-to` and `billing-docs/reference`
@@ -18,7 +18,7 @@ The system SHALL store each writing profile (guideline set) as prompt-store rows
 - **THEN** the profile is no longer offered to runs, planning or the generate form
 
 ### Requirement: Profile names and reserved slots
-The system MUST refuse profile and template names that are blank, contain `/` or have surrounding whitespace, MUST refuse a template named `guidance`, `exposure`, `audience`, `maintenance`, `planning`, `plan_review`, `delivery`, `delivery_destination` or `recovery`, MUST refuse duplicate template names within one save, and MUST refuse a maintenance text other than `manual`, `propose` or `auto-revise`; a stored maintenance text that is not one of those reads as `manual`.
+The system MUST refuse profile and template names that are blank, contain `/` or have surrounding whitespace, MUST refuse a template named `guidance`, `exposure`, `audience`, `maintenance`, `planning`, `plan_review`, `delivery`, `delivery_destination`, `recovery` or `destinations`, MUST refuse duplicate template names within one save, and MUST refuse a maintenance text other than `manual`, `propose` or `auto-revise`; a stored maintenance text that is not one of those reads as `manual`.
 
 #### Scenario: Reserved template name
 - **WHEN** a writer saves a profile with a template named `recovery`
@@ -36,7 +36,7 @@ The system SHALL save a profile through `PUT /api/documentation/profiles/{name}`
 - **THEN** no new version of that slot is appended
 
 ### Requirement: Profile edit roles
-The system MUST require a real writer or admin to save a profile or a profile text, MUST require an admin to remove an existing slot, to retire a profile (`DELETE /api/documentation/profiles/{name}`), to retire a text (`retire_prompt_text`), to change the audience of an existing profile or to save an `audience` text directly, and MUST refuse an `audience` value that is not a live audience id.
+The system MUST require a real writer or admin to save a profile or a profile text, MUST require an admin to remove an existing slot, to retire a profile (`DELETE /api/documentation/profiles/{name}`), to retire a text (`retire_prompt_text`), to change the audience or the destinations of an existing profile or to save an `audience` or `destinations` text directly, and MUST refuse an `audience` value that is not a live audience id.
 
 #### Scenario: Writer removes a template
 - **WHEN** a writer saves profile `billing-docs` without its existing `reference` template
@@ -44,6 +44,10 @@ The system MUST require a real writer or admin to save a profile or a profile te
 
 #### Scenario: Writer changes the audience
 - **WHEN** a writer saves an existing profile with a different `audience`
+- **THEN** the save is refused for lacking the admin role
+
+#### Scenario: Writer widens the destinations
+- **WHEN** a writer saves an existing profile that publishes only to `staff-wiki` with no destinations
 - **THEN** the save is refused for lacking the admin role
 
 ### Requirement: Default profile protection
@@ -70,13 +74,6 @@ The system SHALL keep every version of a profile text and of the editable loop i
 #### Scenario: Text outside the editor's scope
 - **WHEN** a caller saves a text that is neither a `guideline-set` row nor a loop instruction doctrine through these routes
 - **THEN** the save is refused
-
-### Requirement: Starter profile seeding
-The system SHALL, at startup, insert the packaged `kb-authoring` profile (guidance, exposure and the `tutorial`, `how-to`, `reference`, `explanation` and `troubleshooting` templates) only when no `guideline-set` row has ever been stored; saved edits and retirements take precedence on later starts, and a starter file that cannot be read leaves no partial profile and does not stop the server from starting.
-
-#### Scenario: Restart after retiring a starter template
-- **WHEN** an admin retired `kb-authoring/tutorial` and the server restarts
-- **THEN** `kb-authoring/tutorial` stays retired
 
 ### Requirement: Requesting a documentation run
 The system SHALL expose `request_documentation(prompt, guideline_set?, document_type?, provider?, anchor_entity_id?)`, advertised over MCP and mirrored as `POST /api/documentation/runs`, which admits a background run and returns its run row immediately with `status` `running` or `queued`.
@@ -457,6 +454,13 @@ The system SHALL publish a selected revision through HTTP `POST /api/documentati
 - **WHEN** a writer publishes while the server runs in quarantine (see the `operations` capability)
 - **THEN** publication is refused and nothing is sent to GitHub
 
+### Requirement: Profile destinations
+The system MUST refuse to publish a document, whoever publishes it and including automatic republishing, to a destination its profile's `destinations` do not name; a profile without destinations publishes to any destination.
+
+#### Scenario: Destination the profile does not name
+- **WHEN** a writer publishes a document of a profile whose destinations are `staff-wiki` to destination `help-site`
+- **THEN** publication is refused naming the profile's destinations, and nothing is sent to GitHub
+
 ### Requirement: Recorded destination is reused
 The system SHALL publish a document that was published before only to its recorded destination, repository, branch, path and credential binding, even if the destination settings change, and refuse when that binding or connection is no longer available or no longer authorized for the recorded host or repository.
 
@@ -664,3 +668,42 @@ The system MUST NOT start automatically again work it gave up on, or that a pers
 #### Scenario: Given-up run until a person retries
 - **WHEN** an item's run gave up and a later automatic plan proposes the same item
 - **THEN** the plan drops it as given up before, the item shows `given_up`, and a person's retry of the run clears it
+
+### Requirement: No packaged profiles
+The system SHALL ship no writing profile and no profile text: a fresh instance SHALL have no profile until one is saved, and SHALL leave every stored profile, including one seeded by an earlier build, unchanged on start.
+
+#### Scenario: Fresh instance
+- **WHEN** the server starts on a data directory with no prompt texts
+- **THEN** `list_writing_profiles` returns no profiles
+
+### Requirement: Default profile name without a profile
+The system SHALL accept a documentation settings save that keeps the stored default profile name when no profile has that name, and MUST refuse one that changes it to a name no live profile has.
+
+#### Scenario: Destinations before any profile
+- **WHEN** an admin on a fresh instance saves a destination and keeps the default `kb-authoring`
+- **THEN** the settings are saved
+
+### Requirement: Writing profiles over MCP
+The system SHALL advertise `list_writing_profiles`, `get_writing_profile`, `save_writing_profile`, `retire_writing_profile` and `restore_writing_profile` over MCP. Saves, retirements and restores SHALL go through the profile editor's validation, role rules and revision check, and MUST need a real role: writer to save, admin to retire or restore.
+
+#### Scenario: Stale save over MCP
+- **WHEN** a writer calls `save_writing_profile` with a `revision` older than the stored profile's
+- **THEN** the save is refused as a conflict and nothing is written
+
+#### Scenario: Writer changes the audience over MCP
+- **WHEN** a writer calls `save_writing_profile` for an existing profile with a different `audience`
+- **THEN** the save is refused for lacking the admin role
+
+### Requirement: Restoring a retired profile
+The system SHALL restore a retired profile, given its current `revision`, to the texts each slot held when the profile was retired, leaving retired the slots removed before then, and MUST refuse a profile that is not retired.
+
+#### Scenario: Template removed before retirement
+- **WHEN** an admin removes the `reference` template of profile `help`, retires `help` and then restores it
+- **THEN** `help` has its other templates back and `reference` stays retired
+
+### Requirement: Automatic delivery within the profile's destinations
+The system MUST refuse a profile save whose `delivery_destination` is not among the profile's `destinations` when the profile names any.
+
+#### Scenario: Automatic delivery outside the named destinations
+- **WHEN** an admin saves a profile with destinations `staff-wiki` and delivery destination `docs`
+- **THEN** the save is refused and nothing is written
