@@ -302,22 +302,37 @@ def test_startup_requeues_mapped_vectors_the_indexes_lost(
     )
 
 
-def test_startup_prunes_vectors_no_mapping_references(
+def test_startup_compacts_and_prunes_what_no_mapping_reaches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _init(tmp_path, monkeypatch)
     statement_id = server.upsert_statement(
         kind="state", text="the export is queued", links=[]
     )["statement_id"]
-    runtime._idx().add(999, _embed("an export nobody maps"))
-    runtime._idx().save(runtime._idx_path())
+    vector_id = store.get_vector_id(store.substrate_connection(), statement_id)
+    assert vector_id is not None
+    index = runtime._idx()
+    index.add(998, _embed("a freed export"))
+    index.delete(998)
+    # The statement's id moves into the freed slot, as `add` once did, and its
+    # old slot keeps answering searches for the old wording.
+    index._index.add_items(
+        np.asarray([_embed("the export is sent")], dtype=np.float32),
+        np.array([vector_id]),
+        replace_deleted=True,
+    )
+    index.add(999, _embed("an export nobody maps"))
+    index.save(runtime._idx_path())
     monkeypatch.setattr(embed, "embed_many", _outage)
 
     _restart(tmp_path)
 
-    vector_id = store.get_vector_id(store.substrate_connection(), statement_id)
     persisted = vector.Index.load(runtime._idx_path())
+    assert persisted.unreachable_slots() == 0
     assert persisted.live_ids() == {vector_id}
+    assert [hit for hit, _ in persisted.search(_embed("the export is queued"), 5)] == [
+        vector_id
+    ]
     assert not indexes._dirty_marker_path(runtime._idx_path()).exists()
 
 
