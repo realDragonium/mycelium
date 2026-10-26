@@ -67,6 +67,11 @@ back to the queue (a grant review skips the grants it labelled).
 | `alias_discovery` | An alias scan is started while Alias discovery is set to External agent | The aliases the statements show, with their evidence |
 | `draft_review` | A draft is submitted, reviewed again, or reached by the backlog job while Draft review is set to External agent | One assessment per part of the draft: approve (`good`), approve with corrections (`changes_suggested`), `reject` or ask a person (`needs_context`) |
 
+A `draft_review` task exists only while Draft review is set to External
+agent, and its verdict follows the review mode. An agent deciding drafts
+itself, under any setting, uses `review_draft` and `reopen_draft` instead; see
+[Deciding drafts](DRAFT_REVIEW.md#deciding-drafts).
+
 Labelling batches are made when an agent claims, from the statements due
 then, at the labelling batch size set under Limits. A statement in an open
 batch is not put in another. A statement whose text changed after it was

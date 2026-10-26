@@ -410,8 +410,8 @@ admin chose under **Settings → Draft review**:
 
 | Mode | The reviewer | The draft then |
 |---|---|---|
-| `off` | does not run | waits, submitted, for a curator to approve or reject it in the UI |
-| `review-only` | records an advisory assessment; it never edits, applies or rejects | waits for a curator, who sees the assessment |
+| `off` | does not run | waits, submitted, for a curator, a person in the UI or an agent with `review_draft`, to approve or reject it |
+| `review-only` | records an advisory assessment; it never edits, applies or rejects | waits for a curator (person or agent), who sees the assessment |
 | `review-and-apply` | assesses, makes up to eight small corrections, then applies the draft, rejects it, or asks a person a question; it acts only while the separate **Allow applying accepted reviews** gate is on, and its assessment is advice otherwise | lands, is rejected, or waits for the answer |
 
 The reviewer trusts you on what the product does and judges only how the

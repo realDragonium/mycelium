@@ -17,7 +17,9 @@ In the web app, **Settings → Draft review** offers **Review N waiting drafts**
 with the tokens it is likely to use and an optional token limit, whenever review is on
 and the backlog is not empty, and shows the review's progress with **Pause**
 and **Resume**.
-A curator can explicitly review an existing submitted draft.
+A curator can explicitly review an existing submitted draft. Whatever the
+setting, a real writer or admin, a person in the web app or an agent over MCP,
+can decide a draft itself; see [Deciding drafts](#deciding-drafts).
 
 ## Configuration
 
@@ -342,6 +344,62 @@ for a person to check. A draft approved by hand resolves its gaps the same way.
 An automated assessment remains a model judgment; isolated tests verify the
 execution safeguards and API contract, not the model's factual accuracy.
 
+## Deciding drafts
+
+The review setting decides only who reviews automatically. A real writer or
+admin can always decide a draft: a person with **Approve and apply**,
+**Reject**, held corrections and **Reopen** on the Drafts screen, and an
+agent, such as one working in the product's repository, with these MCP tools:
+
+```text
+list_drafts(status, created_by, label, application)
+review_draft(draft_id, verdict, expected_revision, reason, corrections, question, evidence)
+reopen_draft(draft_id, reason)
+```
+
+`list_drafts` finds the queue: `status="submitted"` for drafts waiting on a
+decision, `application="held"` for corrections the reviewer held for a
+curator, `label="needs_context"` for its questions, and `status="rejected",
+application="rejected"` for drafts the automatic reviewer rejected.
+
+`review_draft` decides a `submitted` draft at the `revision` the agent read
+with `get_draft`; a draft changed since is refused. Its `verdict` is:
+
+- `approve`: applies the draft as it is, as **Approve and apply** does.
+- `approve_with_corrections`: makes `corrections`, in the reviewer's precise
+  shape ([Corrections](#corrections)), validated as the reviewer's are, and
+  applies the corrected draft, as accepting held corrections does. Nothing
+  changes if a correction does not fit or the corrected draft still has an
+  operation finding. Corrections also stand in for editing an operation:
+  `edit`, the link and statement corrections, `strike` and `append` change
+  what the web app's operation editor changes.
+- `reject`: closes the draft unapplied, as **Reject** does; `reason` is
+  required.
+- `needs_context`: leaves the draft submitted and files `question` as a
+  knowledge gap naming the draft, for a person or a curation agent.
+
+An approval is refused when a record the draft changes was rewritten after the
+draft was written, as the reviewer refuses it (see
+[Evidence and scope](#evidence-and-scope)); the draft has to be written again
+against current knowledge. **Approve and apply** in the web app leaves that judgement to the
+person.
+
+`reopen_draft` returns a `rejected` draft, the automatic reviewer's rejections
+included, to `submitted`, refused on the same newer-knowledge check. The
+reopened draft is not reviewed automatically again; decide it with
+`review_draft` or in the web app. Withdrawn drafts stay closed: withdrawing is
+their creator's choice.
+
+Both tools need a real writer or admin and refuse a draft the caller created:
+an agent never decides its own proposal. They work in every mode, `off`
+included, as the web app's controls do; `review-only` makes automatic reviews
+advisory, not a curator's decision. Every decision, from the web app or an
+agent, is logged with its decider, time, `reason`, `evidence` (items shaped as
+[operation evidence](#evidence-and-scope)) and the corrections made, and
+`get_draft` and the draft's page list them as `decisions`. The draft's
+`decided_by` names who approved or rejected it; reopening clears it, and the
+log keeps the earlier decision.
+
 ## External agent
 
 With **Runs on** set to **External agent** (`external_agent: true`), no model
@@ -406,8 +464,9 @@ result does not itself authorize application.
 
 `get_draft_review_run(run_id)` retrieves an attempt. `get_draft` and both browser
 interfaces expose the latest `review_assessment`, including the items below.
-`GET /api/drafts` lists only each assessment's `run_id`, status, label,
-application outcome and staleness, and the `list_drafts` tool none of it.
+`GET /api/drafts` and the `list_drafts` tool list only each assessment's
+`run_id`, status, label, application outcome and staleness, and filter on its
+`label` and `application`.
 
 - Status (`running`, `completed`, `failed`, `paused`), assessed revision, and
   staleness.
@@ -471,8 +530,8 @@ is available while review is off; starting the reviews is refused.
 
 In `review-only`, an advisory `reject` label leaves the draft submitted. Suggested corrections are
 validated without execution before they are published. Draft edits make the old
-assessment visibly stale in lists and details. Existing curator controls remain
-available for human decisions.
+assessment visibly stale in lists and details. A person or an agent still
+decides the draft; see [Deciding drafts](#deciding-drafts).
 
 ## Exact review and recovery
 
