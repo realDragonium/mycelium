@@ -105,7 +105,8 @@ def limiter_for(tool_name: str) -> anyio.CapacityLimiter | None:
 
 
 #: Not `PermissionError`: a filesystem one would carry a server path.
-_REFUSALS = (ValueError, auth.RoleRequired, agent_tasks.NotHeld)
+#: `LookupError` is how a missing run, plan item or draft is refused.
+_REFUSALS = (ValueError, LookupError, auth.RoleRequired, agent_tasks.NotHeld)
 
 
 def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
