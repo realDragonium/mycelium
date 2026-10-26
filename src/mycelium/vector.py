@@ -130,29 +130,6 @@ class Index:
         `delete()` don't care — it is idempotent."""
         return [int(x) for x in self._index.get_ids_list()]
 
-    def live_ids(self) -> set[int]:
-        """Labels a search can return: `ids()` without those marked deleted."""
-        return {i for i in self.ids() if self.get_vector(i) is not None}
-
-    def unreachable_slots(self) -> int:
-        """Slots no label resolves to any more. hnswlib keeps one label per
-        slot; only `add`'s former reuse of deleted slots for existing labels
-        left a label on two, and searches still return the stale one."""
-        return int(self._index.element_count) - len(self.ids())
-
-    def compact(self) -> None:
-        """Rebuild the graph from the live labels' vectors, dropping
-        deleted and unreachable slots."""
-        live = sorted(self.live_ids())
-        fresh = Index.empty()
-        if live:
-            fresh._ensure_capacity(len(live))
-            fresh._index.add_items(
-                np.asarray(self._index.get_items(live), dtype=np.float32),
-                np.array(live, dtype=np.int64),
-            )
-        self._index = fresh._index
-
     def get_vector(self, vector_id: int) -> NDArray[np.float32] | None:
         """Return the stored vector at `vector_id`, or `None` if the
         slot is missing from the index.

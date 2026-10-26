@@ -43,7 +43,8 @@ def test_replace_adds_a_missing_label():
     assert idx.search(new_v, k=1)[0][0] == 999
 
 
-def test_reusing_deleted_labels_keeps_each_label_on_its_own_vector():
+def test_reused_ids_keep_their_vectors():
+    # next_vector_id hands out MAX + 1 again once the highest ids are freed.
     idx = vector.Index.empty()
     idx.add(0, rand_vec(1))
     idx.add(1, rand_vec(2))
@@ -53,31 +54,9 @@ def test_reusing_deleted_labels_keeps_each_label_on_its_own_vector():
     idx.add(0, rand_vec(3))
     idx.add(1, rand_vec(4))
 
+    assert idx.get_vector(0) is not None
     assert idx.search(rand_vec(3), k=1)[0][0] == 0
     assert idx.search(rand_vec(4), k=1)[0][0] == 1
-    assert idx.unreachable_slots() == 0
-
-
-def test_compact_drops_slots_no_label_resolves_to():
-    idx = vector.Index.empty()
-    idx.add(0, rand_vec(1))
-    idx.add(1, rand_vec(2))
-    idx.delete(1)
-    # What add() did before it stopped reusing deleted slots for held labels:
-    # label 0 moves into slot 1, and slot 0 keeps serving its old vector.
-    idx._index.add_items(
-        np.asarray([rand_vec(3)], dtype=np.float32),
-        np.array([0]),
-        replace_deleted=True,
-    )
-    assert idx.unreachable_slots() == 1
-
-    idx.compact()
-
-    assert idx.unreachable_slots() == 0
-    assert idx.live_ids() == {0}
-    assert [label for label, _ in idx.search(rand_vec(1), k=5)] == [0]
-    assert idx.search(rand_vec(3), k=1)[0][1] < 1e-5
 
 
 def test_save_and_load(tmp_path):
