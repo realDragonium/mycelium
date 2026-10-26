@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from collections.abc import Callable, Set
+from collections.abc import Callable, Sequence, Set
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -131,6 +131,17 @@ class Answer(BaseModel):
     answered_at: str = Field(default_factory=timestamps.now)
     #: What a curation agent checked in the product; a person's answer has none.
     evidence: list[Evidence] = Field(default_factory=list, max_length=MAX_EVIDENCE)
+
+
+def automatic_answers(answers: Sequence[Answer]) -> int:
+    """How many of the latest answers in a row a model or a curation agent
+    gave, the ones it backed with evidence; a person's answer ends the run."""
+    count = 0
+    for answer in reversed(answers):
+        if not (answer.answered_by.startswith("model:") or answer.evidence):
+            break
+        count += 1
+    return count
 
 
 class ReviewRun(BaseModel):

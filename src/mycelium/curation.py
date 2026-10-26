@@ -18,14 +18,20 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal, get_args
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
-from . import automation_stops, knowledge_health, store, timestamps
+from . import (
+    automation_stops,
+    draft_review_store,
+    knowledge_health,
+    store,
+    timestamps,
+)
 from .store.gaps import set_knowledge_gap_status
 
 Kind = Literal[
@@ -93,6 +99,7 @@ _GAP_SETTLED = (
 )
 _GAP_CLAIMED = knowledge_health.CLAIMED.replace("s.id", "g.id")
 _CHUNK = 200
+_answers = TypeAdapter(list[draft_review_store.Answer])
 _CONCEPT_KINDS: dict[Kind, knowledge_health.EntityFilter] = {
     "undescribed": "undescribed",
     "unused": "unused",
@@ -157,18 +164,27 @@ def _params(now: str, waiting: Sequence[str] = ()) -> dict[str, object]:
     }
 
 
-def waiting_for_answer(drafts: sqlite3.Connection) -> list[str]:
+def waiting_for_answer(
+    drafts: sqlite3.Connection, answer_retries: int | None = None
+) -> list[str]:
     """Submitted drafts whose latest review asked a person and that have not
-    changed since."""
+    changed since. With `answer_retries`, not those whose reviewer already
+    asked again more often after automatic answers: a person answers them."""
     return [
-        str(row[0])
+        str(row["id"])
         for row in drafts.execute(
-            "SELECT id FROM drafts WHERE submitted_at IS NOT NULL "
+            "SELECT id, json_extract(review_assessment_json, '$.answers') AS answers "
+            "FROM drafts WHERE submitted_at IS NOT NULL "
             "AND decided_at IS NULL "
             "AND json_extract(review_assessment_json, '$.application') = 'needs_human' "
             "AND json_extract(review_assessment_json, '$.draft_revision') = revision "
             "ORDER BY id"
         )
+        if answer_retries is None
+        or draft_review_store.automatic_answers(
+            _answers.validate_json(row["answers"] or "[]")
+        )
+        <= answer_retries
     ]
 
 
@@ -184,9 +200,12 @@ def claim(
     exclude_skipped_by: str | None = None,
     draft_gaps_only: bool = False,
     follow_up_retries: int | None = None,
+    answer_retries: int | None = None,
+    skip_retries: int | None = None,
 ) -> tuple[list[Candidate], list[str], str]:
     """Lease up to `limit` free items of `kind` to `claimant` and extend the
-    lease on the items of that kind they already hold.
+    lease on the items of that kind they already hold. With `skip_retries`,
+    a claim that ran out counts toward its item's stop as a skip does.
 
     Returns the new items, the ids renewed and when the lease ends. The caller
     owns the transaction."""
@@ -198,6 +217,20 @@ def claim(
             "AND NOT EXISTS (SELECT 1 FROM knowledge_gaps g WHERE g.id = item_id "
             f"AND g.text = inputs AND {_OPEN_GAP})"
         )
+    if skip_retries is not None:
+        for row in conn.execute(
+            "SELECT item_id, kind, claimed_by FROM curation_claims "
+            "WHERE expires_at <= ?",
+            (stamp,),
+        ).fetchall():
+            _count_skip(
+                conn,
+                row["kind"],
+                str(row["item_id"]),
+                f"The claim by {row['claimed_by']} ran out.",
+                skip_retries,
+                now,
+            )
     conn.execute("DELETE FROM curation_claims WHERE expires_at <= ?", (stamp,))
     renewed = [
         str(r[0])
@@ -221,6 +254,7 @@ def claim(
         exclude_skipped_by=exclude_skipped_by,
         draft_gaps_only=draft_gaps_only,
         follow_up_retries=follow_up_retries,
+        answer_retries=answer_retries,
         at=now,
     )
     if follow_up_retries is not None and kind in ("rephrase", "gap"):
@@ -253,10 +287,12 @@ def _candidates(
     exclude_skipped_by: str | None,
     draft_gaps_only: bool,
     follow_up_retries: int | None,
+    answer_retries: int | None,
     at: datetime,
 ) -> list[Candidate]:
     """The first `limit` items of `kind`, in id order, that nobody holds, no
-    attempt has settled, and no undecided draft already covers."""
+    attempt has settled, no undecided draft already covers and that were not
+    stopped after too many skips."""
     if kind == "duplicate":
         return _duplicate_candidates(
             conn,
@@ -266,6 +302,7 @@ def _candidates(
             now=now,
             exclude_skipped_by=exclude_skipped_by,
         )
+    passed_over = automation_stops.stopped(conn, "curation")
     if kind in _CONCEPT_KINDS:
         return _concept_candidates(
             conn,
@@ -274,6 +311,7 @@ def _candidates(
             limit=limit,
             now=now,
             exclude_skipped_by=exclude_skipped_by,
+            passed_over=passed_over,
         )
     if kind in _STATEMENT_KINDS:
         pending = knowledge_health.pending_statement_ids(drafts)
@@ -306,7 +344,9 @@ def _candidates(
             + ("AND g.draft_id IS NOT NULL " if draft_gaps_only else "")
             + "ORDER BY g.id LIMIT :chunk"
         )
-    params = _params(now, waiting_for_answer(drafts) if kind == "question" else ())
+    params = _params(
+        now, waiting_for_answer(drafts, answer_retries) if kind == "question" else ()
+    )
     chosen: list[sqlite3.Row] = []
     stopped = (
         automation_stops.stopped(conn, "gap_follow_up")
@@ -319,7 +359,7 @@ def _candidates(
         for row in rows:
             item_id = str(row["id"])
             text = str(row["text"])
-            if stopped.get(item_id) == text:
+            if stopped.get(item_id) == text or passed_over.get(item_id) == text:
                 continue
             if (
                 follow_up_retries is not None
@@ -461,13 +501,16 @@ def _duplicate_candidates(
     if limit == 0:
         return []
     refs, _ = _pending_refs(drafts)
+    passed_over = automation_stops.stopped(conn, "curation")
     chosen: list[Candidate] = []
     for pair in sorted(pairs, key=lambda item: item.id):
         ids = pair.id.split("~")
         if len(ids) != 2 or any(item in refs for item in ids):
             continue
-        if _settled(conn, pair.id, pair.text) or _skipped_by(
-            conn, pair.id, pair.text, exclude_skipped_by
+        if (
+            _settled(conn, pair.id, pair.text)
+            or _skipped_by(conn, pair.id, pair.text, exclude_skipped_by)
+            or passed_over.get(pair.id) == pair.text
         ):
             continue
         claimed = conn.execute(
@@ -531,6 +574,7 @@ def _concept_candidates(
     limit: int,
     now: str,
     exclude_skipped_by: str | None,
+    passed_over: Mapping[str, str],
 ) -> list[Candidate]:
     if limit == 0:
         return []
@@ -541,7 +585,7 @@ def _concept_candidates(
     for row in rows:
         entity_id = str(row[0])
         text = concept_text(conn, entity_id)
-        if text is None or entity_id in refs:
+        if text is None or entity_id in refs or passed_over.get(entity_id) == text:
             continue
         names = {
             str(name[0]).casefold()
@@ -680,8 +724,12 @@ def release(
     now: datetime,
     reason: str | None = None,
     draft_id: str | None = None,
+    skip_retries: int | None = None,
 ) -> list[str]:
     """Remember what `claimant` made of the items they hold and free them.
+    With `skip_retries`, a skip counts toward the item's stop, past which it
+    is not offered until it changes or an admin retries it; any other
+    outcome forgets the count.
 
     A gap released as `proposed` is tied to the proposing draft, so applying it
     resolves the gap. `resolved` resolves the gap and ties it to the draft that
@@ -720,6 +768,17 @@ def release(
                 draft_id,
             ),
         )
+        if skip_retries is not None and outcome == "skipped":
+            _count_skip(
+                conn,
+                kind,
+                item_id,
+                f"Skipped by {claimant}: {reason or 'no reason given'}",
+                skip_retries,
+                now,
+            )
+        elif outcome != "skipped":
+            automation_stops.clear(conn, "curation", [item_id])
         if gap and outcome in ("proposed", "resolved"):
             conn.execute(
                 "UPDATE knowledge_gaps SET draft_id = ? WHERE id = ?",
@@ -750,6 +809,21 @@ def release(
                         store.set_actor(actor)
     conn.execute(f"DELETE FROM curation_claims WHERE item_id IN ({marks})", unique)
     return unique
+
+
+def _count_skip(
+    conn: sqlite3.Connection,
+    kind: Kind,
+    item_id: str,
+    reason: str,
+    retries: int,
+    now: datetime,
+) -> None:
+    text = item_text(conn, kind, item_id)
+    if text is not None:
+        automation_stops.fail(
+            conn, "curation", item_id, text, reason[:500], retries=retries, now=now
+        )
 
 
 def held_kinds(

@@ -185,6 +185,46 @@ def _accept(
     )
 
 
+def test_a_dismissed_out_of_date_document_blocks_its_update_of_that_revision():
+    update = _item(action="update", document_id="doc_1", title="Refresh SSO")
+
+    assert _accept(update, dismissed=frozenset({"stale:doc_1:r3"})).dropped == {
+        "dismissed before": 1
+    }
+    assert _accept(update, dismissed=frozenset({"stale:doc_1:r2"})).items
+
+
+def test_an_unanchored_create_drawing_on_a_declined_one_is_declined_reworded():
+    declined = documentation_planning.Declined(
+        "how-to", frozenset({"s1", "s2"}), "given up before"
+    )
+    result = documentation_planning.accept(
+        Proposal(
+            items=[
+                _item(title="Exporting invoices", statement_ids=["s1", "s3"]),
+                _item(title="Invoice formats", statement_ids=["s3", "s4"]),
+                _item(
+                    document_type="reference",
+                    title="Invoice exports",
+                    statement_ids=["s1"],
+                ),
+            ]
+        ),
+        overview=_overview(),
+        document_types=["how-to", "reference"],
+        documents=[_document()],
+        dismissed=set(),
+        declined=[declined],
+        max_items=10,
+    )
+
+    assert [item.title for item in result.items] == [
+        "Invoice formats",
+        "Invoice exports",
+    ]
+    assert result.dropped == {"given up before": 1}
+
+
 def test_an_anchored_create_for_an_existing_document_becomes_its_update():
     [item] = _accept(
         _item(title="Configure SSO", anchor_entity_id="ent_sso", statement_ids=["s1"])
@@ -323,13 +363,18 @@ def test_a_plan_is_reviewed_into_runs_and_a_dismissal_sticks(client, monkeypatch
     ).json()
     assert again[0]["error"] == "This item was already approved."
 
-    replanned = _plan(client, monkeypatch, *proposals)
+    replanned = _plan(
+        client,
+        monkeypatch,
+        *proposals,
+        _item(title="Limits on invoices", statement_ids=ids[2:3]),
+    )
     # The anchored document now exists, so proposing it again is an update;
-    # the dismissed proposal stays gone.
+    # the dismissed proposal stays gone, reworded too.
     assert [(item["action"], item["title"]) for item in replanned["items"]] == [
         ("update", "Export invoices")
     ]
-    assert replanned["latest"]["dropped"] == {"dismissed before": 1}
+    assert replanned["latest"]["dropped"] == {"dismissed before": 2}
 
 
 def test_a_batch_beyond_the_run_limit_queues_in_order(client, monkeypatch):

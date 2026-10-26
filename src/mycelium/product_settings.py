@@ -131,6 +131,9 @@ class DocgenSettings(LoopLimits):
     #: Per-part limit of the opening decomposed search_statements map. Wider
     #: than ask's recon because a document covers a topic, not a question.
     recon_k: int = Field(default=30, gt=0)
+    #: Server starts that admit an interrupted run again, after the first,
+    #: before it fails instead.
+    restart_retries: int = Field(default=2, ge=0)
 
 
 class ReviewSettings(RequestLimits):
@@ -148,6 +151,10 @@ class ReviewSettings(RequestLimits):
     #: Automatic reviews again after refreshed alias suggestions, before
     #: the draft waits for a person to start its review again.
     refresh_reviews: int = Field(default=2, ge=0)
+    #: Automatic reviews again after a failed review, the immediate second
+    #: attempt included, before the draft stops until it changes or an admin
+    #: retries it.
+    failure_retries: int = Field(default=2, ge=0)
 
 
 class AliasDiscoverySettings(RequestLimits):
@@ -262,6 +269,28 @@ class ConnectSettings(LoopLimits):
     #: Further curation proposals in one chain of rejected drafts, before
     #: the next gap about a rejected draft is left for a person.
     follow_up_retries: int = Field(default=2, ge=0)
+    #: Further offers of a curation item after it was skipped or its claim
+    #: ran out, before it stops until it changes or an admin retries it.
+    skip_retries: int = Field(default=2, ge=0)
+
+
+class AutomationSettings(SettingsModel):
+    """Bounds on work the server hands out or repeats by itself."""
+
+    kind: Literal["automation"] = "automation"
+    #: Further claims of an agent task after a claim ran out or an agent
+    #: gave it back, before the task fails.
+    task_release_retries: int = Field(default=2, ge=0)
+    #: Further submissions after one was refused, for agent tasks whose
+    #: internal run makes one model call and so has no retry count of its own.
+    task_refusal_retries: int = Field(default=2, ge=0)
+    #: Further mention recomputes of a queued change after one failed, before
+    #: the worker skips it until an admin retries it.
+    mention_retries: int = Field(default=2, ge=0)
+    #: Further embeddings of a statement or name after one failed while
+    #: others embedded, before it is skipped until its text changes or an
+    #: admin retries it.
+    embedding_retries: int = Field(default=2, ge=0)
 
 
 class ConcurrencySettings(SettingsModel):
@@ -396,6 +425,7 @@ Section = Literal[
     "documentation_planning",
     "documentation_maintenance",
     "connect",
+    "automation",
     "concurrency",
     "documentation",
     "setup",
@@ -412,6 +442,7 @@ Body = Annotated[
     | DocumentationPlanningSettings
     | DocumentationMaintenanceSettings
     | ConnectSettings
+    | AutomationSettings
     | ConcurrencySettings
     | DocumentationSettings
     | SetupSettings
@@ -430,6 +461,7 @@ DEFAULTS: tuple[Body, ...] = (
     DocumentationPlanningSettings(),
     DocumentationMaintenanceSettings(),
     ConnectSettings(),
+    AutomationSettings(),
     ConcurrencySettings(),
     DocumentationSettings(),
     SetupSettings(),
@@ -484,6 +516,7 @@ T = TypeVar(
     | DocumentationPlanningSettings
     | DocumentationMaintenanceSettings
     | ConnectSettings
+    | AutomationSettings
     | ConcurrencySettings
     | DocumentationSettings
     | SetupSettings

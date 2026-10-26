@@ -31,6 +31,10 @@ class ClaimedTask(BaseModel):
     #: Why the last submission was refused, when one was.
     findings: list[agent_tasks.Finding]
     failures: int
+    #: How often an earlier claim ran out or was given back, and the last
+    #: reason why.
+    releases: int
+    release_reason: str | None
 
 
 class TaskBatch(BaseModel):
@@ -108,15 +112,23 @@ def claim_agent_task(
 
     Each call also extends your lease on every task of `kind` you hold
     (`limit=0` only renews). A task whose lease runs out goes back to the
-    queue; `release_agent_task` gives one back at once.
+    queue; `release_agent_task` gives one back at once. Both count: past the
+    server's limit the task fails and its work is closed as a failed run's.
     """
     claimant = _claimant()
     handler = _handler(kind)
     if handler.queue is not None and limit:
         handler.queue(limit)
-    chosen, renewed, expires = agent_tasks.claim(
-        _drafts_db(), kind, claimant=claimant, limit=limit, now=datetime.now(UTC)
+    claimed = agent_tasks.claim(
+        _drafts_db(),
+        kind,
+        claimant=claimant,
+        limit=limit,
+        now=datetime.now(UTC),
+        release_retries=agent_tasks.release_retries(),
     )
+    for failed in claimed.given_up:
+        _give_up(failed)
     tasks = [
         ClaimedTask(
             id=ready.id,
@@ -125,8 +137,10 @@ def claim_agent_task(
             brief=ready.brief,
             findings=ready.findings,
             failures=ready.failures,
+            releases=ready.releases,
+            release_reason=ready.release_reason,
         )
-        for task in chosen
+        for task in claimed.tasks
         if (
             ready := task
             if handler.prepare is None
@@ -138,8 +152,8 @@ def claim_agent_task(
     return TaskBatch(
         kind=kind,
         tasks=tasks,
-        renewed=renewed,
-        expires_at=expires,
+        renewed=claimed.renewed,
+        expires_at=claimed.expires_at,
         note=f"{withheld} waiting {kind} task{'s are' if withheld > 1 else ' is'} "
         "your own work, a draft you created, a document you wrote, a plan you "
         "made or grants you labelled, and only another agent may review it."
@@ -184,12 +198,21 @@ def release_agent_task(
     task_id: str, reason: Annotated[str, Field(min_length=1, max_length=300)]
 ) -> Released:
     """Give a claimed task back to the queue, saying why, for another agent
-    or a later attempt."""
+    or a later attempt. A task given back or left to expire too often fails
+    instead (`status` `failed`), and its work is closed as a failed run's."""
     task = agent_tasks.held(_drafts_db(), task_id, _claimant())
-    agent_tasks.set_status(
-        _drafts_db(), task.id, "waiting", release_reason=reason.strip()
+    released = agent_tasks.give_back(
+        _drafts_db(), task, reason.strip(), retries=agent_tasks.release_retries()
     )
-    return Released(task_id=task.id, status="waiting")
+    if released.status == "failed":
+        _give_up(released)
+    return Released(task_id=task.id, status=released.status)
+
+
+def _give_up(task: agent_tasks.Task) -> None:
+    give_up = _handler(task.kind).give_up
+    if give_up is not None:
+        give_up(task, task.error or "the task was given up")
 
 
 @tool(role="writer")

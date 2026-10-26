@@ -50,7 +50,7 @@ from . import (
     workers,
 )
 from .docgen import publication
-from .documentation_planning import ExistingDocument, stale_key
+from .documentation_planning import ExistingDocument, declined_revision, stale_key
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ def sweep(now: datetime | None = None) -> list[str]:
         ):
             if (
                 document.freshness.status != "out_of_date"
-                or stale_key(document) in dismissed
+                or declined_revision(document, dismissed)
                 or _awaiting_labels(document, audience.id)
             ):
                 continue

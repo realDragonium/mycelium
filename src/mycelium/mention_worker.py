@@ -18,6 +18,11 @@ Durability: each chunk — claim, recompute, delete — is one
 and its claimed rows revert to unclaimed for retry. `store.reset_claimed_
 recompute` (run on start) additionally un-claims anything an older build may
 have stranded — at-least-once, and recompute is idempotent.
+
+A chunk that raises is redone one row at a time, so one failing row cannot
+hold back the rest. Each failure of a row is counted in `automation_stops`;
+past `mention_retries` the row stays queued but is passed over until an
+admin retries it.
 """
 
 from __future__ import annotations
@@ -26,10 +31,17 @@ import logging
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
-from . import mentions, request_timing, store, workers
+from . import (
+    automation_stops,
+    mentions,
+    request_timing,
+    store,
+    workers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,40 +64,76 @@ def drain(conn: sqlite3.Connection, *, chunk: int = CHUNK) -> int:
     re-derive each, delete the claimed rows — all in one `transaction`.
     Idempotent and safe to call repeatedly."""
     total = 0
+    failed: set[int] = set()
     while True:
-        with store.transaction(conn):
-            rows = store.claim_recompute_batch(conn, chunk)
+        rows: list[sqlite3.Row] = []
+        try:
+            with store.transaction(conn):
+                rows = store.claim_recompute_batch(conn, chunk, failed)
+                if not rows:
+                    return total
+                total += _recompute(conn, rows)
+        except Exception:
             if not rows:
-                return total
+                raise
+            for row in rows:
+                try:
+                    with store.transaction(conn):
+                        total += _recompute(conn, [row])
+                except Exception as exc:
+                    failed.add(int(row["id"]))
+                    _count_failure(conn, row, exc)
 
-            index = store.build_name_index(conn)
-            stmt_ids: set[str] = set()
-            scan_texts: list[str] = []
-            for r in rows:
-                if r["statement_id"] is not None:
-                    stmt_ids.add(r["statement_id"])
-                elif r["scan_text"] is not None:
-                    scan_texts.append(r["scan_text"])
 
-            # Scan jobs: a new/renamed name became matchable — find statements
-            # whose text contains it. One pass over the corpus per chunk,
-            # coalesced across all scan texts in the chunk.
-            if scan_texts:
-                for row in store.all_statements_with_text(conn):
-                    if any(
-                        mentions.text_contains_name(row["text"], st)
-                        for st in scan_texts
-                    ):
-                        stmt_ids.add(row["id"])
+def _recompute(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> int:
+    index = store.build_name_index(conn)
+    stmt_ids: set[str] = set()
+    scan_texts: list[str] = []
+    for r in rows:
+        if r["statement_id"] is not None:
+            stmt_ids.add(r["statement_id"])
+        elif r["scan_text"] is not None:
+            scan_texts.append(r["scan_text"])
 
-            for sid in stmt_ids:
-                srow = store.get_statement(conn, sid)
-                if srow is None:
-                    continue  # deleted between enqueue and drain
-                store.derive_mentions(conn, sid, srow["text"], index)
-                total += 1
+    # Scan jobs: a new/renamed name became matchable — find statements
+    # whose text contains it. One pass over the corpus per chunk,
+    # coalesced across all scan texts in the chunk.
+    if scan_texts:
+        for row in store.all_statements_with_text(conn):
+            if any(mentions.text_contains_name(row["text"], st) for st in scan_texts):
+                stmt_ids.add(row["id"])
 
-            store.delete_recompute_rows(conn, [r["id"] for r in rows])
+    total = 0
+    for sid in stmt_ids:
+        srow = store.get_statement(conn, sid)
+        if srow is None:
+            continue  # deleted between enqueue and drain
+        store.derive_mentions(conn, sid, srow["text"], index)
+        total += 1
+
+    ids = [r["id"] for r in rows]
+    store.delete_recompute_rows(conn, ids)
+    automation_stops.clear(conn, "mention", [str(i) for i in ids])
+    return total
+
+
+def _count_failure(conn: sqlite3.Connection, row: sqlite3.Row, exc: Exception) -> None:
+    logger.warning("mention recompute of queue row %s failed", row["id"], exc_info=True)
+    subject = (
+        f"statement {row['statement_id']}"
+        if row["statement_id"] is not None
+        else f"statements naming '{row['scan_text']}'"
+    )
+    with store.transaction(conn):
+        automation_stops.fail(
+            conn,
+            "mention",
+            str(row["id"]),
+            subject,
+            f"Recomputing the mentions of {subject} failed: {exc}"[:500],
+            retries=automation_stops.limits().mention_retries,
+            now=datetime.now(UTC),
+        )
 
 
 def wake() -> None:

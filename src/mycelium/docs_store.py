@@ -132,7 +132,20 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     document_maintenance.migrate(conn)
     _add_run_automation(conn)
+    _add_run_restarts(conn)
     conn.commit()
+
+
+def _add_run_restarts(conn: sqlite3.Connection) -> None:
+    """How many server starts found the run started and unfinished."""
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
+    }
+    if "restarts" not in columns:
+        conn.execute(
+            "ALTER TABLE documentation_runs "
+            "ADD COLUMN restarts INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def _add_run_automation(conn: sqlite3.Connection) -> None:
@@ -935,9 +948,11 @@ def document_written_by(conn: sqlite3.Connection, run_id: str) -> str | None:
 
 
 def reset_unfinished(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Reset unfinished server runs and return them in admission order."""
+    """Reset unfinished server runs, counting a restart for each one that had
+    started, and return them in admission order."""
     conn.execute(
-        "UPDATE documentation_runs SET started_at = NULL, summary = NULL "
+        "UPDATE documentation_runs SET started_at = NULL, summary = NULL, "
+        "restarts = restarts + (started_at IS NOT NULL) "
         "WHERE finished_at IS NULL AND provider IS NOT 'agent'"
     )
     conn.commit()

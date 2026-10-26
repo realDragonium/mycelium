@@ -853,26 +853,13 @@ def _submit_agent_task(
     except ValidationError as exc:
         findings = [agent_tasks.Finding(check="shape", problem=str(exc))]
     if findings:
-        if task.failures >= agent_tasks.RETRIES:
+        if task.failures >= agent_tasks.refusal_retries():
             settings = _settings() or product_settings.AudienceLabellingSettings()
             detail = "; ".join(finding.problem for finding in findings)
             reason = "An agent's decisions were refused too often."
             if detail and len(reason) + len(detail) + 1 <= 500:
                 reason = f"{reason} {detail}"
-            conn = store.substrate_connection()
-            stopped = 0
-            with store.transaction(conn):
-                for key in _batch_attempt_keys(batch):
-                    item_id, inputs = _stop_key(key)
-                    stopped += automation_stops.fail(
-                        conn,
-                        "audience_review",
-                        item_id,
-                        inputs,
-                        reason,
-                        retries=settings.decision_retries,
-                        now=datetime.now(UTC),
-                    )
+            stopped = _fail_batch(batch, reason, settings.decision_retries)
             message = (
                 "Refused too often; the grants remain pending."
                 if isinstance(batch, AgentBatch)
@@ -891,7 +878,7 @@ def _submit_agent_task(
                 findings=findings,
             )
         return agent_tasks.refused(
-            drafts, task, findings, agent_tasks.RETRIES - task.failures
+            drafts, task, findings, agent_tasks.refusal_retries() - task.failures
         )
 
     principal = auth.current_principal.get()
@@ -915,7 +902,39 @@ def _submit_agent_task(
     return agent_tasks.closed(drafts, task, _closed_message(batch, applied))
 
 
-AGENT_TASK = agent_tasks.Handler(submit=_submit_agent_task, queue=_queue_agent_tasks)
+def _fail_batch(batch: Batch, reason: str, retries: int) -> int:
+    """Count a failure for every item of the batch; returns how many stopped."""
+    conn = store.substrate_connection()
+    stopped = 0
+    with store.transaction(conn):
+        for key in _batch_attempt_keys(batch):
+            item_id, inputs = _stop_key(key)
+            stopped += automation_stops.fail(
+                conn,
+                "audience_review",
+                item_id,
+                inputs,
+                reason[:500],
+                retries=retries,
+                now=datetime.now(UTC),
+            )
+    return stopped
+
+
+def _give_up_agent_task(task: agent_tasks.Task, reason: str) -> None:
+    settings = _settings() or product_settings.AudienceLabellingSettings()
+    _fail_batch(
+        _parse_batch(task.state),
+        f"An agent task was {reason}",
+        settings.decision_retries,
+    )
+
+
+AGENT_TASK = agent_tasks.Handler(
+    submit=_submit_agent_task,
+    queue=_queue_agent_tasks,
+    give_up=_give_up_agent_task,
+)
 
 
 def _record_failures(

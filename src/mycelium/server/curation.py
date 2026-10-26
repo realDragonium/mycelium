@@ -392,6 +392,12 @@ def claim_curation_work(
             follow_up_retries=product_settings.get(
                 product_settings.ConnectSettings
             ).follow_up_retries,
+            answer_retries=product_settings.get(
+                product_settings.ReviewSettings
+            ).answer_retries,
+            skip_retries=product_settings.get(
+                product_settings.ConnectSettings
+            ).skip_retries,
         )
     items: list[WorkItem] = []
     for candidate in chosen:
@@ -423,7 +429,8 @@ def release_curation_work(
     `proposed`: your draft `draft_id` proposes the change. `no_link`: an
     isolated/unnamed/undescribed/unused item should not change; give a reason.
     Neither is offered again until the item or the statements around it
-    change. `skipped`: you did not get to them; they are offered again.
+    change. `skipped`: you did not get to them; they are offered again
+    until skipped, or left to run out, more often than the limit.
 
     `answered` (one `question` item): your `answer` to the reviewer's
     questions with the `evidence` you checked, in `set_operation_evidence`'s
@@ -466,6 +473,9 @@ def release_curation_work(
             now=datetime.now(UTC),
             reason=reason,
             draft_id=draft_id,
+            skip_retries=product_settings.get(
+                product_settings.ConnectSettings
+            ).skip_retries,
         )
     return {"released": released, "outcome": outcome}
 

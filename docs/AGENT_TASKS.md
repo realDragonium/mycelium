@@ -81,7 +81,8 @@ needs a documentation model. Asking for a run with an explicit `provider`
 1. **Claim.** `claim_agent_task(kind, limit=1)` (at most 5) leases waiting
    tasks for 30 minutes, oldest first. Each call also renews every task of
    that kind the caller holds; `limit=0` only renews. A task whose lease runs
-   out goes back to the queue. Each task carries a `brief`:
+   out goes back to the queue, and the task shows why it was released
+   (`release_reason`) and how often (`releases`). Each task carries a `brief`:
    - `instructions` and `input`: the system prompt and first message a
      server model would get, built by the same code;
    - `read_tools`: the reads it could make (documentation, ingest and
@@ -105,7 +106,17 @@ needs a documentation model. Asking for a run with an explicit `provider`
    agent reviews the document next) or `failed` (the work is closed and the
    run or plan records why).
 4. **Or release.** `release_agent_task(task_id, reason)` gives a task back
-   at once.
+   at once. The next claimant sees the reason.
+
+A lease that runs out and a give-back both count toward the task's limit,
+**Retries of an agent task whose claim ran out or was given back**
+(**Settings → Limits → Agent tasks and background work**,
+`task_release_retries`, default 2). Past it the task is `failed` with the
+reason and the count, and what it served is closed as when its work fails: a
+documentation run writes nothing, a plan fails, a draft review fails and is
+followed up. Refused submissions have their own limit, **Retries of an agent
+task whose submission was refused** (`task_refusal_retries`, default 2), for
+kinds whose server run has no retry count of its own.
 
 `ingest`, `connect_statements` and an alias scan return at once with
 `waiting_for_agent` and the task id. Whoever queued the work, or an admin,

@@ -48,39 +48,66 @@ def _queue(conn, excluded: str | None = None) -> str:
     )
 
 
+def _claim(conn, claimant: str, limit: int, now, retries: int = 2):
+    return agent_tasks.claim(
+        conn,
+        "documentation",
+        claimant=claimant,
+        limit=limit,
+        now=now,
+        release_retries=retries,
+    )
+
+
 def test_a_lease_renews_on_claim_and_expires_back_to_the_queue(drafts):
     first, second = _queue(drafts), _queue(drafts)
 
-    chosen, renewed, _ = agent_tasks.claim(
-        drafts, "documentation", claimant="a", limit=1, now=NOW
-    )
-    assert ([t.id for t in chosen], renewed) == ([first], [])
+    claimed = _claim(drafts, "a", 1, NOW)
+    assert ([t.id for t in claimed.tasks], claimed.renewed) == ([first], [])
     later = NOW + timedelta(minutes=20)
-    chosen, renewed, expires = agent_tasks.claim(
-        drafts, "documentation", claimant="a", limit=0, now=later
-    )
-    assert (chosen, renewed) == ([], [first])
-    assert expires == timestamps.of(later + agent_tasks.LEASE)
+    claimed = _claim(drafts, "a", 0, later)
+    assert (claimed.tasks, claimed.renewed) == ([], [first])
+    assert claimed.expires_at == timestamps.of(later + agent_tasks.LEASE)
 
-    chosen, _, _ = agent_tasks.claim(
-        drafts, "documentation", claimant="b", limit=5, now=later + timedelta(hours=1)
-    )
-    assert [t.id for t in chosen] == [first, second]
+    claimed = _claim(drafts, "b", 5, later + timedelta(hours=1))
+    assert [t.id for t in claimed.tasks] == [first, second]
+    assert claimed.tasks[0].releases == 1
+    assert claimed.tasks[0].release_reason == "the claim by a ran out"
+
+
+def test_a_task_fails_once_its_claims_ran_out_past_the_limit(drafts):
+    task = _queue(drafts)
+    _claim(drafts, "a", 1, NOW, retries=1)
+    later = NOW + agent_tasks.LEASE
+    assert [t.id for t in _claim(drafts, "b", 1, later, retries=1).tasks] == [task]
+
+    claimed = _claim(drafts, "c", 1, later + agent_tasks.LEASE, retries=1)
+
+    assert claimed.tasks == []
+    [failed] = claimed.given_up
+    assert (failed.id, failed.status, failed.releases) == (task, "failed", 2)
+    assert failed.error is not None and "the claim by b ran out" in failed.error
+
+
+def test_giving_a_task_back_counts_toward_the_same_limit(drafts):
+    _queue(drafts)
+    [held] = _claim(drafts, "a", 1, NOW, retries=1).tasks
+    waiting = agent_tasks.give_back(drafts, held, "out of time", retries=1)
+    assert (waiting.status, waiting.release_reason) == ("waiting", "out of time")
+
+    [again] = _claim(drafts, "b", 1, NOW, retries=1).tasks
+    assert again.release_reason == "out of time"
+    failed = agent_tasks.give_back(drafts, again, "still stuck", retries=1)
+
+    assert (failed.status, failed.finished_at is not None) == ("failed", True)
+    assert _claim(drafts, "c", 1, NOW, retries=1).tasks == []
 
 
 def test_a_task_is_never_offered_to_the_claimant_it_excludes(drafts):
     task = _queue(drafts, excluded="writer")
 
-    assert (
-        agent_tasks.claim(drafts, "documentation", claimant="writer", limit=1, now=NOW)[
-            0
-        ]
-        == []
-    )
-    chosen, _, _ = agent_tasks.claim(
-        drafts, "documentation", claimant="other", limit=1, now=NOW
-    )
-    assert [t.id for t in chosen] == [task]
+    assert _claim(drafts, "writer", 1, NOW).tasks == []
+    assert [t.id for t in _claim(drafts, "other", 1, NOW).tasks] == [task]
 
 
 # --- documentation over HTTP ---------------------------------------------------
@@ -273,6 +300,35 @@ def test_an_agent_review_is_never_the_writer_and_its_refusal_returns_findings(
     assert again["findings"][0]["problem"] == "No numbered steps."
     current = _call(client, writer, "get_documentation_run", run_id=run["id"])
     assert current["status"] == "waiting_for_agent"
+
+
+def test_a_run_whose_task_is_given_back_past_the_limit_fails(
+    client,  # noqa: F811
+    monkeypatch,
+):
+    from mycelium import product_settings
+    from product_settings_helpers import set_product
+
+    admin = _bearer("admin")
+    _corpus(client, admin)
+    _external_documentation(client, admin, monkeypatch)
+    set_product(product_settings.AutomationSettings(task_release_retries=0))
+    writer = _bearer("writer")
+    run = _request(client, writer)
+
+    [task] = _call(client, writer, "claim_agent_task", kind="documentation")["tasks"]
+    released = _call(
+        client, writer, "release_agent_task", task_id=task["id"], reason="no time"
+    )
+
+    assert released["status"] == "failed"
+    failed = _call(client, writer, "get_documentation_run", run_id=run["id"])
+    assert failed["status"] == "nothing_written"
+    assert "no time" in failed["error"]
+    assert failed["agent_task"]["status"] == "failed"
+    assert (
+        _call(client, writer, "claim_agent_task", kind="documentation")["tasks"] == []
+    )
 
 
 def test_a_waiting_run_survives_a_restart(client, monkeypatch):  # noqa: F811

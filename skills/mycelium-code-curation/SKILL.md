@@ -75,7 +75,9 @@ first. Run one job per drafter account at a time.
      for, including an item at the other end of a link you proposed;
    - `no_link` and a `reason` (at most 300 characters) naming what you
      checked;
-   - `skipped`, for items you did not get to. They are offered again.
+   - `skipped`, for items you did not get to. They are offered again, but
+     an item skipped, or whose lease ran out, too often stops being offered
+     until it changes.
 
    A gap (`rephrase` or `gap`) you settled without a draft of yours:
    - `resolved` and the `draft_id` of the applied draft that already closed

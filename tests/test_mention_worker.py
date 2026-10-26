@@ -111,6 +111,46 @@ def test_drain_skips_deleted_statement(tmp_path):
     assert store.count_open_recompute(conn) == 0
 
 
+def test_a_failing_row_is_passed_over_and_stops_at_its_limit(tmp_path, monkeypatch):
+    from mycelium import automation_stops, product_settings
+    from product_settings_helpers import set_product
+
+    set_product(product_settings.AutomationSettings(mention_retries=1))
+    conn = _fresh(tmp_path)
+    e = store.create_entity(conn, None)
+    store.create_name(conn, "dashboard", e)
+    bad, good = (
+        store.create_statement(conn, "state", f"the dashboard {word}")
+        for word in ("breaks", "renders")
+    )
+    store.enqueue_recompute_statements(conn, [bad, good])
+    conn.commit()
+    derive = store.derive_mentions
+
+    def failing(conn, sid, text, index):
+        if sid == bad:
+            raise RuntimeError("cannot derive")
+        derive(conn, sid, text, index)
+
+    monkeypatch.setattr(store, "derive_mentions", failing)
+
+    assert mention_worker.drain(conn) == 1
+    assert [r["name"] for r in store.get_mentions(conn, good)] == ["dashboard"]
+    assert automation_stops.stops(conn) == []
+    mention_worker.drain(conn)
+    [stop] = automation_stops.stops(conn)
+    assert (stop.kind, stop.failures) == ("mention", 2)
+    assert "cannot derive" in stop.reason
+    assert store.claim_recompute_batch(conn, 50) == []
+
+    monkeypatch.setattr(store, "derive_mentions", derive)
+    store.reset_claimed_recompute(conn)
+    automation_stops.retry(conn, "mention", stop.item_id)
+    assert mention_worker.drain(conn) == 1
+    assert store.count_open_recompute(conn) == 0
+    assert automation_stops.stops(conn) == []
+
+
 # ─── backfill script ─────────────────────────────────────────────────────────
 
 

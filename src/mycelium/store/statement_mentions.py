@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterable
 
@@ -214,15 +215,22 @@ def enqueue_recompute_scan(conn: sqlite3.Connection, scan_text: str) -> None:
     )
 
 
-def claim_recompute_batch(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+def claim_recompute_batch(
+    conn: sqlite3.Connection, limit: int, skip: Iterable[int] = ()
+) -> list[sqlite3.Row]:
     """Claim up to `limit` unclaimed queue rows (stamp claimed_at) and
-    return them. Claiming and reading happen in one transaction so two
-    workers (or a restart mid-drain) can't double-process — though there is
-    only ever one worker."""
+    return them, passing over `skip` and rows stopped at their retry limit.
+    Claiming and reading happen in one transaction so two workers (or a
+    restart mid-drain) can't double-process — though there is only ever one
+    worker."""
     rows = conn.execute(
         "SELECT id, statement_id, scan_text FROM mention_recompute_queue "
-        "WHERE claimed_at IS NULL ORDER BY id LIMIT ?",
-        (limit,),
+        "WHERE claimed_at IS NULL "
+        "AND id NOT IN (SELECT value FROM json_each(?)) "
+        "AND CAST(id AS TEXT) NOT IN (SELECT item_id FROM automation_stops "
+        "WHERE kind = 'mention' AND stopped = 1) "
+        "ORDER BY id LIMIT ?",
+        (json.dumps(list(skip)), limit),
     ).fetchall()
     if rows:
         now = _now()

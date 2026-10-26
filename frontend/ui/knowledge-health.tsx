@@ -193,6 +193,10 @@ const STOP_KIND: Record<AutomationKind, string> = {
   audience_review: 'Audience decision',
   connect: 'Connect pass',
   gap_follow_up: 'Gap follow-up',
+  draft_review: 'Draft review',
+  curation: 'Curation item',
+  mention: 'Mention recompute',
+  embedding: 'Embedding',
 };
 
 function StoppedAutomations({ items, isAdmin, onChange }: { items: AutomationStop[]; isAdmin: boolean; onChange: () => void }) {

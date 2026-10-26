@@ -526,7 +526,8 @@ CREATE TABLE IF NOT EXISTS curation_claims (
 -- obsolete when the underlying item changes.
 CREATE TABLE IF NOT EXISTS automation_stops (
     kind       TEXT NOT NULL
-               CHECK (kind IN ('audience_review', 'connect', 'gap_follow_up')),
+               CHECK (kind IN ('audience_review', 'connect', 'gap_follow_up',
+                               'draft_review', 'curation', 'mention', 'embedding')),
     item_id    TEXT NOT NULL,
     inputs     TEXT NOT NULL,
     failures   INTEGER NOT NULL,

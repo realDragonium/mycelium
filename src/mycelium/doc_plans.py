@@ -422,6 +422,20 @@ def items(conn: sqlite3.Connection, plan_id: str) -> list[sqlite3.Row]:
     )
 
 
+def unanchored_creates(
+    conn: sqlite3.Connection, guideline_set: str
+) -> list[sqlite3.Row]:
+    return list(
+        conn.execute(
+            "SELECT i.* FROM documentation_plan_items i "
+            "JOIN documentation_plans p ON p.id = i.plan_id "
+            "WHERE p.guideline_set = ? AND i.action = 'create' "
+            "AND i.anchor_entity_id IS NULL",
+            (guideline_set,),
+        )
+    )
+
+
 def get_item(conn: sqlite3.Connection, item_id: str) -> sqlite3.Row | None:
     row: sqlite3.Row | None = conn.execute(
         "SELECT i.*, p.guideline_set FROM documentation_plan_items i "

@@ -105,8 +105,12 @@ approve them together, up to the batch limit (2 by default); each is its own
 documentation run and counts against the active-run limit. Runs beyond that
 limit are queued rather than refused: the item shows its place in line and
 starts when a running one finishes. **Dismiss** is
-remembered per profile, so a later plan drops the same proposal. A dismissed
-out-of-date document comes back after its next revision.
+remembered per profile, so a later plan drops the same proposal, also
+reworded: a proposal without a concept of the same document type that draws
+on at least half of a dismissed one's statements is dropped too. A dismissed
+out-of-date document comes back after its next revision; until then a plan's
+update of it is dropped, and a dismissed update keeps it off the out-of-date
+list.
 
 Re-planning is manual unless the profile's planning policy says otherwise.
 When enough statements have become visible to the audience since the last

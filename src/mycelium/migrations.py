@@ -1172,6 +1172,28 @@ def _migration_v28_automation_stops(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v29_more_automation_stops(conn: sqlite3.Connection) -> None:
+    """Let draft reviews, curation items, mention recomputes and embeddings
+    stop at their retry limits too. SQLite cannot widen a CHECK in place, so
+    the stops are copied into a rebuilt table."""
+    conn.execute("ALTER TABLE automation_stops RENAME TO automation_stops_v28")
+    conn.execute(
+        "CREATE TABLE automation_stops ("
+        "kind TEXT NOT NULL "
+        "CHECK (kind IN ('audience_review', 'connect', 'gap_follow_up', "
+        "'draft_review', 'curation', 'mention', 'embedding')), "
+        "item_id TEXT NOT NULL, "
+        "inputs TEXT NOT NULL, "
+        "failures INTEGER NOT NULL, "
+        "stopped INTEGER NOT NULL DEFAULT 0, "
+        "reason TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL, "
+        "PRIMARY KEY (kind, item_id))"
+    )
+    conn.execute("INSERT INTO automation_stops SELECT * FROM automation_stops_v28")
+    conn.execute("DROP TABLE automation_stops_v28")
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1204,6 +1226,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (26, _migration_v26_backfill_queue_rows),
     (27, _migration_v27_gap_outcomes),
     (28, _migration_v28_automation_stops),
+    (29, _migration_v29_more_automation_stops),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

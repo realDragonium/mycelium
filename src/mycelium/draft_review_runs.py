@@ -24,6 +24,7 @@ from . import (
     ai_prompts,
     ai_usage,
     auth,
+    automation_stops,
     draft_corrections,
     draft_review_model,
     draft_review_settings,
@@ -277,81 +278,167 @@ def on_submitted(draft_id: str) -> None:
         logger.exception("could not start internal draft review for %s", draft_id)
 
 
-# A failed run is retried after RETRY_BACKOFF, doubling per retry, at most
-# MAX_RETRIES times: about two and a half hours of a provider outage.
-MAX_RETRIES = 5
+# A failed run is retried after RETRY_BACKOFF, doubling per retry, up to
+# ReviewSettings.failure_retries times in all, the immediate second attempt
+# included. A failure older than RETRY_WINDOW, or twice its backoff if that
+# is longer, did not happen under this process's watch: a restored copy of
+# another instance, or a long outage of this one. Retrying it would review,
+# and possibly apply, old drafts unasked, so it is left for the backlog
+# review.
 RETRY_BACKOFF = timedelta(minutes=5)
-# A failure older than the whole schedule did not happen under this process's
-# watch: a restored copy of another instance, or a long outage of this one.
-# Retrying it would review, and possibly apply, old drafts unasked, so it is
-# left for the backlog review.
-RETRY_WINDOW = RETRY_BACKOFF * (1 << MAX_RETRIES)
+RETRY_WINDOW = RETRY_BACKOFF * 32
 SWEEP_INTERVAL_S = 60.0
 
 
 @request_timing.tracked("background draft review sweep")
 def sweep(now: datetime | None = None) -> list[str]:
-    """Resume reviews an earlier version's AI budget paused and retry failed
-    reviews after backoff. Returns the draft ids started."""
+    """Resume reviews an earlier version's AI budget paused, retry failed
+    reviews after backoff, stop those past their retries and start again
+    those an admin retried. Returns the draft ids started."""
     now = now or datetime.now(UTC)
     try:
         settings = _settings()
+        retries = product_settings.get(product_settings.ReviewSettings).failure_retries
     except draft_review_settings.Unavailable:
         return []
     if settings.mode == "off" or credentials_error(settings):
         return []
     started = []
     conn = drafts_store.connection()
-    for row in drafts_store.list_drafts(conn, "submitted"):
+    substrate = store.substrate_connection()
+    submitted = drafts_store.list_drafts(conn, "submitted")
+    with store.transaction(substrate):
+        automation_stops.prune(
+            substrate,
+            "draft_review",
+            {str(row["id"]): str(row["revision"]) for row in submitted},
+        )
+    for row in submitted:
         run = draft_review_store.latest(conn, row["id"])
-        if run is None or not _retry_due(run, now):
+        if run is None:
             continue
-        try:
-            start(
+        if _exhausted(run, retries):
+            if _stop_or_retried(substrate, run, now):
+                again = _start_retry(row["id"], run, now, attempt=1, retries=0)
+                if again:
+                    with store.transaction(substrate):
+                        automation_stops.clear(substrate, "draft_review", [row["id"]])
+                    started.append(row["id"])
+            continue
+        if not _retry_due(run, now, retries):
+            continue
+        if run.status == "paused":
+            again = _start_retry(
                 row["id"],
-                rerun=True,
-                attempt=run.attempt if run.status == "paused" else 1,
-                retries=run.retries if run.status == "paused" else run.retries + 1,
-                previous_failure=run.previous_failure
-                if run.status == "paused"
-                else run.detail,
-                admit=_still_due(run, now),
+                run,
+                now,
+                attempt=run.attempt,
+                retries=run.retries,
+                previous_failure=run.previous_failure,
+                limit=retries,
             )
+        else:
+            again = _start_retry(
+                row["id"],
+                run,
+                now,
+                attempt=1,
+                retries=run.retries + 1,
+                limit=retries,
+            )
+        if again:
             started.append(row["id"])
-        except NotAdmitted:
-            continue
-        except Exception:
-            logger.exception("could not retry review of %s", row["id"])
     return started
 
 
-def _still_due(seen: ReviewRun, now: datetime) -> Callable[[ReviewRun | None], bool]:
+def _start_retry(
+    draft_id: str,
+    run: ReviewRun,
+    now: datetime,
+    *,
+    attempt: int,
+    retries: int,
+    previous_failure: str | None = None,
+    limit: int | None = None,
+) -> bool:
+    """`limit` None: an admin retried the run, so it starts whatever its
+    timing."""
+    try:
+        start(
+            draft_id,
+            rerun=True,
+            attempt=attempt,
+            retries=retries,
+            previous_failure=previous_failure or run.detail,
+            admit=_still_due(run, now, limit),
+        )
+    except NotAdmitted:
+        return False
+    except Exception:
+        logger.exception("could not retry review of %s", draft_id)
+        return False
+    return True
+
+
+def _still_due(
+    seen: ReviewRun, now: datetime, limit: int | None
+) -> Callable[[ReviewRun | None], bool]:
     def admit(latest: ReviewRun | None) -> bool:
         return (
             latest is not None
             and latest.run_id == seen.run_id
             and latest.status == seen.status
-            and _retry_due(latest, now)
+            and (limit is None or _retry_due(latest, now, limit))
         )
 
     return admit
 
 
-def _retry_due(run: ReviewRun, now: datetime) -> bool:
+def _retryable(run: ReviewRun) -> bool:
+    return (
+        run.status == "failed"
+        and run.review_id is None
+        and run.application == "unapplied"
+    )
+
+
+def _exhausted(run: ReviewRun, retries: int) -> bool:
+    return _retryable(run) and run.retries >= retries
+
+
+def _retry_due(run: ReviewRun, now: datetime, retries: int) -> bool:
     if run.status == "paused":
         return True
-    if (
-        run.status != "failed"
-        or run.review_id is not None
-        or run.application != "unapplied"
-        or run.retries >= MAX_RETRIES
-        or run.finished_at is None
-    ):
+    if not _retryable(run) or run.retries >= retries or run.finished_at is None:
         return False
     finished = datetime.fromisoformat(run.finished_at)
-    return (
-        finished + RETRY_BACKOFF * (1 << run.retries) <= now < finished + RETRY_WINDOW
-    )
+    backoff = RETRY_BACKOFF * (1 << run.retries)
+    return finished + backoff <= now < finished + max(RETRY_WINDOW, 2 * backoff)
+
+
+def _stop_or_retried(
+    substrate: sqlite3.Connection, run: ReviewRun, now: datetime
+) -> bool:
+    """Record the draft's review as stopped, unless it is already; True when
+    an admin has retried it since."""
+    revision = str(run.draft_revision)
+    if automation_stops.retried(substrate, "draft_review", run.draft_id, revision):
+        return True
+    if (
+        automation_stops.stopped(substrate, "draft_review").get(run.draft_id)
+        != revision
+    ):
+        with store.transaction(substrate):
+            automation_stops.stop(
+                substrate,
+                "draft_review",
+                run.draft_id,
+                revision,
+                f"Review failed {run.retries + 1} time(s): {run.detail}"[:500],
+                failures=run.retries + 1,
+                now=now,
+            )
+    return False
 
 
 def backlog() -> list[str]:
@@ -1722,15 +1809,16 @@ def _follow_up(
     ):
         return
     try:
-        if run.attempt == 1:
+        retries = product_settings.get(product_settings.ReviewSettings).failure_retries
+        if run.attempt == 1 and run.retries < retries:
             start(
                 run.draft_id,
                 rerun=True,
                 attempt=2,
-                retries=run.retries,
+                retries=run.retries + 1,
                 previous_failure=run.detail,
             )
-        elif not systemic:
+        elif run.attempt > 1 and not systemic:
             _reject(run, settings)
     except Exception:
         logger.exception("could not follow up failed review %s", run.run_id)
@@ -2326,9 +2414,9 @@ def _submit_agent_review(
         )
     except (ValueError, TypeError) as exc:
         findings = [agent_tasks.Finding(check="review", problem=str(exc))]
-        if task.failures < agent_tasks.RETRIES:
+        if task.failures < agent_tasks.refusal_retries():
             return agent_tasks.refused(
-                conn, task, findings, agent_tasks.RETRIES - task.failures
+                conn, task, findings, agent_tasks.refusal_retries() - task.failures
             )
         # The agent stands as reviewer of the failed attempt, as a model
         # does, so a second failure can reject the draft.
@@ -2393,6 +2481,19 @@ def _submit_agent_review(
     return submitted
 
 
+def _give_up_agent_review(task: agent_tasks.Task, reason: str) -> None:
+    run = _task_run(task)
+    if run.status != "running":
+        return
+    _fail_agent_run(
+        run,
+        _task_settings.validate_json(str(task.state["settings"])),
+        f"No agent finished the review: {reason}",
+    )
+
+
 AGENT_TASK = agent_tasks.Handler(
-    prepare=_prepare_agent_review, submit=_submit_agent_review
+    prepare=_prepare_agent_review,
+    submit=_submit_agent_review,
+    give_up=_give_up_agent_review,
 )

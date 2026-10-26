@@ -64,6 +64,7 @@ def test_connect_adapts_its_saved_limits_for_the_ingest_loop(monkeypatch):
                 "act_on_gaps",
                 "connect_retries",
                 "follow_up_retries",
+                "skip_retries",
             }
         )
     )
