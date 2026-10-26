@@ -517,6 +517,7 @@ Everything an instance knows lives in `/var/lib/mycelium`:
 | `mycelium-media.db` | Screenshots and recordings, their labels and attachments ([Media](MEDIA.md)) |
 | `mycelium-ops.db` | Only on instances that predate its removal: tool-call telemetry that is no longer written or read, and not archived |
 | `mycelium.vec`, `mycelium-names.vec` | Vector indexes; rebuilt by re-embedding if missing |
+| `mycelium-vec.lock` | Lock that keeps `mycelium snapshot-indexes` from copying an index mid-write; not data |
 | `entity-positions.json` | Entity layout cache; rebuilt if missing |
 | `ask_trace.jsonl`, `ingest_trace.jsonl`, `connect_trace.jsonl`, `traces/` | Run traces and profiling output, not data; not archived |
 | `.uv-cache/` | uv's package cache, not data |
@@ -619,6 +620,41 @@ dirs on the disk.
 A snapshot is an exact copy of the files the previous build last wrote,
 for [Rolling back a deploy](#rolling-back-a-deploy). It lives on the same
 disk as the data, so it is not a backup.
+
+### Index durability on ephemeral storage
+
+A host that restores the databases on every start (for example from
+Litestream) loses the vector indexes with the disk, and rebuilding them
+re-embeds every statement and name before HTTP is available. To keep them,
+copy them with:
+
+```bash
+mycelium snapshot-indexes <dir>
+```
+
+It writes `mycelium.vec`, `mycelium-names.vec` and their `.meta.json` files
+into `<dir>`. It is safe while the server runs: it waits for any index write
+in flight and copies between writes. Each copied `.meta.json` also records a
+fingerprint of the database the copy matches (the vector ids the database
+maps and the texts behind them). It exits non-zero and copies nothing when an
+index is missing or marked dirty, so a failed run must not replace the
+previous copy.
+
+To restore, put the four files in the data dir beside the restored databases
+before the server starts. The server loads a copy whose fingerprint matches
+the restored database, which takes seconds; otherwise it rebuilds that index
+and logs why, for example:
+
+```
+... WARNING mycelium.server.indexes: rebuilding statement vector index: snapshot reflects 6000 mapped vector(s) of another database state; the database maps 6012
+```
+
+A copy taken while statements were still being written is older than a
+database that kept replicating, so it is rebuilt rather than loaded. Take a
+last copy after the server has exited, before the host stops, so the next
+start finds a copy that matches. Copy the files only through
+`snapshot-indexes`: index files copied straight out of a live data dir carry
+no fingerprint, and the server trusts such files as its own.
 
 ---
 
@@ -846,7 +882,9 @@ once: indexes written before format 2 could lose statements from semantic
 search.
 
 Switching back rebuilds again. Exports carry the `.meta.json` files with the
-indexes.
+indexes. A copy written by `mycelium snapshot-indexes` also records the
+database it matches; see
+[Index durability on ephemeral storage](#index-durability-on-ephemeral-storage).
 
 ### When the provider is unavailable
 
