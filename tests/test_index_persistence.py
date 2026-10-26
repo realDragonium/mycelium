@@ -246,6 +246,81 @@ def test_startup_rebuilds_dirty_indexes(
     )
 
 
+def _outage(texts: list[str]) -> list[list[float]]:
+    raise embed.EmbeddingError("provider unavailable")
+
+
+def test_startup_requeues_mapped_vectors_the_indexes_lost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from mycelium import embedding_worker
+
+    _init(tmp_path, monkeypatch)
+    server.upsert_entity(name="workspace", description="a tenant")
+    lost = server.upsert_statement(
+        kind="state", text="the workspace is archived", links=[]
+    )["statement_id"]
+    kept = server.upsert_statement(kind="state", text="the invoice is paid", links=[])[
+        "statement_id"
+    ]
+    conn = store.substrate_connection()
+    kept_vector_id = store.get_vector_id(conn, kept)
+    assert kept_vector_id is not None
+    name_id = next(
+        row["id"] for row in store.list_all_names(conn) if row["text"] == "workspace"
+    )
+    statements = vector.Index.empty()
+    statements.add(kept_vector_id, _embed("the invoice is paid"))
+    statements.save(runtime._idx_path())
+    names = runtime._name_idx()
+    name_vector_id = store.get_name_vector_id(conn, name_id)
+    assert name_vector_id is not None
+    names.delete(name_vector_id)
+    names.save(runtime._name_idx_path())
+    monkeypatch.setattr(embed, "embed", lambda text: _outage([text])[0])
+    monkeypatch.setattr(embed, "embed_many", _outage)
+
+    _restart(tmp_path)
+    embedding_worker.run_pass(embedding_worker.Isolation())
+    _restart(tmp_path)
+
+    conn = store.substrate_connection()
+    assert store.get_vector_id(conn, kept) == kept_vector_id
+    assert {row.key for row in indexes.pending(10)} == {
+        f"statement:{lost}",
+        f"name:{name_id}",
+    }
+
+    monkeypatch.setattr(embed, "embed_many", lambda texts: [_embed(t) for t in texts])
+    embedding_worker.run_pass(embedding_worker.Isolation())
+
+    assert indexes.pending(10) == []
+    healed = store.get_vector_id(conn, lost)
+    assert healed is not None
+    assert runtime._idx().search(_embed("the workspace is archived"), k=1)[0][0] == (
+        healed
+    )
+
+
+def test_startup_prunes_vectors_no_mapping_references(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init(tmp_path, monkeypatch)
+    statement_id = server.upsert_statement(
+        kind="state", text="the export is queued", links=[]
+    )["statement_id"]
+    runtime._idx().add(999, _embed("an export nobody maps"))
+    runtime._idx().save(runtime._idx_path())
+    monkeypatch.setattr(embed, "embed_many", _outage)
+
+    _restart(tmp_path)
+
+    vector_id = store.get_vector_id(store.substrate_connection(), statement_id)
+    persisted = vector.Index.load(runtime._idx_path())
+    assert persisted.live_ids() == {vector_id}
+    assert not indexes._dirty_marker_path(runtime._idx_path()).exists()
+
+
 def test_startup_rebuilds_an_index_from_empty_when_embedder_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

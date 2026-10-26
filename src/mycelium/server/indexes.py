@@ -4,7 +4,8 @@ The hnswlib files are written outside SQLite's transaction, so each write that
 touches an index brackets it with a `.dirty` marker: present from the first
 index mutation until the persisted file and the outermost commit both land. A
 marker found at startup means the file may disagree with the database, and
-`init` rebuilds that index by re-embedding.
+`init` rebuilds that index by re-embedding. A clean index that loads is
+reconciled with the database's vector mappings instead (see `reconcile`).
 """
 
 from __future__ import annotations
@@ -208,20 +209,21 @@ def load_or_rebuild(
     get_id: Callable[[sqlite3.Connection, str], int | None],
     next_id: Callable[[sqlite3.Connection], int],
     set_id: Callable[[sqlite3.Connection, str, int], None],
-    on_load: Callable[[vector.Index, Path], None] | None = None,
+    mapped: Callable[[sqlite3.Connection], set[int]],
+    drop_mappings: Callable[[sqlite3.Connection, Collection[int]], None],
 ) -> vector.Index:
-    """Load a clean, compatible index or durably rebuild it from the substrate.
+    """Load a clean, compatible index and reconcile it with the substrate's
+    mappings, or durably rebuild it from the substrate.
 
-    Fetch rebuild rows inside the substrate transaction. The optional load
-    hook runs before a missing legacy identity sidecar is written.
+    Fetch rebuild rows inside the substrate transaction. Reconciliation runs
+    before a missing legacy identity sidecar is written.
     """
     configured_identity = embed.identity()
     dirty = _dirty_marker_path(path).exists()
     recorded_identity = _read_index_identity(path)
     if path.exists() and not dirty and recorded_identity == configured_identity:
         index = vector.Index.load(path)
-        if on_load is not None:
-            on_load(index, path)
+        reconcile(index, path, label=label, mapped=mapped, drop_mappings=drop_mappings)
         if not _meta_path(path).exists():
             _write_index_identity(path, configured_identity)
         return index
@@ -244,18 +246,51 @@ def load_or_rebuild(
     return index
 
 
-def prune_stranded_name_vectors(index: vector.Index, path: Path) -> None:
-    """Prune loaded name vectors whose mappings were dropped by a migration
-    (v6's case-variant merge does). Stranded vectors resolve to nothing but
-    still occupy top-k slots in every name search."""
-    stranded = [
-        vid for vid in index.ids() if store.get_name_id_by_vector_id(_db(), vid) is None
-    ]
+def reconcile(
+    index: vector.Index,
+    path: Path,
+    *,
+    label: str,
+    mapped: Callable[[sqlite3.Connection], set[int]],
+    drop_mappings: Callable[[sqlite3.Connection, Collection[int]], None],
+) -> None:
+    """Make a loaded index serve exactly the vector ids the substrate maps.
+
+    A mapped id without a vector loses its mapping, so its row is pending
+    again and the embedding worker re-embeds it in batches, within the
+    retry limit, across restarts until it succeeds; startup itself calls no
+    provider. A vector no mapping references (a migration such as v6's
+    case-variant merge drops mappings) is pruned: it resolves to nothing
+    but takes a top-k slot. Unreachable slots, left by `Index.add` before
+    it stopped reusing deleted slots for labels it held, are compacted
+    away first, since a search still returns their stale labels."""
+    unreachable = index.unreachable_slots()
+    if unreachable:
+        logger.warning(
+            "compacting %s vector index: %d unreachable slot(s)", label, unreachable
+        )
+        _write_dirty_marker(path)
+        index.compact()
+    live = index.live_ids()
+    mapped_ids = mapped(_db())
+    missing = mapped_ids - live
+    stranded = live - mapped_ids
+    if missing or stranded:
+        logger.warning(
+            "%s vector index drift: %d mapped id(s) without a vector "
+            "(queued to re-embed), %d vector(s) without a mapping (pruned)",
+            label,
+            len(missing),
+            len(stranded),
+        )
+    if missing:
+        with store.transaction(_db()):
+            drop_mappings(_db(), missing)
     if stranded:
-        logger.info("pruning %d stranded name vector(s)", len(stranded))
         _write_dirty_marker(path)
         for vid in stranded:
             index.delete(vid)
+    if unreachable or stranded:
         index.save(path)
         _fsync_file(path)
         _clear_dirty_marker(path)

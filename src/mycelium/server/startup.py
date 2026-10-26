@@ -5,7 +5,7 @@ call it. It builds the context whole or not at all: on re-entry it clears the
 old context first, so a failure partway leaves the process uninitialized
 rather than serving stale indexes against a new substrate. An index file that
 is missing or marked dirty is rebuilt by re-embedding before the context
-exists.
+exists, and one that loads is reconciled with the database's vector mappings.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from ..app_context import AppContext
 from ..layout_baker import LayoutBaker
 from . import runtime
 from .draft_application import substrate_application_result
-from .indexes import load_or_rebuild, prune_stranded_name_vectors
+from .indexes import load_or_rebuild
 from .prompt_texts import seed_prompt_texts
 from .runtime import _auth_db, _db, _drafts_db, _prompts_db
 
@@ -196,6 +196,8 @@ def _init(data_dir: Path) -> None:
         get_id=store.get_vector_id,
         next_id=store.next_vector_id,
         set_id=store.set_vector_id,
+        mapped=store.mapped_vector_ids,
+        drop_mappings=store.drop_vector_mappings,
     )
 
     name_index_path = data_dir / "mycelium-names.vec"
@@ -206,7 +208,8 @@ def _init(data_dir: Path) -> None:
         get_id=store.get_name_vector_id,
         next_id=store.next_name_vector_id,
         set_id=store.set_name_vector_id,
-        on_load=prune_stranded_name_vectors,
+        mapped=store.mapped_name_vector_ids,
+        drop_mappings=store.drop_name_vector_mappings,
     )
 
     _report("starting", "Starting background workers")
