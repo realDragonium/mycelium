@@ -52,7 +52,14 @@ interface Evidence {
 }
 interface DraftOp { seq: number; kind: string; payload: Payload; provenance: { source?: string } | null; evidence: Evidence[] }
 interface DraftSource { repository: string; pull_request: number; merged_commit: string; workflow_run_id: number; workflow_run_attempt: number }
-type Draft = Omit<DraftSummary, 'review_assessment'> & { ops: DraftOp[]; review_assessment: Assessment | null; source: DraftSource | null };
+// Who approved, rejected, reopened or asked about the draft, person or agent.
+interface Decision {
+  action: 'approved' | 'rejected' | 'reopened' | 'needs_context'; decided_by: string; decided_at: string;
+  reason: string | null; evidence: Evidence[]; corrections: unknown[];
+}
+type Draft = Omit<DraftSummary, 'review_assessment'> & {
+  ops: DraftOp[]; review_assessment: Assessment | null; source: DraftSource | null; decided_by: string | null; decisions: Decision[];
+};
 // Statements the server refused while applying a draft by hand; nothing was applied.
 interface RejectedStatement { seq: number; kind: string; text: string | null; reasons: string[] }
 const rejectionsOf = (e: unknown): RejectedStatement[] => {
@@ -66,6 +73,7 @@ const drafts = {
   list: () => getJSON<{ drafts: DraftSummary[] }>('/api/drafts?status=all').then(r => r.drafts),
   get: (id: string) => getJSON<{ draft: Draft }>(`/api/drafts/${enc(id)}`).then(r => r.draft),
   act: (id: string, action: 'submit' | 'withdraw' | 'approve' | 'reject' | 'review') => postJSON<unknown>(`/api/drafts/${enc(id)}/${action}`),
+  reopen: (id: string, reason: string) => postJSON<unknown>(`/api/drafts/${enc(id)}/reopen`, { reason }),
   answer: (id: string, runId: string, answer: string) => postJSON<unknown>(`/api/drafts/${enc(id)}/review/answer`, { run_id: runId, answer }),
   accept: (id: string, runId: string, corrections: Correction[]) => postJSON<unknown>(`/api/drafts/${enc(id)}/review/accept`, { run_id: runId, corrections }),
   discardOp: (id: string, seq: number) => deleteJSON<unknown>(`/api/drafts/${enc(id)}/ops/${seq}`),
@@ -496,6 +504,25 @@ function HeldCorrections({ draftId, assessment, onApplied, onMoved }: {
   );
 }
 
+const DECISION_LABELS: Record<Decision['action'], string> = { approved: 'Approved', rejected: 'Rejected', reopened: 'Reopened', needs_context: 'Asked a person' };
+
+function Decisions({ decisions }: { decisions: Decision[] }) {
+  if (!decisions.length) return null;
+  return (
+    <div className="rail-sec">
+      <div className="rs-label">Decisions</div>
+      <ol className="stack-sm">{decisions.map((d, i) => (
+        <li key={i} className="small">
+          <b>{DECISION_LABELS[d.action]}</b> by <span className="mono">{d.decided_by}</span> · {relTime(d.decided_at)}
+          {d.corrections.length > 0 && ` · ${d.corrections.length} correction${d.corrections.length === 1 ? '' : 's'}`}
+          {d.reason && <p className="pre-wrap muted">{d.reason}</p>}
+          {d.evidence.length > 0 && <ul>{d.evidence.map((e, j) => <li key={j}><span className="mono">{e.path ? `${e.path}${e.lines ? `:${e.lines}` : ''}` : e.url ?? e.statement_id ?? e.draft_id ?? e.kind}</span> — {e.claim}</li>)}</ul>}
+        </li>
+      ))}</ol>
+    </div>
+  );
+}
+
 function PastAnswers({ answers }: { answers: Answer[] }) {
   if (!answers.length) return null;
   return (
@@ -557,6 +584,10 @@ export function DraftReview({ id }: { id: string }) {
   const decide = (action: 'approve' | 'reject' | 'withdraw', question: string) => {
     if (window.confirm(question)) void run(action[0].toUpperCase() + action.slice(1), () => drafts.act(id, action));
   };
+  const reopen = () => {
+    const reason = window.prompt('Reopen this rejected draft so it can be decided again. Why?')?.trim();
+    if (reason) void run('Reopen', () => drafts.reopen(id, reason));
+  };
 
   const ops = draft.ops;
   const active = isActive(draft);
@@ -577,8 +608,8 @@ export function DraftReview({ id }: { id: string }) {
       {source && <p className="muted small">From pull request <a href={`https://github.com/${sourceRepositoryPath}/pull/${source.pull_request}`} target="_blank" rel="noreferrer">{source.repository}#{source.pull_request}</a> · merge commit <code>{source.merged_commit.slice(0, 7)}</code> · <a href={`https://github.com/${sourceRepositoryPath}/actions/runs/${source.workflow_run_id}/attempts/${source.workflow_run_attempt}`} target="_blank" rel="noreferrer">workflow run</a></p>}
 
       {draft.status === 'submitted' && <Notice>Submitted {relTime(draft.submitted_at)}. Nothing has reached the knowledge base yet: a curator approves or rejects it.</Notice>}
-      {draft.status === 'approved' && <Notice tone="success">Approved {relTime(draft.decided_at)}. The operations were applied to the knowledge base.</Notice>}
-      {(draft.status === 'rejected' || draft.status === 'withdrawn') && <Notice>{draft.status === 'rejected' ? 'Rejected' : 'Withdrawn'} {relTime(draft.decided_at)}. The draft is closed without applying its operations{ops.some(o => o.kind === 'alias_suggestion') ? '; aliases accepted earlier stay recorded in Names & aliases' : ''}.</Notice>}
+      {draft.status === 'approved' && <Notice tone="success">Approved {relTime(draft.decided_at)}{draft.decided_by ? ` by ${draft.decided_by}` : ''}. The operations were applied to the knowledge base.</Notice>}
+      {(draft.status === 'rejected' || draft.status === 'withdrawn') && <Notice>{draft.status === 'rejected' ? 'Rejected' : 'Withdrawn'} {relTime(draft.decided_at)}{draft.decided_by ? ` by ${draft.decided_by}` : ''}. The draft is closed without applying its operations{ops.some(o => o.kind === 'alias_suggestion') ? '; aliases accepted earlier stay recorded in Names & aliases' : ''}.</Notice>}
       {pendingAliases && <Notice tone="warn">Decide each alias suggestion in <Link to={{ view: 'names' }}>Names &amp; aliases</Link> before approving or closing this draft. Automatic review stays advisory.</Notice>}
       {error && <Notice tone="error"><div>{error}{rejections.length > 0 && (
         <ul>{rejections.map((r, i) => (
@@ -630,6 +661,14 @@ export function DraftReview({ id }: { id: string }) {
               <p className="hint">Approving and rejecting need the writer or admin role. Submitting hands an open draft to the curators.</p>
             </div>
           )}
+          {draft.status === 'rejected' && (
+            <div className="rail-sec">
+              <div className="rs-label">Decide</div>
+              <button className="btn" disabled={busy} onClick={reopen}>Reopen</button>
+              <p className="hint">Reopening returns the draft to submitted so it can be approved, corrected or rejected again. It needs the writer or admin role, and is refused when knowledge the draft changes was rewritten after it.</p>
+            </div>
+          )}
+          <Decisions decisions={draft.decisions} />
           <div className="rail-sec">
             <div className="rs-label">AI review</div>
             {draft.review_assessment ? <AssessmentBadge assessment={draft.review_assessment} /> : <p className="muted small">Not reviewed yet.</p>}

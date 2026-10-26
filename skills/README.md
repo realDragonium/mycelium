@@ -11,7 +11,7 @@ when to use it; Claude loads it when a task matches, or you invoke it as
 | `mycelium-authoring` | Write descriptive knowledge: what the product does and what holds, as statements, links and concepts | Writer, or drafter for drafts |
 | `mycelium-guide-authoring` | Write how-to guides and troubleshooting trees (procedures, actions, checks, causes); load with `mycelium-authoring` | Writer, or drafter for drafts |
 | `mycelium-draft` | Research a domain in a codebase and propose it as a submitted draft for the internal reviewer | Drafter token |
-| `mycelium-draft-review` | Work the draft queue alongside the internal reviewer and recommend approve, reject, answer or correct | Real writer or admin |
+| `mycelium-draft-review` | Decide drafts against the product's code: approve, correct, reject, ask, or reopen ones the reviewer rejected | Real writer or admin |
 | `mycelium-agent-tasks` | Do the work an action set to External agent queues: write, review and plan documentation, label audiences, ingest, connect, discover aliases, review drafts | Real writer or admin |
 | `mycelium-documentation` | Have the server write, revise and plan documents from the knowledge base | Real writer or admin |
 | `mycelium-curation` | Read knowledge health, run the connect pass, consolidate duplicates, triage knowledge gaps | Reader to look; writer, admin or curator to fix |

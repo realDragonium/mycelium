@@ -124,6 +124,22 @@ CREATE TABLE IF NOT EXISTS draft_applications (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS draft_application_active
 ON draft_applications (draft_id) WHERE status IN ('claimed', 'committed');
+
+-- Decisions a person or an agent made on a draft, in order. Reopening clears
+-- the draft's own decision fields, so this is where earlier ones stay.
+CREATE TABLE IF NOT EXISTS draft_decisions (
+    id               TEXT PRIMARY KEY,
+    draft_id         TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+    action           TEXT NOT NULL CHECK (
+        action IN ('approved', 'rejected', 'reopened', 'needs_context')
+    ),
+    decided_by       TEXT NOT NULL,
+    decided_at       TEXT NOT NULL,
+    reason           TEXT,
+    evidence_json    TEXT NOT NULL,
+    corrections_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS draft_decisions_draft ON draft_decisions (draft_id, decided_at);
 """
 
 DRAFTS_SOURCE_INDEX = (
@@ -369,9 +385,16 @@ def list_drafts(conn: sqlite3.Connection, status: str = "all") -> list[sqlite3.R
 _ASSESSMENT_SUMMARY = ("run_id", "status", "label", "application", "draft_revision")
 
 
-def list_draft_summaries(conn: sqlite3.Connection, status: str = "all") -> list[dict]:
+def list_draft_summaries(
+    conn: sqlite3.Connection,
+    status: str = "all",
+    *,
+    label: str | None = None,
+    application: str | None = None,
+) -> list[dict]:
     """`list_drafts`, serialized as `serialize_draft` would but without review
-    evidence and with only a summary of each review assessment."""
+    evidence and with only a summary of each review assessment, optionally
+    only those whose latest assessment has `label` or `application`."""
     paths = ", ".join(f"'$.{key}'" for key in _ASSESSMENT_SUMMARY)
     rows = conn.execute(
         f"""
@@ -398,6 +421,12 @@ def list_draft_summaries(conn: sqlite3.Connection, status: str = "all") -> list[
                 "application": application,
                 "stale": revision != row["revision"],
             }
+        if label is not None and (assessment is None or assessment["label"] != label):
+            continue
+        if application is not None and (
+            assessment is None or assessment["application"] != application
+        ):
+            continue
         summaries.append({**_draft_fields(row), "review_assessment": assessment})
     return summaries
 
@@ -780,6 +809,84 @@ def set_decision(
     )
 
 
+DecisionAction = Literal["approved", "rejected", "reopened", "needs_context"]
+
+
+class DecisionNote(TypedDict):
+    """Who decided a draft, why, and on what evidence, for its decision log."""
+
+    by: str
+    reason: str | None
+    evidence: list[Evidence]
+    #: The corrections made before an approval, as recorded.
+    corrections: list[dict[str, object]]
+
+
+def decision_note(
+    by: str,
+    reason: str | None = None,
+    evidence: Sequence[Evidence] = (),
+    corrections: Sequence[BaseModel] = (),
+) -> DecisionNote:
+    return {
+        "by": by,
+        "reason": reason,
+        "evidence": list(evidence),
+        "corrections": [c.model_dump(mode="json") for c in corrections],
+    }
+
+
+def record_decision(
+    conn: sqlite3.Connection,
+    draft_id: str,
+    action: DecisionAction,
+    note: DecisionNote,
+) -> None:
+    conn.execute(
+        "INSERT INTO draft_decisions (id, draft_id, action, decided_by, decided_at, "
+        "reason, evidence_json, corrections_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dec_" + _uuid.uuid4().hex[:12],
+            draft_id,
+            action,
+            note["by"],
+            _now(),
+            note["reason"],
+            _json.dumps(
+                [e.model_dump(mode="json", exclude_none=True) for e in note["evidence"]]
+            ),
+            _json.dumps(note["corrections"]),
+        ),
+    )
+
+
+def list_decisions(conn: sqlite3.Connection, draft_id: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM draft_decisions WHERE draft_id = ? ORDER BY decided_at, rowid",
+        (draft_id,),
+    ).fetchall()
+    return [
+        {
+            "action": row["action"],
+            "decided_by": row["decided_by"],
+            "decided_at": row["decided_at"],
+            "reason": row["reason"],
+            "evidence": _json.loads(row["evidence_json"]),
+            "corrections": _json.loads(row["corrections_json"]),
+        }
+        for row in rows
+    ]
+
+
+def reopen(conn: sqlite3.Connection, draft_id: str) -> None:
+    """Return a rejected draft to `submitted`."""
+    conn.execute(
+        "UPDATE drafts SET decided_at = NULL, decided_by = NULL, decision = NULL "
+        "WHERE id = ? AND decision = 'rejected'",
+        (draft_id,),
+    )
+
+
 def create_review(
     conn: sqlite3.Connection,
     *,
@@ -932,7 +1039,12 @@ def serialize_review(row: sqlite3.Row) -> DraftReviewRecord:
     }
 
 
-def serialize_draft(row: sqlite3.Row, *, ops: list[sqlite3.Row] | None = None) -> dict:
+def serialize_draft(
+    row: sqlite3.Row,
+    *,
+    ops: list[sqlite3.Row] | None = None,
+    decisions: list[dict] | None = None,
+) -> dict:
     from . import draft_review_store
 
     out = {
@@ -944,6 +1056,8 @@ def serialize_draft(row: sqlite3.Row, *, ops: list[sqlite3.Row] | None = None) -
     }
     if ops is not None:
         out["ops"] = [serialize_op(o) for o in ops]
+    if decisions is not None:
+        out["decisions"] = decisions
     return out
 
 

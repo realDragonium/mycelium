@@ -141,7 +141,11 @@ sends it to review; nothing is written live.
 any other statement is refused.
 
 **`draft_review`.** You are the reviewer of the draft in `brief.input`, and
-never of one you created. `brief.instructions` is the internal reviewer's
+never of one you created. This task exists only while Draft review is set to
+External agent, and your verdict counts as the server reviewer's under the
+review mode. To decide drafts yourself against the product's code, under any
+setting, including ones the reviewer rejected or held, use the
+`mycelium-draft-review` skill (`review_draft`, `reopen_draft`). `brief.instructions` is the internal reviewer's
 contract; follow it. Trust the producer on what the product does and judge
 how the draft fits the existing knowledge the input supplies: duplicates,
 contradictions, link type and direction, missing links to live neighbours,

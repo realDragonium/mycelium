@@ -22,6 +22,7 @@ from typing import Any, NotRequired, TypedDict
 from pydantic import JsonValue
 
 from .. import auth, embed, link_authoring, media, store, timestamps
+from ..drafts_store import DecisionNote
 from .draft_review import _draft_operation_findings, _review_knowledge_preconditions
 from .drafts import _identified_principal
 from .indexes import _persisted_index_write, _restore_index_snapshots
@@ -468,14 +469,19 @@ def substrate_application_result(
     return replay
 
 
-def approve_draft(draft_id: str, *, decided_by: str) -> DraftReplay:
+def approve_draft(
+    draft_id: str, *, decided_by: str, note: DecisionNote | None = None
+) -> DraftReplay:
     """Record a curator's acceptance and apply it with durable replay recovery.
 
     The caller enforces the real curator role. Manual acceptance permits open
     drafts and operation findings, independently of automated review settings.
+    `note` is what the draft's decision log records; by default only who
+    decided.
     """
     from .. import drafts_store
 
+    note = note or drafts_store.decision_note(decided_by)
     conn = _drafts_db()
     embed_draft_ahead(draft_id)
     with store.write_lock():
@@ -502,7 +508,7 @@ def approve_draft(draft_id: str, *, decided_by: str) -> DraftReplay:
                     conn,
                     draft_id=draft_id,
                     outcome="accepted",
-                    rationale="Approved by hand.",
+                    rationale=note["reason"] or "Approved by hand.",
                     draft_revision=int(draft["revision"]),
                     preconditions=[],
                     unresolved_questions=[],
@@ -521,6 +527,7 @@ def approve_draft(draft_id: str, *, decided_by: str) -> DraftReplay:
             review_id,
             decided_by=decided_by,
             strict=False,
+            note=note,
         )
     return {
         "applied": result["applied"],
@@ -600,8 +607,10 @@ def _apply_claimed_draft(
     *,
     decided_by: str,
     strict: bool,
+    note: DecisionNote | None = None,
 ) -> DraftReplay:
-    """Replay or recover a durable claim while the caller holds the write lock."""
+    """Replay or recover a durable claim while the caller holds the write lock.
+    A `note` is logged as the draft's decision when it is finalized."""
     from .. import drafts_store
 
     conn = _drafts_db()
@@ -646,6 +655,8 @@ def _apply_claimed_draft(
                 by=decided_by,
                 application_id=application_id,
             )
+            if note is not None:
+                drafts_store.record_decision(conn, draft_id, "approved", note)
     except BaseException as exc:
         with store.transaction(conn):
             drafts_store.note_application_failure(

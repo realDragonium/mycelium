@@ -15,6 +15,12 @@ Content decisions (kinds, phrasing, link types, direction, `when`) follow
 `mycelium-authoring` §5 and §6. This skill adds the queue, the evidence and
 the decision rules for an item.
 
+This skill proposes; it does not decide drafts. Deciding submitted drafts
+against the code (approving, correcting, rejecting, reopening ones the
+reviewer rejected) needs a writer or admin token and the
+`mycelium-draft-review` skill, and never covers the drafts this job
+created.
+
 ## Connect
 
 Use a token with the **drafter** role (**Settings → Account & tokens**),

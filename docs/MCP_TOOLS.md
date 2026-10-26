@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 55 of its 93 registered tools over MCP. Every
+question. Mycelium therefore advertises 57 of its 95 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -13,20 +13,20 @@ that set, and the registered tools in agreement.
 Role filtering still applies: `tools/list` shows a caller only the tools their role
 can invoke. The minimum role is reader: a reader sees 22 tools. A drafter sees 43
 because their writes are queued on a draft, but they do not see `list_drafts`,
-`request_documentation`, `revise_document`, `request_documentation_plan`,
+`review_draft`, `reopen_draft`, `request_documentation`, `revise_document`, `request_documentation_plan`,
 `deliver_document`, `save_writing_profile` or the tools that claim and do
-agent tasks. A writer sees 50 and does not see the admin-only
+agent tasks. A writer sees 52 and does not see the admin-only
 `delete_statement`, `merge_statements`, `merge_entities`,
 `retire_writing_profile` or `restore_writing_profile`. An admin sees all
-55. While Ask is set to External agent, `ask` is listed to no one, so each
+57. While Ask is set to External agent, `ask` is listed to no one, so each
 count is one lower.
 
 ## Over MCP
 
-MCP covers the read path, statement and entity authoring, drafts, writing
-profiles, and the model-backed entry points a client cannot reproduce itself. Approval, reviewed
-application and the reviewer's own records stay off MCP: approval is the operator's
-decision, and the rest runs in-process.
+MCP covers the read path, statement and entity authoring, drafts and deciding
+them, writing profiles, and the model-backed entry points a client cannot
+reproduce itself. Reviewed application and the reviewer's own records stay off
+MCP: they run in-process.
 
 | Tool | Why it is on MCP |
 | --- | --- |
@@ -60,7 +60,9 @@ decision, and the rest runs in-process.
 | `get_draft` | Inspects a draft and its review assessment. |
 | `discard_draft_op` | Lets the author correct their open draft. |
 | `list_my_drafts` | Lists the caller's own drafts. |
-| `list_drafts` | Lists the review queue across creators. An AI curator lists and investigates drafts, and a person approves or rejects them in the UI. This tool is the agent's side of that split, and only real writers and admins see it. |
+| `list_drafts` | Lists the review queue across creators, with each draft's latest review summary, filtered by status, creator, review label or what the review did (for example the drafts the automatic reviewer rejected, or the corrections it held for a curator). An agent finds the drafts it will check against the code here. Only real writers and admins see it. |
+| `review_draft` | Decides a submitted draft another principal created, as a curator does in the UI: approve, approve with corrections in the reviewer's precise shape, reject with a reason, or ask a person a question. An agent with the product's code can check each operation, which the server's reviewer cannot, so it needs to decide on what it found under any review setting. Real writers and admins only; see [Deciding drafts](DRAFT_REVIEW.md#deciding-drafts). |
+| `reopen_draft` | Returns a rejected draft, the automatic reviewer's rejections included, to submitted so it can be decided again. Without it a wrong rejection is final. Real writers and admins only. |
 | `set_draft_review_evidence` | Lets the draft creator give the reviewer evidence that only the creator has. |
 | `set_operation_evidence` | Lets the draft creator back one operation with what they checked in the product: code, UI or doc location, an excerpt and the claim it shows. The reviewer accepts a link a concrete code excerpt supports, and judges one without evidence more strictly. |
 | `list_media` | Lists the screenshots and recordings attached to a statement or concept, with alt text, caption and the URL of the bytes. An agent checks what is already illustrated before uploading. |
@@ -143,8 +145,8 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | `list_documentation_destinations` | Deployment configuration. |
 | `attach_draft_source` | Records CI pull request provenance. Pipeline steps call it over HTTP. |
 | `find_my_draft_by_source` | Looks up a draft by CI provenance. Pipeline steps call it over HTTP. |
-| `revise_draft_operation` | Curator correction. Internal review calls it in-process. |
-| `strike_draft_operation` | Curator correction. Internal review calls it in-process. |
+| `revise_draft_operation` | Curator correction. Internal review calls it in-process; over MCP, `review_draft` corrections change operations. |
+| `strike_draft_operation` | Curator correction. Internal review calls it in-process; over MCP, a `strike` correction in `review_draft` removes one. |
 | `request_draft_review` | Review control. The UI calls it through `POST /api/drafts/{id}/review`. |
 | `get_draft_review_run` | Review internals. `get_draft` already carries the latest assessment. |
 | `inspect_draft_review` | Review machinery. Internal review calls it in-process. |

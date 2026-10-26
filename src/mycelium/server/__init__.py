@@ -52,6 +52,7 @@ from .draft_application import (
     approve_draft,
     embed_draft_ahead,
 )
+from .draft_decisions import DraftDecision, reopen_draft, review_draft
 from .draft_review import (
     DraftCorrectionReceipt,
     DraftOperationFinding,
@@ -233,6 +234,8 @@ __all__ = [
     "create_media_upload",
     "list_my_drafts",
     "list_drafts",
+    "review_draft",
+    "reopen_draft",
     "get_draft",
     "attach_draft_source",
     "find_my_draft_by_source",
@@ -264,6 +267,7 @@ __all__ = [
     "DraftReviewRecord",
     "DraftReviewInspection",
     "DraftCorrectionReceipt",
+    "DraftDecision",
     "ReviewedApplicationReceipt",
     "DraftReplay",
     "DraftOpsRejectedError",

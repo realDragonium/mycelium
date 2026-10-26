@@ -265,6 +265,7 @@ _SECTIONS: tuple[_Section, ...] = (
             "draft_ops",
             "draft_reviews",
             "draft_applications",
+            "draft_decisions",
             "draft_review_runs",
             "ai_usage",
         ),

@@ -17,6 +17,8 @@ from pydantic import JsonValue, TypeAdapter
 from .. import auth as _auth
 from .. import drafts_store, media, store
 from ..auth import Principal as AuthPrincipal
+from ..draft_review_store import Application as AssessmentApplication
+from ..draft_review_store import Label as AssessmentLabel
 from .draft_queue import _require_draft_owner
 from .registry import tool
 from .runtime import _drafts_db
@@ -229,16 +231,25 @@ _DRAFT_STATUS_VALUES = (
 
 @tool(role="writer", real_role=True)
 def list_drafts(
-    status: str = "all", created_by: str | None = None
+    status: str = "all",
+    created_by: str | None = None,
+    label: AssessmentLabel | None = None,
+    application: AssessmentApplication | None = None,
 ) -> list[dict[str, Any]]:
     """List *every* draft across all creators, newest first (curators only).
 
     Unlike `list_my_drafts` (scoped to the caller), this returns the whole
     review queue so a curator can discover work awaiting review and then
     `get_draft(<id>)` to inspect the queued ops and review assessment. Each
-    entry carries an `op_count` and omits review evidence and assessment.
+    entry carries an `op_count` and a summary of the latest automatic review
+    (`run_id`, `status`, `label`, `application`, `stale`), not its evidence.
     Filter with `status`: all / open / submitted / approved / rejected /
-    withdrawn, and with `created_by`: one creator's principal id.
+    withdrawn; `created_by`: one creator's principal id; `label`: the
+    review's label (good / changes_suggested / reject / needs_context); and
+    `application`: what the review did (unapplied / applied / rejected /
+    needs_human / held). Drafts the automatic reviewer rejected are
+    `status="rejected", application="rejected"`; corrections held for a
+    curator are `status="submitted", application="held"`.
 
     Requires a real writer or admin role — same bar as approving or
     rejecting a draft. Drafters (whose writes get redirected into their own
@@ -263,10 +274,11 @@ def list_drafts(
     conn = _drafts_db()
     counts = drafts_store.count_ops_by_draft(conn)
     out = []
-    for d in drafts_store.list_draft_summaries(conn, status=status):
+    for d in drafts_store.list_draft_summaries(
+        conn, status=status, label=label, application=application
+    ):
         if created_by is not None and d["created_by"] != created_by:
             continue
-        del d["review_assessment"]
         d["op_count"] = counts.get(d["id"], 0)
         out.append(d)
     return out
@@ -281,14 +293,21 @@ def get_draft(draft_id: str) -> dict[str, Any]:
     HTTP `/api/drafts/<id>` response, plus `missing`: always present,
     empty when the draft resolved, and `[draft_id]` when no draft
     carries that id (an id that was never minted, or a draft already
-    applied and swept).
+    applied and swept). `decisions` lists, in order, who approved,
+    rejected, reopened or asked about the draft, with their reason and
+    evidence.
     """
     from .. import drafts_store
 
-    row, ops = drafts_store.get_draft_snapshot(_drafts_db(), draft_id)
+    conn = _drafts_db()
+    row, ops = drafts_store.get_draft_snapshot(conn, draft_id)
     if row is None:
         return {"id": draft_id, "missing": [draft_id]}
-    return {**drafts_store.serialize_draft(row, ops=ops), "missing": []}
+    decisions = drafts_store.list_decisions(conn, draft_id)
+    return {
+        **drafts_store.serialize_draft(row, ops=ops, decisions=decisions),
+        "missing": [],
+    }
 
 
 class DraftSourceInput(TypedDict):
