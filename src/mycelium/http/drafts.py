@@ -1,4 +1,5 @@
-"""Draft lifecycle over HTTP: list, inspect, edit, submit, approve, reject, withdraw.
+"""Draft lifecycle over HTTP: list, inspect, edit, submit, approve, reject,
+reopen, withdraw.
 
 Drafts are pending change sets submitted by drafters (or anyone passing an
 explicit `draft_id` to a write tool). Curators review and either approve
@@ -12,10 +13,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import server, store
+from ..draft_review_store import Application, Label
 from ..request_timing import TimedRoute
+from ..server import draft_decisions
 from ..server.draft_queue import _require_draft_owner
 from .access import _enforce_curator, _require_principal
 
@@ -23,9 +26,15 @@ router = APIRouter(route_class=TimedRoute)
 
 
 @router.get("/api/drafts")
-def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
+def list_drafts(
+    request: Request,
+    status: str | None = None,
+    label: Label | None = None,
+    application: Application | None = None,
+) -> dict[str, Any]:
     """List drafts, newest first. `status` filters to one of:
-    open / submitted / approved / rejected / withdrawn / all (default).
+    open / submitted / approved / rejected / withdrawn / all (default);
+    `label` and `application` to the latest review assessment's.
     """
     _require_principal(request)
     from .. import drafts_store
@@ -41,7 +50,9 @@ def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
     return {
         "drafts": [
             {**draft, "op_count": counts.get(draft["id"], 0)}
-            for draft in drafts_store.list_draft_summaries(conn, status=status)
+            for draft in drafts_store.list_draft_summaries(
+                conn, status=status, label=label, application=application
+            )
         ]
     }
 
@@ -55,7 +66,8 @@ def get_draft_detail(draft_id: str, request: Request) -> dict[str, Any]:
     row, ops = drafts_store.get_draft_snapshot(conn, draft_id)
     if row is None:
         raise HTTPException(status_code=404, detail="draft not found")
-    return {"draft": drafts_store.serialize_draft(row, ops=ops)}
+    decisions = drafts_store.list_decisions(conn, draft_id)
+    return {"draft": drafts_store.serialize_draft(row, ops=ops, decisions=decisions)}
 
 
 class DraftOpEditBody(BaseModel):
@@ -166,7 +178,9 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
     from .. import drafts_store
 
     try:
-        result = server.approve_draft(draft_id, decided_by=p.id)
+        result = server.approve_draft(
+            draft_id, decided_by=p.id, note=drafts_store.decision_note(p.id)
+        )
     except drafts_store.ActiveApplicationError as ex:
         raise HTTPException(status_code=409, detail=str(ex)) from ex
     except server.DraftOpsRejectedError as ex:
@@ -188,17 +202,29 @@ def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
     p = _enforce_curator(request)
     from .. import drafts_store
 
-    conn = server._drafts_db()
-    with store.transaction(conn):
-        row = drafts_store.get_draft(conn, draft_id)
-        if row is None:
-            raise HTTPException(status_code=404, detail="draft not found")
-        if drafts_store.status_for(row) not in ("open", "submitted"):
-            raise HTTPException(
-                status_code=400,
-                detail="only open or submitted drafts can be rejected",
-            )
-        drafts_store.set_decision(conn, draft_id, decision="rejected", by=p.id)
+    if drafts_store.get_draft(server._drafts_db(), draft_id) is None:
+        raise HTTPException(status_code=404, detail="draft not found")
+    draft_decisions.reject(draft_id, drafts_store.decision_note(p.id))
+    return {"ok": True}
+
+
+class DraftReopenBody(BaseModel):
+    reason: str = Field(min_length=1, max_length=draft_decisions.MAX_REASON)
+
+
+@router.post("/api/drafts/{draft_id}/reopen")
+def reopen_draft(
+    draft_id: str, body: DraftReopenBody, request: Request
+) -> dict[str, Any]:
+    """Return a rejected draft to submitted so it can be decided again."""
+    p = _enforce_curator(request, action="reopening a draft")
+    from .. import drafts_store
+
+    if drafts_store.get_draft(server._drafts_db(), draft_id) is None:
+        raise HTTPException(status_code=404, detail="draft not found")
+    draft_decisions.reopen(
+        draft_id, drafts_store.decision_note(p.id, reason=body.reason.strip())
+    )
     return {"ok": True}
 
 

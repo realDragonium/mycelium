@@ -52,6 +52,7 @@ from .draft_review_store import (
 )
 
 if TYPE_CHECKING:
+    from .server.draft_application import DraftReplay
     from .server.draft_review import (
         DraftReviewInspection,
         Operation,
@@ -1751,7 +1752,6 @@ def accept_corrections(
     """Apply the corrections a held review suggests, or a curator's edit of
     them, and approve the draft as that curator. Nothing is changed unless
     the corrected draft is free of operation findings."""
-    from . import server  # local import: server registers the review tools
 
     conn = drafts_store.connection()
     run = draft_review_store.latest(conn, draft_id)
@@ -1763,20 +1763,13 @@ def accept_corrections(
         raise ValueError("the draft changed after the review; run the review again")
     suggested = _precise(run.corrections)
     chosen = suggested if corrections is None else corrections
-    token = auth.current_principal.set(principal)
-    try:
-        with store.write_lock():
-            inspection = server.inspect_draft_review(draft_id)
-            if inspection["draft"].get("status") != "submitted":
-                raise ValueError("only submitted drafts can be approved this way")
-            _validate_corrections(chosen, inspection)
-            with store.transaction(conn):
-                _apply_corrections(draft_id, chosen)
-                _refuse_findings(server.inspect_draft_review(draft_id))
-            run.draft_revision = drafts_store.current_revision(conn, draft_id)
-            server.approve_draft(draft_id, decided_by=principal.id)
-    finally:
-        auth.current_principal.reset(token)
+    approve_corrected(
+        draft_id,
+        chosen,
+        principal,
+        drafts_store.decision_note(principal.id, corrections=chosen),
+    )
+    run.draft_revision = drafts_store.current_revision(conn, draft_id)
     run.application = "applied"
     run.detail = (
         "Approved by a curator with the reviewer's corrections."
@@ -1786,6 +1779,40 @@ def accept_corrections(
     )
     _save(run)
     return run
+
+
+def approve_corrected(
+    draft_id: str,
+    corrections: list[Correction],
+    principal: auth.Principal,
+    note: drafts_store.DecisionNote,
+) -> DraftReplay:
+    """Make `corrections`, validated as the reviewer's are, and approve the
+    corrected draft as `principal`. Nothing is changed unless the corrected
+    draft is free of operation findings."""
+    from . import server  # local import: server registers the review tools
+
+    conn = drafts_store.connection()
+    token = auth.current_principal.set(principal)
+    try:
+        with store.write_lock():
+            inspection = server.inspect_draft_review(draft_id)
+            if inspection["draft"].get("status") != "submitted":
+                raise ValueError("only submitted drafts can be approved this way")
+            _validate_corrections(corrections, inspection)
+            with store.transaction(conn):
+                _apply_corrections(draft_id, corrections)
+                _refuse_findings(server.inspect_draft_review(draft_id))
+            return server.approve_draft(draft_id, decided_by=principal.id, note=note)
+    finally:
+        auth.current_principal.reset(token)
+
+
+def newer_knowledge(draft_id: str) -> str | None:
+    """Why the draft would overwrite knowledge written after it, if it would."""
+    from . import server  # local import: server registers the review tools
+
+    return _stale(server.inspect_draft_review(draft_id))
 
 
 def _follow_up(

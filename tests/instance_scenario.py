@@ -296,6 +296,13 @@ def _drafts(data_dir: Path, ids: dict[str, str]) -> None:
             drafts_store.finish_application(
                 conn, application, status="committed", result={"applied": 1}
             )
+        if hasattr(drafts_store, "record_decision"):
+            drafts_store.record_decision(
+                conn,
+                draft,
+                "approved",
+                drafts_store.decision_note("reviewer", reason="Matches the code."),
+            )
         _review_run(conn, draft)
         _ai_usage(conn, draft)
         conn.commit()

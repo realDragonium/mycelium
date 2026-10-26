@@ -210,6 +210,8 @@ MCP_TOOLS = frozenset(
         "discard_draft_op",
         "list_my_drafts",
         "list_drafts",
+        "review_draft",
+        "reopen_draft",
         "set_draft_review_evidence",
         "set_operation_evidence",
         "report_knowledge_gap",

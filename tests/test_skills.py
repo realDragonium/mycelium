@@ -26,7 +26,13 @@ _SKILL_DIRS = sorted(p.parent for p in _SKILLS.glob("*/SKILL.md"))
 # Claude Code truncates description plus when_to_use at this length.
 _DESCRIPTION_LIMIT = 1536
 # Response fields that start with a tool's verb.
-_FIELDS = {"connect_error", "read_tools"}
+_FIELDS = {
+    "connect_error",
+    "read_tools",
+    "review_assessment",
+    "review_evidence",
+    "review_notes",
+}
 
 
 def _parameters() -> dict[str, set[str]]:
