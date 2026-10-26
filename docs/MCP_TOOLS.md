@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 82 of its 115 registered tools over MCP. Every
+question. Mycelium therefore advertises 84 of its 117 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -13,16 +13,17 @@ that set, and the registered tools in agreement.
 Role filtering still applies: `tools/list` shows a caller only the tools their role
 can invoke. The minimum role is reader: a reader sees 33 tools. A drafter sees 57
 because their writes are queued on a draft, but they do not see the tools that
-land live and so need a real writer: `list_drafts`, `request_draft_review`,
+land live and so need a real writer: `list_drafts`, `review_draft`,
+`reopen_draft`, `request_draft_review`,
 `answer_draft_review`, the
 documentation tools that start runs, edit, retry, plan, decide or deliver,
 `save_writing_profile`, `edit_prompt_text`, `edit_names`, `edit_media`,
 `curate_audiences`, `update_knowledge_gap`, the admin tools below, or the tools
-that claim and do agent tasks. A writer sees 74 and does not see the admin-only
+that claim and do agent tasks. A writer sees 76 and does not see the admin-only
 `delete_statement`, `merge_statements`, `merge_entities`,
 `retire_writing_profile`, `restore_writing_profile`, `manage_audiences`,
 `manage_draft_review_backlog` or `unblock_automation`. An admin sees all
-82. While Ask is set to External agent, `ask` is listed to no one, so each
+84. While Ask is set to External agent, `ask` is listed to no one, so each
 count is one lower.
 
 A grouped tool can hold an action a stricter role takes: `edit_names` merges
@@ -38,7 +39,7 @@ offers its action, or why it has none: the action is about operating the server
 (signing in, OAuth, users and tokens, provider and model choices, limits, the
 setup checklist, traces, the GitHub app connection), it is no action a person
 takes (browser pages and bootstraps, rendering a preview, the reviewer's
-in-process steps, CI provenance), or another branch is adding it.
+in-process steps, CI provenance).
 `tests/test_mcp_parity.py` walks the app's routes and fails on a route with
 none of these, so a new screen cannot leave agents out. The route and its tool
 call the same server function, so they share role rules, validation, revision

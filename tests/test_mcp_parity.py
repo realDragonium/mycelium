@@ -9,7 +9,6 @@ from mycelium import server
 from mycelium.http import _routes
 from mycelium.http.mcp_parity import (
     ROUTES,
-    Elsewhere,
     NotAnAction,
     ServerOperation,
     Tool,
@@ -57,11 +56,7 @@ def test_every_named_tool_is_advertised_and_every_exemption_says_why():
     unexplained = sorted(
         key
         for key, entry in ROUTES.items()
-        if (
-            isinstance(entry, ServerOperation | NotAnAction)
-            and not entry.reason.strip()
-        )
-        or (isinstance(entry, Elsewhere) and not (entry.branch and entry.action))
+        if isinstance(entry, ServerOperation | NotAnAction) and not entry.reason.strip()
     )
 
     assert (unadvertised, unexplained) == ([], [])

@@ -23,14 +23,6 @@ class Tool:
 
 
 @dataclass(frozen=True)
-class Elsewhere:
-    """An action another branch is giving agents."""
-
-    branch: str
-    action: str
-
-
-@dataclass(frozen=True)
 class ServerOperation:
     """About running the server, not the knowledge in it."""
 
@@ -44,9 +36,8 @@ class NotAnAction:
     reason: str
 
 
-Parity = Tool | Elsewhere | ServerOperation | NotAnAction
+Parity = Tool | ServerOperation | NotAnAction
 
-_DRAFT_DECISIONS = "feature/agent-draft-decisions"
 _SIGN_IN = ServerOperation("signing in: the browser session and its OIDC login")
 _OAUTH = ServerOperation("OAuth that MCP clients sign in with")
 _GITHUB = ServerOperation("the GitHub app connection")
@@ -274,31 +265,22 @@ ROUTES: dict[tuple[str, str], Parity] = {
         Tool("decide_documentation_plan")
     ),
     # --- drafts and their review ---------------------------------------------
-    # `list_drafts` is for real writers, while the route lists every draft to
-    # any caller; its filters and roles are that branch's.
-    ("GET", "/api/drafts"): Elsewhere(_DRAFT_DECISIONS, "list_drafts filters"),
+    # `list_drafts` lists the queue to real writers and admins; a reader or
+    # drafter lists their own drafts with `list_my_drafts`.
+    ("GET", "/api/drafts"): Tool("list_drafts"),
     ("GET", "/api/drafts/{draft_id}"): Tool("get_draft"),
-    ("PATCH", "/api/drafts/{draft_id}/ops/{seq}"): Elsewhere(
-        _DRAFT_DECISIONS, "editing a submitted draft's operations"
-    ),
-    ("DELETE", "/api/drafts/{draft_id}/ops/{seq}"): Elsewhere(
-        _DRAFT_DECISIONS,
-        "removing a submitted draft's operation (discard_draft_op covers the "
-        "creator's open draft)",
-    ),
+    # A curator edits a submitted draft's operations through the corrections
+    # of `review_draft`; the creator discards from an open one.
+    ("PATCH", "/api/drafts/{draft_id}/ops/{seq}"): Tool("review_draft"),
+    ("DELETE", "/api/drafts/{draft_id}/ops/{seq}"): Tool("review_draft"),
     ("POST", "/api/drafts/{draft_id}/submit"): Tool("submit_draft"),
-    ("POST", "/api/drafts/{draft_id}/approve"): Elsewhere(
-        _DRAFT_DECISIONS, "review_draft: approve"
-    ),
-    ("POST", "/api/drafts/{draft_id}/reject"): Elsewhere(
-        _DRAFT_DECISIONS, "review_draft: reject"
-    ),
+    ("POST", "/api/drafts/{draft_id}/approve"): Tool("review_draft"),
+    ("POST", "/api/drafts/{draft_id}/reject"): Tool("review_draft"),
+    ("POST", "/api/drafts/{draft_id}/reopen"): Tool("reopen_draft"),
     ("POST", "/api/drafts/{draft_id}/withdraw"): Tool("withdraw_draft"),
     ("POST", "/api/drafts/{draft_id}/review"): Tool("request_draft_review"),
     ("POST", "/api/drafts/{draft_id}/review/answer"): Tool("answer_draft_review"),
-    ("POST", "/api/drafts/{draft_id}/review/accept"): Elsewhere(
-        _DRAFT_DECISIONS, "review_draft: approve with corrections"
-    ),
+    ("POST", "/api/drafts/{draft_id}/review/accept"): Tool("review_draft"),
     ("GET", "/api/draft-review/backlog"): Tool("manage_draft_review_backlog"),
     ("POST", "/api/draft-review/backlog"): Tool("manage_draft_review_backlog"),
     ("POST", "/api/draft-review/backlog/pause"): Tool("manage_draft_review_backlog"),
@@ -351,12 +333,8 @@ ROUTES: dict[tuple[str, str], Parity] = {
     ("POST", "/find-my-draft-by-source"): NotAnAction(
         "CI pipeline provenance, looked up by pipeline steps over HTTP"
     ),
-    ("POST", "/revise-draft-operation"): Elsewhere(
-        _DRAFT_DECISIONS, "editing a submitted draft's operations"
-    ),
-    ("POST", "/strike-draft-operation"): Elsewhere(
-        _DRAFT_DECISIONS, "editing a submitted draft's operations"
-    ),
+    ("POST", "/revise-draft-operation"): Tool("review_draft"),
+    ("POST", "/strike-draft-operation"): Tool("review_draft"),
     ("POST", "/inspect-draft-review"): _REVIEWER,
     ("POST", "/append-draft-correction"): _REVIEWER,
     ("POST", "/record-draft-review"): _REVIEWER,

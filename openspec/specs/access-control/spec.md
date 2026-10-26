@@ -75,7 +75,7 @@ The HTTP tool routes and MCP tool calls SHALL apply the same role gate for each 
 
 #### Scenario: Listed tools per role
 - **WHEN** callers of each role send `tools/list` to `/mcp`
-- **THEN** a reader sees 33 tools, a drafter 57 (not the tools that land live and need a real writer, such as `list_drafts`, `request_documentation`, `edit_names` or `curate_audiences`), a writer 74 (not `delete_statement`, `merge_statements`, `merge_entities`, `retire_writing_profile`, `restore_writing_profile`, `manage_audiences`, `manage_draft_review_backlog` or `unblock_automation`) and an admin all 82 advertised tools
+- **THEN** a reader sees 33 tools, a drafter 57 (not the tools that land live and need a real writer, such as `list_drafts`, `review_draft`, `request_documentation`, `edit_names` or `curate_audiences`), a writer 76 (not `delete_statement`, `merge_statements`, `merge_entities`, `retire_writing_profile`, `restore_writing_profile`, `manage_audiences`, `manage_draft_review_backlog` or `unblock_automation`) and an admin all 84 advertised tools
 
 #### Scenario: Both MCP protocol revisions
 - **WHEN** a reader lists tools once with a 2026-07-28 request and once through a 2025-era session
