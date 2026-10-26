@@ -177,14 +177,15 @@ export const isFindMode = (value: string): value is FindMode => (FIND_MODES as r
 export interface FindRow {
   id: string; kind: string; text: string;
   // Semantic and survey rows carry a relevance score; grep is literal and
-  // reports how it matched and how often instead.
+  // reports how it matched and how often instead. A query that is a statement
+  // id matches it exactly in every mode: `via: 'id'`, no score.
   score: number | null;
   via: string | null;
   occurrences: number;
 }
 export interface EntityHit { id: string; name: string; matched_name: string; description: string; score: number | null }
 
-interface RawScored { id?: string; kind: string; text: string; score?: number | null }
+interface RawScored { id?: string; kind: string; text: string; score?: number | null; matched_via?: string }
 interface RawGrep { statements?: { id: string; kind: string; text: string; matched_via?: string }[] }
 
 export async function findStatements(mode: FindMode, query: string, signal?: AbortSignal): Promise<FindRow[]> {
@@ -199,16 +200,18 @@ export async function findStatements(mode: FindMode, query: string, signal?: Abo
       for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + needle.length)) n++;
       return { id: s.id, kind: s.kind, text: s.text, score: null, via: s.matched_via || null, occurrences: n };
     });
-    // Text hits first, alias-only hits after.
-    return rows.sort((a, b) => b.occurrences - a.occurrences);
+    // The id match first, then text hits, then alias-only hits.
+    return rows.sort((a, b) => Number(b.via === 'id') - Number(a.via === 'id') || b.occurrences - a.occurrences);
   }
   const body = mode === 'survey' ? { query: q, limit: 6, decompose: true } : { query: q, limit: 14 };
   const list = await postJSON<RawScored[]>('/search-statements', body, signal);
   return (Array.isArray(list) ? list : [])
     // Depth expansions come back unscored; Find shows direct hits only.
-    .filter((s): s is RawScored & { id: string; score: number } => !!s.id && typeof s.score === 'number')
-    .map(s => ({ id: s.id, kind: s.kind, text: s.text, score: s.score, via: null, occurrences: 0 }))
-    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    .filter((s): s is RawScored & { id: string } => !!s.id && (typeof s.score === 'number' || s.matched_via === 'id'))
+    .map((s): FindRow => s.matched_via === 'id'
+      ? { id: s.id, kind: s.kind, text: s.text, score: null, via: 'id', occurrences: 0 }
+      : { id: s.id, kind: s.kind, text: s.text, score: s.score ?? null, via: null, occurrences: 0 })
+    .sort((a, b) => (b.score ?? Infinity) - (a.score ?? Infinity));
 }
 
 export async function searchEntities(query: string, signal?: AbortSignal): Promise<EntityHit[]> {
