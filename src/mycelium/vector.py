@@ -71,25 +71,30 @@ class Index:
             self._index.resize_index(max(cap * 2, want + 1))
 
     def add(self, vector_id: int, vec: list[float]) -> None:
-        # `replace_deleted=True` is required because next_vector_id allocates
-        # MAX(vector_id) + 1 from statement_vector_ids, and merge_statements
-        # drops rows from that table — so after a merge the highest live id
-        # may be lower than slots hnswlib still has in `mark_deleted` state.
-        # A subsequent insert can therefore land on a slot hnswlib considers
-        # deleted; without replace_deleted it raises "Can't use addPoint to
-        # update deleted elements" mid-upsert, leaving the SQLite row written
-        # but the vector missing.
-        self._ensure_capacity(self._index.get_current_count() + 1)
+        """Store `vec` under `vector_id`, overwriting a live or deleted slot
+        that already carries the label."""
         arr = np.asarray(vec, dtype=np.float32).reshape(1, DIM)
-        self._index.add_items(
-            arr, np.array([vector_id], dtype=np.int64), replace_deleted=True
-        )
+        labels = np.array([vector_id], dtype=np.int64)
+        try:
+            self._index.unmark_deleted(vector_id)
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "not found" in msg:
+                # hnswlib's replace_deleted fills an arbitrary deleted slot
+                # without checking that the label is new, and drops whichever
+                # label that slot carried from its lookup. Given a label it
+                # already holds, that strands the label's own slot and can
+                # erase a live label, so reuse a vacant slot only here.
+                self._ensure_capacity(self._index.get_current_count() + 1)
+                self._index.add_items(arr, labels, replace_deleted=True)
+                return
+            if "not deleted" not in msg:
+                raise
+        self._index.add_items(arr, labels)
 
     def replace(self, vector_id: int, vec: list[float]) -> None:
-        """Replace the vector at `vector_id` with `vec`. A label the index
-        is missing (see `delete`) is added, so a text edit repairs the drift
-        instead of failing."""
-        self.delete(vector_id)
+        """Replace the vector at `vector_id` with `vec`, adding a label the
+        index is missing."""
         self.add(vector_id, vec)
 
     def delete(self, vector_id: int) -> None:

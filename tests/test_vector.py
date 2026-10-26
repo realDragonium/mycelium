@@ -43,6 +43,22 @@ def test_replace_adds_a_missing_label():
     assert idx.search(new_v, k=1)[0][0] == 999
 
 
+def test_reused_ids_keep_their_vectors():
+    # next_vector_id hands out MAX + 1 again once the highest ids are freed.
+    idx = vector.Index.empty()
+    idx.add(0, rand_vec(1))
+    idx.add(1, rand_vec(2))
+    idx.delete(0)
+    idx.delete(1)
+
+    idx.add(0, rand_vec(3))
+    idx.add(1, rand_vec(4))
+
+    assert idx.get_vector(0) is not None
+    assert idx.search(rand_vec(3), k=1)[0][0] == 0
+    assert idx.search(rand_vec(4), k=1)[0][0] == 1
+
+
 def test_save_and_load(tmp_path):
     path = tmp_path / "x.bin"
     idx = vector.Index.empty()

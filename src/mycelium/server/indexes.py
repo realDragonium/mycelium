@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 _REBUILD_BATCH = embed.OPENAI_BATCH
 _INVALID_IDENTITY = "<invalid index identity>"
+_EARLIER_FORMAT = "<an earlier index format>"
+#: Bumped when index files written by earlier code cannot be trusted, so each
+#: is rebuilt once. 2: `Index.add` could leave a vector id on a stale slot or
+#: on none.
+INDEX_FORMAT = 2
 
 
 def _try_embed(text: str) -> list[float] | None:
@@ -212,8 +217,7 @@ def load_or_rebuild(
 ) -> vector.Index:
     """Load a clean, compatible index or durably rebuild it from the substrate.
 
-    Fetch rebuild rows inside the substrate transaction. The optional load
-    hook runs before a missing legacy identity sidecar is written.
+    Fetch rebuild rows inside the substrate transaction.
     """
     configured_identity = embed.identity()
     dirty = _dirty_marker_path(path).exists()
@@ -222,8 +226,6 @@ def load_or_rebuild(
         index = vector.Index.load(path)
         if on_load is not None:
             on_load(index, path)
-        if not _meta_path(path).exists():
-            _write_index_identity(path, configured_identity)
         return index
 
     _log_index_rebuild_reason(
@@ -280,13 +282,15 @@ def _meta_path(index_path: Path) -> Path:
 def _read_index_identity(index_path: Path) -> str:
     path = _meta_path(index_path)
     if not path.exists():
-        return embed.LEGACY_IDENTITY
+        return _EARLIER_FORMAT
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return _INVALID_IDENTITY
     if not isinstance(payload, dict):
         return _INVALID_IDENTITY
+    if payload.get("format") != INDEX_FORMAT:
+        return _EARLIER_FORMAT
     identity = payload.get("embedder")
     return identity if isinstance(identity, str) else _INVALID_IDENTITY
 
@@ -298,7 +302,7 @@ def _write_index_identity(index_path: Path, identity: str) -> None:
     temp_path = Path(temp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as file:
-            json.dump({"embedder": identity}, file)
+            json.dump({"embedder": identity, "format": INDEX_FORMAT}, file)
             file.write("\n")
             file.flush()
             os.fsync(file.fileno())

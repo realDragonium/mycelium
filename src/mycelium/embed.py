@@ -34,7 +34,6 @@ class _Closable(Protocol):
     def close(self) -> None: ...
 
 
-LEGACY_IDENTITY = "ollama/nomic-embed-text/768"
 MAX_RETRIES = 2
 OPENAI_BATCH = 100
 QUERY_CACHE_SIZE = 2048
