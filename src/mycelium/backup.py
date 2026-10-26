@@ -881,7 +881,8 @@ def _index_matches(path: Path, vector_ids: set[int]) -> bool:
     from . import vector
 
     index = vector.Index.load(path)
-    if index.live_ids() == vector_ids:
+    live = {i for i in index.ids() if index.get_vector(i) is not None}
+    if live == vector_ids:
         return True
     logger.warning(
         "%s disagrees with the archived vector ids; the next start rebuilds it",

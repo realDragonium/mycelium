@@ -260,16 +260,6 @@ an index rebuild logs its progress:
 ... INFO mycelium.server.indexes: rebuilding statement vector index: 1200/6000 re-embedded (40s)
 ```
 
-An index that loads is checked against the database's vector mappings. A
-statement or name mapped to a vector the index lacks loses the mapping and
-waits for the background embedding worker, like a row saved during a
-provider outage. A vector that nothing maps is removed. Startup logs both
-counts and calls no provider for this:
-
-```
-... WARNING mycelium.server.indexes: statement vector index drift: 3 mapped id(s) without a vector (queued to re-embed), 1 vector(s) without a mapping (pruned)
-```
-
 Until startup finishes, `/api/server-info` answers `503` with the state
 (`starting`, `migrating`, `indexing`, or `failed` with the reason), browsers
 get a page that reloads itself, and every other request gets `503` with a
@@ -524,7 +514,7 @@ Everything an instance knows lives in `/var/lib/mycelium`:
 | `mycelium-prompts.db` | AI instructions and writing profiles with their history, audiences, model, review and product settings, GitHub connections |
 | `mycelium-media.db` | Screenshots and recordings, their labels and attachments ([Media](MEDIA.md)) |
 | `mycelium-ops.db` | Only on instances that predate its removal: tool-call telemetry that is no longer written or read, and not archived |
-| `mycelium.vec`, `mycelium-names.vec` | Vector indexes; rebuilt by re-embedding if missing, and reconciled with the database on every start |
+| `mycelium.vec`, `mycelium-names.vec` | Vector indexes; rebuilt by re-embedding if missing |
 | `entity-positions.json` | Entity layout cache; rebuilt if missing |
 | `ask_trace.jsonl`, `ingest_trace.jsonl`, `connect_trace.jsonl`, `traces/` | Run traces and profiling output, not data; not archived |
 | `.uv-cache/` | uv's package cache, not data |

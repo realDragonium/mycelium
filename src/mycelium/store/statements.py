@@ -210,21 +210,6 @@ def get_vector_ids(
     return vector_ids
 
 
-def mapped_vector_ids(conn: sqlite3.Connection) -> set[int]:
-    return {
-        int(row["vector_id"])
-        for row in conn.execute("SELECT vector_id FROM statement_vector_ids")
-    }
-
-
-def drop_vector_mappings(conn: sqlite3.Connection, vector_ids: Iterable[int]) -> None:
-    conn.execute(
-        "DELETE FROM statement_vector_ids "
-        "WHERE vector_id IN (SELECT value FROM json_each(?))",
-        (json.dumps(list(vector_ids)),),
-    )
-
-
 def get_statement_id_by_vector_id(
     conn: sqlite3.Connection, vector_id: int
 ) -> str | None:
@@ -270,23 +255,6 @@ def get_name_id_by_vector_id(conn: sqlite3.Connection, vector_id: int) -> str | 
 
 def delete_name_vector_mapping(conn: sqlite3.Connection, name_id: str) -> None:
     conn.execute("DELETE FROM name_vector_ids WHERE name_id = ?", (name_id,))
-
-
-def mapped_name_vector_ids(conn: sqlite3.Connection) -> set[int]:
-    return {
-        int(row["vector_id"])
-        for row in conn.execute("SELECT vector_id FROM name_vector_ids")
-    }
-
-
-def drop_name_vector_mappings(
-    conn: sqlite3.Connection, vector_ids: Iterable[int]
-) -> None:
-    conn.execute(
-        "DELETE FROM name_vector_ids "
-        "WHERE vector_id IN (SELECT value FROM json_each(?))",
-        (json.dumps(list(vector_ids)),),
-    )
 
 
 #: A row the embedding worker stopped retrying while it had its current text;
