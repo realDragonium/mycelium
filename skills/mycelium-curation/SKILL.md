@@ -11,14 +11,12 @@ are writes that follow the `mycelium-authoring` rules (or go through review
 with `mycelium-draft`). Report what you found before you change anything, and
 let the operator choose which fixes to run.
 
-Most steps here are HTTP routes on the same server, not MCP tools. Call them
-with the base URL and a bearer token
-(`-H "Authorization: Bearer $MYCELIUM_TOKEN"`). Without a token, each one is
-a screen under **Curate** in the web app; name the screen instead.
+Every step here is an MCP tool, and each is also a screen under **Curate** in
+the web app, which does the same with the same rules.
 
 ## Knowledge health
 
-`GET /api/knowledge-health` returns the counts (also **Curate → Knowledge
+`get_knowledge_health()` returns the counts (also **Curate → Knowledge
 health**, `#/health`):
 
 | List | Means | Usual fix |
@@ -33,12 +31,17 @@ The counts also cover open gaps, out-of-date documents and pending drafts;
 those have their own queues (gaps below, `mycelium-documentation`,
 `mycelium-draft-review`).
 
-Page a list with `GET /api/knowledge-health/statements/{isolated|unmentioned|unlabelled}`
-or `/api/knowledge-health/entities/{undescribed|unused}`, passing `after` (the
-last id you saw) and `limit` (at most 200). Statement lists mark statements
+Page a list with `get_knowledge_health(which=...)` (`isolated`,
+`unmentioned`, `unlabelled`, `undescribed` or `unused`), passing `after` (the
+`next_after` you got) and `limit` (at most 200). Statement lists mark statements
 an undecided draft already touches and when the connect pass last looked at
-them (`settled_at`); `to_connect=true` leaves out both, so you do not propose
+them (`settled_at`); `to_connect=True` leaves out both, so you do not propose
 the same fix twice.
+
+`stopped` lists automatic work that failed too often and waits for an admin:
+`unblock_automation` with `{"action": "retry_stopped", "kind", "item_id"}`
+retries one after its cause is fixed, and `{"action": "free_claims", "kind",
+"claimed_by"}` frees the curation claims of an agent that left. Admin only.
 
 A count is not a defect list. An isolated statement can be a fine fact that
 nothing else needs yet; an unmentioned statement can name a concept nobody
@@ -58,9 +61,9 @@ or deletes a statement, and it prefers no link to a doubtful one. A statement
 it finds badly phrased gets no links; the server opens a knowledge gap on it
 asking for a rephrase instead.
 
-- `POST /connect-statements` with `{"statement_ids": [...]}`, or **Connect
-  next N** on the Knowledge health screen. Needs a writer or drafter. Take
-  the ids from a list with `to_connect=true`: those are the statements the
+- `connect_statements(statement_ids)`, or **Connect next N** on the
+  Knowledge health screen. Needs a writer or drafter. Take the ids from a
+  list with `to_connect=True`: those are the statements the
   pass has not looked at since they or their neighbours last changed.
 - `connect` in the health response gives the batch size, token cap and
   model; `connect_error` says why the pass is unavailable (no credentials, a
@@ -83,13 +86,14 @@ really relate: it claims the same lists as leased work with
 `claim_curation_work`, proposes through a draft with code evidence on each
 operation, and releases each item with its outcome. Use
 `mycelium-code-curation` for that work. Items an agent holds or has settled
-are left out of `to_connect=true`, and Knowledge health shows who holds what
+are left out of `to_connect=True`, and Knowledge health shows who holds what
 and the outcomes.
 
 ## Duplicates
 
-**Statements.** `POST /find-duplicates` with `{"threshold": 0.92, "limit":
-50}` returns pairs `{a_id, a_text, b_id, b_text, score}`. At 0.92 a pair is
+**Statements.** `POST /find-duplicates` (an HTTP route; set
+`-H "Authorization: Bearer $MYCELIUM_TOKEN"`) with `{"threshold": 0.92,
+"limit": 50}` returns pairs `{a_id, a_text, b_id, b_text, score}`. At 0.92 a pair is
 almost always the same fact; at 0.85 it includes related facts that may
 deserve a link instead. For each pair, read both with `get_statements` and
 decide:
@@ -101,8 +105,7 @@ decide:
 - **Different facts worded alike**: reword one so the difference is in the
   text (`patch_statement`).
 
-**Concepts.** `POST /find-entity-duplicates` with `{"threshold": 0.75}`
-returns `candidates`: pairs `{a_entity_id, b_entity_id, score, matches}`,
+**Concepts.** `find_entity_duplicates(threshold=0.75)` returns `candidates`: pairs `{a_entity_id, b_entity_id, score, matches}`,
 where `matches` says which names matched and how (the **Names & aliases**
 workspace, `#/names`, shows the same list). Read both with `get_entity`. For
 each pair:
@@ -110,9 +113,9 @@ each pair:
 - **Same concept**: `merge_entities(from_entity_id, into_entity_id)` moves
   every name to the target, so statements keep their mentions. Write the
   target's description to cover both first. Admin only.
-- **Different concepts**: `POST /api/names-workspace/duplicates/dismiss` with
-  `{"a_entity_id", "b_entity_id"}` so the pair stops coming back. A
-  curator action.
+- **Different concepts**: `edit_names` with `{"action": "dismiss_duplicate",
+  "a_entity_id", "b_entity_id"}` so the pair stops coming back. Needs a real
+  writer.
 
 Merges cannot be undone. List the merges you intend with both sides' text
 and get the operator's go before running them.
@@ -131,7 +134,7 @@ Gaps are facts someone needed and did not find: reported by readers and
 agents (`report_knowledge_gap`), by Ask, by documentation runs and by the
 draft reviewer's questions.
 
-1. `GET /api/knowledge-gaps?status=open` (also **Curate → Knowledge gaps**,
+1. `list_knowledge_gaps(status="open")` (also **Curate → Knowledge gaps**,
    `#/gaps`). Each gap may name the statement, draft or document it
    concerns.
 2. Group them: the same missing fact reported several times, gaps a pending
@@ -142,9 +145,8 @@ draft reviewer's questions.
 3. For each distinct fact, find the answer in the product code or docs, and
    add it with `mycelium-authoring` or propose it with `mycelium-draft`.
    Applying a draft resolves the gaps reported about it.
-4. Close the rest with `PATCH /api/knowledge-gaps/{gap_id}` and
-   `{"action": "resolve"}` (answered), `"dismiss"` (not a real gap, or out of
-   scope) or `"reopen"`. Needs a real writer or admin. An agent working the
+4. Close the rest with `update_knowledge_gap(gap_id, action)`: `resolve`
+   (answered), `dismiss` (not a real gap, or out of scope) or `reopen`. Needs a real writer or admin. An agent working the
    curation queue closes a gap it claimed by releasing it as `resolved` (with
    the applied draft) or `not_applicable` (with a reason) instead; the gap
    records the agent and the reason.

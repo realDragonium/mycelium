@@ -56,7 +56,7 @@ change an existing one, revise it.
 ## Write a new document
 
 1. Look for an existing document on the topic:
-   `GET /list-generated-documents`. If one exists, revise it instead.
+   `list_documentation(kind="documents")`. If one exists, revise it instead.
 2. Write the prompt: the topic, who reads it and what they need to do or
    understand. Do not paste guidance or templates; the profile has them.
 3. `request_documentation(prompt=…, guideline_set=…, document_type=…,
@@ -90,10 +90,9 @@ the run. Name them so the operator can fill them in the knowledge base (the
 `retryable` on the run says whether it can start again as it was: it wrote
 nothing and was not a manual edit.
 
-- **Retry**: `POST /api/documentation/runs/{run_id}/retry` with
-  `{"with_review_notes": false}` starts the same request again. Use it after a
+- **Retry**: `retry_documentation(run_id=…)` starts the same request again. Use it after a
   failure that has gone away (a provider error, a limit since raised).
-- **Retry with notes**: `{"with_review_notes": true}` briefs the new writer
+- **Retry with notes**: `with_review_notes=True` briefs the new writer
   with the review's findings. Use it when the review refused the document for
   something the writer can fix. The notes go to the writer only; the next
   review judges the unchanged request. The new run lists them in
@@ -134,8 +133,7 @@ Relay the choice to the operator: keep the GitHub edits with
 The planner proposes documents for one profile's audience; nothing is
 written until an item is approved (`docs/DOCUMENTATION_PLANNING.md`).
 
-1. `get_documentation_plan(guideline_set)` over MCP (or
-   `GET /api/documentation/plans/{guideline_set}`) shows the latest plan:
+1. `get_documentation_plan(guideline_set)` shows the latest plan:
    `items` (each `create` or `update`, with title, type, concept, rationale,
    priority and the statements it would draw on), `stale` (out-of-date
    documents), `coverage` (concepts with many visible statements and no
@@ -144,8 +142,7 @@ written until an item is approved (`docs/DOCUMENTATION_PLANNING.md`).
    `replan_hint` when enough new knowledge became visible. `recovery_note`,
    an item's `given_up`, `start_error` and `review.failures` say what failed AI work
    was retried or given up, and why.
-2. To plan again, call `request_documentation_plan(guideline_set)` over MCP
-   (or `POST /api/documentation/plans/{guideline_set}`): one model call (up
+2. To plan again, call `request_documentation_plan(guideline_set)`: one model call (up
    to the planning-calls limit for a large backlog), or a
    `documentation_planning` task per call for an agent while planning is set
    to External agent. Each plan is offered a batch of the uncovered statements and
@@ -159,25 +156,25 @@ written until an item is approved (`docs/DOCUMENTATION_PLANNING.md`).
    item then carries `review` with the decision and reason, and approved
    ones start within the limits. Do not approve or dismiss around it unless
    the operator asks.
-4. Approve the chosen ones with `POST /api/documentation/plan-items/approve`
-   and `{"item_ids": […]}`, at most `approve_batch` at a time; each result
-   carries its run or the reason it could not start. Follow the runs as
-   above. `POST /api/documentation/plan-items/{item_id}/retry` (same body as
-   a run retry) restarts an item whose run wrote nothing;
-   `POST /api/documentation/plan-items/{item_id}/dismiss` drops a proposal so
-   later plans do not offer it again, and
-   `POST /api/documentation/plans/{guideline_set}/uncovered/{statement_id}/dismiss`
-   stops a statement the profile should never document counting as
-   uncovered; `…/uncovered/{statement_id}/restore` undoes that (the plan's
-   `dismissed_uncovered` lists them). Dismiss or restore only on the
-   operator's word.
+4. Approve the chosen ones with `decide_documentation_plan` and
+   `{"action": "approve", "item_ids": […]}`, at most `approve_batch` at a
+   time; each result carries its run or the reason it could not start.
+   Follow the runs as above. `retry_documentation(item_id=…)` restarts an
+   item whose run wrote nothing; `{"action": "dismiss_item", "item_id"}`
+   drops a proposal so later plans do not offer it again,
+   `{"action": "dismiss_uncovered", "guideline_set", "statement_id"}` stops a
+   statement the profile should never document counting as uncovered,
+   `"restore_uncovered"` undoes that (the plan's `dismissed_uncovered` lists
+   them), and `{"action": "dismiss_stale", "guideline_set", "document_id",
+   "revision"}` says an out-of-date document needs no update. Dismiss or
+   restore only on the operator's word.
 
 ## Maintenance
 
 Each profile has a maintenance policy: `manual` (out-of-date documents wait
 for a revision), `propose` (they become update items in the plan) or
 `auto-revise` (the server revises them itself, after a quiet period and up to
-a daily cap). `GET /api/documentation/maintenance` lists what it revised and
+a daily cap). `list_documentation(kind="maintenance")` lists what it revised and
 what waits on a person: a proposal to approve, a pull request to merge, a
 document still out of date. Report those; revise the ones the operator asks
 for.
