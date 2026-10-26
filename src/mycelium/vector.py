@@ -86,12 +86,11 @@ class Index:
         )
 
     def replace(self, vector_id: int, vec: list[float]) -> None:
-        """Replace the vector at `vector_id` with `vec`."""
-        self._index.mark_deleted(vector_id)
-        arr = np.asarray(vec, dtype=np.float32).reshape(1, DIM)
-        self._index.add_items(
-            arr, np.array([vector_id], dtype=np.int64), replace_deleted=True
-        )
+        """Replace the vector at `vector_id` with `vec`. A label the index
+        is missing (see `delete`) is added, so a text edit repairs the drift
+        instead of failing."""
+        self.delete(vector_id)
+        self.add(vector_id, vec)
 
     def delete(self, vector_id: int) -> None:
         """Mark the vector at `vector_id` deleted. The slot stays

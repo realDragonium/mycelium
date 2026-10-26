@@ -33,6 +33,16 @@ def test_replace_then_search(tmp_path):
     assert hits[0][0] == 0
 
 
+def test_replace_adds_a_missing_label():
+    idx = vector.Index.empty()
+    idx.add(0, rand_vec(1))
+
+    new_v = rand_vec(99)
+    idx.replace(999, new_v)
+
+    assert idx.search(new_v, k=1)[0][0] == 999
+
+
 def test_save_and_load(tmp_path):
     path = tmp_path / "x.bin"
     idx = vector.Index.empty()
