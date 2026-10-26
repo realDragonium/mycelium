@@ -135,7 +135,7 @@ function ServerBanners() {
   const { state, reload } = useAsync(getServerInfo);
   useRefreshWhileVisible(reload, 60_000);
   const info = dataOf(state);
-  if (!info) return null;
+  if (info?.state !== 'ready') return null;
   return <>
     {info.quarantine && <div className="restore-banner notice warn" role="status">
       <I.warn width="16" height="16" />

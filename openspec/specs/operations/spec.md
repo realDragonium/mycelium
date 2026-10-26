@@ -24,18 +24,22 @@ The system SHALL serialise writes only within one process, so an operator MUST r
 - **THEN** both start, and their writes are not serialised against each other
 
 ### Requirement: Listening before startup finishes
-The system SHALL start listening before migrations and index loading finish, run startup in the background, and report its state as `starting`, `migrating`, `indexing`, `ready` or `failed`.
+The system SHALL start listening before migrations and index loading finish, run startup in the background, and report its state as `starting`, `migrating`, `indexing`, `ready` or `failed`. `/api/server-info` SHALL answer 200 in every state but `failed`, which answers 503, so a health check does not restart a long migration or index rebuild.
 
 #### Scenario: Health check during a slow start
 - **WHEN** a load balancer probes `/api/server-info` while migrations run
-- **THEN** it receives 503 with `state` `migrating`, a `detail` naming the step under way and `elapsed_s`
+- **THEN** it receives 200 with `state` `migrating`, a `detail` naming the step under way and `elapsed_s`
 
 #### Scenario: Ready
 - **WHEN** startup has finished
 - **THEN** `/api/server-info` answers 200 with `"state": "ready"`
 
+#### Scenario: Failed start
+- **WHEN** a load balancer probes `/api/server-info` after startup failed
+- **THEN** it receives 503 with `state` `failed` and the reason
+
 ### Requirement: Startup gate
-The system SHALL, until startup is ready, answer every HTTP request itself before any layer reads a database: `/api/server-info` and API calls with 503, a `Retry-After: 5` header and the startup state, and browser navigations with a 503 page that reloads itself every 5 seconds.
+The system SHALL, until startup is ready, answer every HTTP request itself before any layer reads a database: `/api/server-info` with the startup state, API calls with 503, a `Retry-After: 5` header and the startup state, and browser navigations with a 503 page that reloads itself every 5 seconds.
 
 #### Scenario: API call while starting
 - **WHEN** a client calls `POST /search-statements` while the indexes load
@@ -135,7 +139,7 @@ The system SHALL time every HTTP request and each tracked background job, splitt
 - **THEN** the request is recorded as `MCP tools/call ask`
 
 ### Requirement: Slow request log
-The system SHALL log one `MYCELIUM_SLOW_REQUEST` line with the route and the time per phase for each request or tracked background job that takes at least `MYCELIUM_SLOW_REQUEST_MS` milliseconds (default 2000), fails, or whose client disconnects before the response ends; the `503` answers given while the server is still starting MUST NOT be logged or counted.
+The system SHALL log one `MYCELIUM_SLOW_REQUEST` line with the route and the time per phase for each request or tracked background job that takes at least `MYCELIUM_SLOW_REQUEST_MS` milliseconds (default 2000), fails, or whose client disconnects before the response ends; the answers the startup gate gives while the server is still starting MUST NOT be logged or counted.
 
 #### Scenario: Slow search
 - **WHEN** a search request takes 3 seconds with the default threshold
@@ -146,7 +150,7 @@ The system SHALL log one `MYCELIUM_SLOW_REQUEST` line with the route and the tim
 - **THEN** the request is logged with `disconnected=True` and not counted as failed
 
 #### Scenario: Health check while starting
-- **WHEN** a health check polls `/api/server-info` and gets `503` because startup has not finished
+- **WHEN** a health check polls `/api/server-info` before startup has finished
 - **THEN** no `MYCELIUM_SLOW_REQUEST` line is logged
 
 ### Requirement: Performance summary

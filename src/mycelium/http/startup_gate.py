@@ -6,6 +6,11 @@ nothing listening. Until startup is ready this gate answers every request
 itself, before any middleware that reads a database: `/api/server-info` with
 the startup state, a browser navigation with a page that reloads itself, and
 everything else with a 503.
+
+`/api/server-info` answers 200 while startup is still running and 503 only
+once it failed. It is the load balancer's liveness check, and a one-off index
+rebuild can outlast any grace period; a 503 there gets the task killed and the
+rebuild restarted from scratch.
 """
 
 from __future__ import annotations
@@ -49,7 +54,8 @@ def _starting(request: Request, current: startup.Startup) -> Response:
         "elapsed_s": current.elapsed_s,
     }
     if request.url.path == "/api/server-info":
-        return JSONResponse(status_code=503, content=state, headers=headers)
+        status_code = 503 if current.state == "failed" else 200
+        return JSONResponse(status_code=status_code, content=state, headers=headers)
     if _is_browser_navigation(request):
         refresh = (
             ""

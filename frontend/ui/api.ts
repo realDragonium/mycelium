@@ -125,7 +125,9 @@ export const getSubstrateCounts = () => getJSON<SubstrateCounts>('/api/substrate
 // `partial_restore` names the databases startup found missing beside a
 // populated substrate; it and `quarantine` are fixed for the life of the
 // server process.
-export interface ServerInfo { partial_restore: string[]; quarantine: boolean }
+export type ServerInfo =
+  | { state: 'ready'; partial_restore: string[]; quarantine: boolean }
+  | { state: 'starting' | 'migrating' | 'indexing'; detail: string; elapsed_s: number };
 export const getServerInfo = () => getJSON<ServerInfo>('/api/server-info');
 
 /* -------------------------------- media ------------------------------- */

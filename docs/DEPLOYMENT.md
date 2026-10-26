@@ -260,10 +260,12 @@ an index rebuild logs its progress:
 ... INFO mycelium.server.indexes: rebuilding statement vector index: 1200/6000 re-embedded (40s)
 ```
 
-Until startup finishes, `/api/server-info` answers `503` with the state
-(`starting`, `migrating`, `indexing`, or `failed` with the reason), browsers
-get a page that reloads itself, and every other request gets `503` with a
-`Retry-After` header. Nothing reaches a database before the migrations are
+Until startup finishes, `/api/server-info` answers `200` with the state
+(`starting`, `migrating` or `indexing`), or `503` once it is `failed`, with the
+reason. A health check on it therefore passes during a long migration or index
+rebuild instead of restarting the server mid-way. Browsers get a page that
+reloads itself, and every other request gets `503` with a `Retry-After`
+header. Nothing reaches a database before the migrations are
 done. Once ready, `/api/server-info` answers `200` with `"state": "ready"`.
 If startup fails, the error is logged as a `MYCELIUM_ERROR` line and the
 process exits with status 1, so systemd restarts it.

@@ -27,7 +27,7 @@ def starting(monkeypatch):
 
 def test_while_starting_only_the_startup_state_answers(starting):
     info = starting.get("/api/server-info")
-    assert info.status_code == 503
+    assert info.status_code == 200
     assert info.json()["state"] == "migrating"
     assert "v21 (audience labels)" in info.json()["detail"]
 
@@ -49,7 +49,7 @@ def test_answers_while_starting_are_not_logged_as_slow_requests(
     performance_logger.addHandler(caplog.handler)
     try:
         response = starting.get("/api/server-info")
-        assert response.status_code == 503
+        assert response.json()["state"] == "migrating"
         assert not any(
             request_timing.SLOW_TOKEN in record.getMessage()
             for record in caplog.records
@@ -69,7 +69,9 @@ def test_answers_while_starting_are_not_logged_as_slow_requests(
 
 def test_a_failed_start_says_why(starting):
     startup._report("failed", "database schema version 99 is newer")
-    info = starting.get("/api/server-info").json()
+    response = starting.get("/api/server-info")
+    assert response.status_code == 503
+    info = response.json()
     assert info["state"] == "failed"
     assert "schema version 99" in info["detail"]
 

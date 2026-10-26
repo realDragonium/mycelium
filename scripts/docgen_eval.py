@@ -98,7 +98,7 @@ def wait_ready(client: httpx.Client, server: subprocess.Popen[bytes]) -> float:
         if server.poll() is not None:
             raise SystemExit("server exited during startup; see server.log")
         try:
-            if client.get("/api/server-info").status_code == 200:
+            if client.get("/api/server-info").json().get("state") == "ready":
                 return time.monotonic() - started
         except httpx.TransportError:
             pass
