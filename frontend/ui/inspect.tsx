@@ -263,7 +263,7 @@ function AddMention() {
   const [desc, setDesc] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
+  const [done, setDone] = useState<{ label: string; draftId: string | null } | null>(null);
 
   const idx = substrate.index;
   const q = query.trim().toLowerCase();
@@ -277,9 +277,8 @@ function AddMention() {
     setBusy(true); setErr(null);
     const label = mode === 'existing' ? alias.trim() : name.trim();
     try {
-      if (mode === 'existing' && entity) await upsertName(label, entity.id);
-      else await upsertEntity(label, desc.trim());
-      reset(); setOpen(false); setDone(label);
+      const written = mode === 'existing' && entity ? await upsertName(label, entity.id) : await upsertEntity(label, desc.trim());
+      reset(); setOpen(false); setDone({ label, draftId: written?.queued && written.draft_id ? written.draft_id : null });
     } catch (e) { setErr(errorMessage(e, 'Could not add that.')); }
     finally { setBusy(false); }
   };
@@ -288,9 +287,11 @@ function AddMention() {
     return (
       <div className="notice success">
         <I.check width="15" height="15" />
-        <span>Added <b>“{done}”</b>. The matcher links it to every statement containing it on its next scan.</span>
+        {done.draftId
+          ? <span>Proposed <b>“{done.label}”</b> in <Link to={{ view: 'draft', id: done.draftId }}>your draft</Link>. It reaches the knowledge base once the draft is approved.</span>
+          : <span>Added <b>“{done.label}”</b>. The matcher links it to every statement containing it on its next scan.</span>}
         <span className="spacer" />
-        <button className="btn sm" onClick={() => void refresh()}>Reload data</button>
+        {!done.draftId && <button className="btn sm" onClick={() => void refresh()}>Reload data</button>}
         <button className="btn ghost sm" onClick={() => { setDone(null); setOpen(true); }}>Add another</button>
       </div>
     );

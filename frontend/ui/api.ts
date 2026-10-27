@@ -51,8 +51,21 @@ function statusMessage(status: number): string {
   return `The request failed (status ${status}). Try again.`;
 }
 
+// "Propose as draft": knowledge requests carry a marker that makes the server
+// treat a writer or admin as a drafter, so their writes stage on their own
+// draft. Knowledge means the tool routes (every path outside /api/) and the
+// names workspace, whose live edits a drafter cannot make; curation and
+// settings stay as they are.
+let proposing = false;
+export const setProposing = (on: boolean) => { proposing = on; };
+export const PROPOSAL_CHANGED = 'mycelium:proposal-changed';
+const marksProposal = (path: string) =>
+  proposing && (!path.startsWith('/api/') || path.startsWith('/api/names-workspace') || path.startsWith('/api/alias-suggestions'));
+
 async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json' };
+  const marked = marksProposal(path);
+  if (marked) headers['x-mycelium-propose'] = 'draft';
   const raw = body instanceof Blob;
   if (body !== undefined) headers['content-type'] = raw ? body.type || 'application/octet-stream' : 'application/json';
   let res: Response;
@@ -72,6 +85,7 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
   }
   if (!res.ok) throw new HttpError(detailOf(parsed) || statusMessage(res.status), res.status, path, parsed && typeof parsed === 'object' && 'detail' in parsed ? parsed.detail : null, parsed);
   if (method !== 'GET' && SETTINGS_PATHS.some(prefix => path.startsWith(prefix))) window.dispatchEvent(new Event(SETTINGS_SAVED));
+  if (method !== 'GET' && (marked || path.startsWith('/api/drafts/'))) window.dispatchEvent(new Event(PROPOSAL_CHANGED));
   return parsed as T;
 }
 
@@ -120,6 +134,9 @@ export async function getAskExternal(signal?: AbortSignal): Promise<boolean> {
 export type Role = 'reader' | 'drafter' | 'writer' | 'admin';
 export interface Me { id: string; name: string; role: Role; type: string; auth_enabled: boolean }
 export const getMe = () => getJSON<Me>('/api/me');
+// The open draft drafted writes go onto, which "Propose as draft" fills.
+export interface MyDraft { id: string; op_count: number }
+export const getMyDraft = (signal?: AbortSignal) => getJSON<{ draft: MyDraft | null }>('/api/me/draft', signal).then(r => r.draft);
 export interface SubstrateCounts { statements: number; entities: number; names: number; links: number; entity_links: number }
 export const getSubstrateCounts = () => getJSON<SubstrateCounts>('/api/substrate-counts');
 // `partial_restore` names the databases startup found missing beside a
@@ -221,7 +238,8 @@ export async function searchEntities(query: string, signal?: AbortSignal): Promi
 
 /* -------------------------- statement edits --------------------------- */
 // replace_text writes live for writers and admins and stages a draft op for
-// drafters; `force` retries past a phrasing-catalog rejection.
+// drafters and for anyone proposing; `force` retries past a phrasing-catalog
+// rejection.
 export type EditResult =
   | { status: 'saved' }
   | { status: 'staged'; draftId: string }
@@ -238,8 +256,10 @@ export async function editStatement(id: string, text: string, force: boolean): P
 /* -------------------------------- write ------------------------------- */
 // Creating an entity or attaching an alias enqueues a mention rescan, so
 // statements containing the new name pick up the mention on the next drain.
-export const upsertEntity = (name: string, description: string) => postJSON<{ entity_id: string }>('/upsert-entity', { name, description });
-export const upsertName = (text: string, entityId: string) => postJSON<unknown>('/upsert-name', { text, entity_id: entityId });
+// A drafted write answers with its draft receipt instead.
+type Written = { draft_id?: string; queued?: string } | null;
+export const upsertEntity = (name: string, description: string) => postJSON<Written>('/upsert-entity', { name, description });
+export const upsertName = (text: string, entityId: string) => postJSON<Written>('/upsert-name', { text, entity_id: entityId });
 
 // Alias suggestions land in their own, already-submitted draft, so one ingest
 // can produce two drafts.

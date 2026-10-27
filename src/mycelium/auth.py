@@ -37,7 +37,7 @@ import os
 import secrets
 import sqlite3
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
@@ -177,6 +177,22 @@ def principal_has_real_role(principal: Principal, required: str) -> bool:
     a drafter does not pass `required='writer'` here.
     """
     return _ROLE_RANK[principal.role] >= _ROLE_RANK[required]
+
+
+#: The web app's "Propose as draft" marker. A real writer or admin sending it
+#: acts as a drafter for that request, exactly as a drafter-scoped token does,
+#: so their substrate writes take the drafter redirect onto their own draft.
+PROPOSE_HEADER = "x-mycelium-propose"
+
+
+def proposing(principal: Principal, marker: str | None) -> Principal:
+    """`principal` narrowed to a drafter when the request carries the marker.
+
+    Only narrows: a reader stays a reader and a drafter is one already, so the
+    marker grants nothing to a caller who could not write live."""
+    if marker != "draft" or not principal_has_real_role(principal, "writer"):
+        return principal
+    return replace(principal, role="drafter")
 
 
 class RoleRequired(PermissionError):

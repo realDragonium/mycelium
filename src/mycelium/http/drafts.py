@@ -19,6 +19,7 @@ from .. import server, store
 from ..draft_review_store import Application, Label
 from ..request_timing import TimedRoute
 from ..server import draft_decisions
+from ..server.draft_queue import auto_draft_session
 from ..server.drafts import submit, withdraw
 from .access import _enforce_curator, _require_principal
 
@@ -55,6 +56,21 @@ def list_drafts(
             )
         ]
     }
+
+
+@router.get("/api/me/draft")
+def my_open_draft(request: Request) -> dict[str, Any]:
+    """The caller's open draft that drafted writes go onto, with its operation
+    count, or null. The web app shows it while "Propose as draft" is on."""
+    p = _require_principal(request)
+    from .. import drafts_store
+
+    conn = server._drafts_db()
+    row = drafts_store.find_open_session_draft(conn, auto_draft_session(p), p.id)
+    if row is None:
+        return {"draft": None}
+    ops = drafts_store.list_ops(conn, row["id"])
+    return {"draft": {"id": row["id"], "op_count": len(ops)}}
 
 
 @router.get("/api/drafts/{draft_id}")

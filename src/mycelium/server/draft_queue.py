@@ -90,6 +90,14 @@ def _require_draft_owner(principal: AuthPrincipal | None, row: sqlite3.Row) -> N
         )
 
 
+def auto_draft_session(principal: AuthPrincipal) -> str:
+    """The key of the open draft a drafter's writes go onto without a
+    `draft_id`: their MCP session, or the principal when there is none."""
+    from .. import auth as _auth
+
+    return _auth.current_session_id.get() or f"actor:{principal.id}"
+
+
 def _resolve_draft_target(
     principal: AuthPrincipal | None, draft_id: str | None
 ) -> str | None:
@@ -104,7 +112,6 @@ def _resolve_draft_target(
          session-scoped open draft. Requires a session id.
       3. Anything else — return None.
     """
-    from .. import auth as _auth
     from .. import drafts_store
 
     if draft_id is not None:
@@ -130,7 +137,7 @@ def _resolve_draft_target(
         # submit it before another opens. A drafter who wants two at once
         # passes `draft_id` explicitly, which always wins over
         # auto-targeting.
-        session_id = _auth.current_session_id.get() or f"actor:{principal.id}"
+        session_id = auto_draft_session(principal)
         row = drafts_store.find_open_session_draft(
             _drafts_db(), session_id, principal.id
         )

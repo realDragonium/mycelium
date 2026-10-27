@@ -479,7 +479,8 @@ a.list-row:hover .lr-title { color: var(--bio); }
   background: color-mix(in oklab, var(--bg) 84%, transparent); backdrop-filter: blur(14px) saturate(1.2); border-bottom: 1px solid var(--line);
 }
 .topbar .cmd-wrap { flex: 1; max-width: 760px; }
-.topbar .ingest-btn { margin-left: auto; }
+.topbar .ingest-btn, .topbar .propose-btn { margin-left: auto; }
+.topbar .propose-btn + .ingest-btn { margin-left: 0; }
 .topbar-spacer { flex: 1; }
 .menu-btn { display: none; }
 .ingest-btn { display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: var(--r-md); font-weight: 600; font-size: var(--fs-sm); color: var(--write); border: 1px solid var(--write-line); background: var(--write-bg); white-space: nowrap; transition: background 0.13s, box-shadow 0.13s; }

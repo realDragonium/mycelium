@@ -46,6 +46,16 @@ call the same server function, so they share role rules, validation, revision
 checks and audit records; saving settings stays in the web app because it
 operates the server, while `get_settings` lets an agent read them.
 
+### Proposing instead of writing live
+
+A writer or admin whose agent should propose rather than write live gives it a
+`drafter`-scoped token of their own (**Settings → Account & tokens**, scope
+`drafter`; see [Users](USERS.md)). Over that token they are a drafter: every
+write tool queues onto their open draft, which they submit for
+[draft review](DRAFT_REVIEW.md), and the tools that land live are not listed.
+There is no other MCP mechanism for it. Without an MCP session the open draft is
+per account, so it is the same draft the web app's **Propose as draft** fills.
+
 ## Over MCP
 
 MCP covers the read path, statement and entity authoring, names and the
