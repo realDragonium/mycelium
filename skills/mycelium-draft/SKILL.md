@@ -13,12 +13,12 @@ Research a product domain, plan the statements and links needed to document it i
 
 ## Connection check — before anything else
 
-A draft is only guaranteed when the MCP connection is **drafter**-scoped: the server then queues every write tool call onto the caller's open draft instead of applying it. A writer or admin connection applies writes immediately, and has no MCP tool to open a draft.
+A draft is only guaranteed when the MCP connection is **drafter**-scoped: the server then queues every write tool call onto the caller's open draft instead of applying it. A writer or admin connection applies writes immediately, and has no MCP tool to open a draft. Writers and admins propose by minting a `drafter`-scoped token under their own account; its writes go onto their own open draft.
 
 Read your tool list:
 
 - `upsert_statements` present and `list_drafts` **absent** → drafter. Proceed.
-- `list_drafts` present → writer or admin (including a local server with authentication off). **Stop.** Writes would land live. Ask the operator for a drafter token (**Settings → Account & tokens**, scope `drafter`; see `docs/USERS.md`).
+- `list_drafts` present → writer or admin (including a local server with authentication off). **Stop.** Writes would land live. Ask the operator for a drafter token (**Settings → Account & tokens**, scope `drafter`; a writer or admin mints one for their own account; see `docs/USERS.md`).
 - No `upsert_statements` → reader. Stop and say so.
 
 Then call `list_my_drafts()`. A drafter has **one open draft per account** (per MCP session when the client keeps one), and every write joins it. If an open draft already holds unrelated operations, stop and ask the operator whether to submit it first. For the same reason, parallel runs on different domains need separate drafter accounts.

@@ -107,6 +107,25 @@ regains focus, so a server restart shows without reloading the page.
   credentials. Those workers wait without starting runs until credentials are
   configured.
 
+## Propose as draft
+
+Writers and admins have a **Propose as draft** toggle in the top bar. While it
+is on, their edits to statements, links, concepts, names and the glossary stage
+on their own open draft instead of changing the knowledge base: each such
+request carries an `x-mycelium-propose: draft` header, and the server treats a
+real writer or admin who sends it as a drafter for that request, exactly as a
+`drafter`-scoped token does. The header narrows only; from a reader or drafter
+it changes nothing. A banner above every screen shows the open draft's change
+count with a link to it (`GET /api/me/draft`). Review and submit the draft from
+its page; it is then reviewed like any other ([Draft review](DRAFT_REVIEW.md)).
+**Write live** in the banner, or the toggle, switches it off.
+
+The Names & aliases editor lands live, so it reads as a drafter's while the
+mode is on, without edit controls; propose names from a statement's **add
+mention** instead. Curation (deciding drafts, audiences, gaps, media) and
+settings are not knowledge writes and are unaffected. The choice is kept per
+browser. Ingest drafts as always, into a draft of its own.
+
 ## Older addresses
 
 Bookmarks from either former app still open the right screen. The address bar

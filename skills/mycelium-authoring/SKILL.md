@@ -206,7 +206,7 @@ These are combinations of the rules above, not special primitives. Recognising t
 
 ## 8. Workflow
 
-- **Know where your writes land.** On a writer or admin connection, writes are live. On a drafter connection they go into your open draft, and nothing is live until the draft is reviewed and applied (`mycelium-draft`). `merge_statements`, `merge_entities` and `delete_statement` need an admin. A reader sees no write tools.
+- **Know where your writes land.** On a writer or admin connection, writes are live. On a drafter connection they go into your open draft, and nothing is live until the draft is reviewed and applied (`mycelium-draft`). A writer or admin who wants review instead of live writes connects with a `drafter`-scoped token of their own. `merge_statements`, `merge_entities` and `delete_statement` need an admin. A reader sees no write tools.
 - **Tell before doing.** Present exact texts, kinds, links, the concepts each text names, and rationale; wait for approval before any live mutation. Live writes have no undo: **Activity** records them, it does not reverse them.
 - **Verify against code.** The substrate may hold records authored from wrong assumptions. Read the implementation; if substrate and code disagree, the code wins and the substrate gets fixed.
 - **Mark uncertainty inline.** `> 💡 likely correct: [inference + source]` / `> ⚠️ needs verification: [what's unclear]`. Anything unmarked is a claim you can defend.

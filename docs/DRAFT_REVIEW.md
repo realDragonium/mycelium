@@ -17,6 +17,10 @@ In the web app, **Settings → Draft review** offers **Review N waiting drafts**
 with the tokens it is likely to use and an optional token limit, whenever review is on
 and the backlog is not empty, and shows the review's progress with **Pause**
 and **Resume**.
+Drafts come from drafters, from ingest and the connect pass, and from writers
+and admins who propose instead of writing live: in the web app with **Propose
+as draft** ([The web app](WEB_APP.md#propose-as-draft)), and over MCP with a
+`drafter`-scoped token ([MCP tools](MCP_TOOLS.md#proposing-instead-of-writing-live)).
 A curator can explicitly review an existing submitted draft. Whatever the
 setting, a real writer or admin, a person in the web app or an agent over MCP,
 can decide a draft itself; see [Deciding drafts](#deciding-drafts).
@@ -391,7 +395,10 @@ reopened draft is not reviewed automatically again; decide it with
 their creator's choice.
 
 Both tools need a real writer or admin and refuse a draft the caller created:
-an agent never decides its own proposal. They work in every mode, `off`
+an agent never decides its own proposal. The web app does not refuse it: a
+writer who proposed through **Propose as draft** or a drafter-scoped token can
+approve that draft on its page, as they could have written it live. Submitting
+it hands the decision to the reviewer or another curator instead. They work in every mode, `off`
 included, as the web app's controls do; `review-only` makes automatic reviews
 advisory, not a curator's decision. Every decision, from the web app or an
 agent, is logged with its decider, time, `reason`, `evidence` (items shaped as

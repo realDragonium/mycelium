@@ -255,7 +255,9 @@ Done.
 
 **"I want an agent to propose knowledge, but not change it directly."** →
 Give it a `drafter` token. Its writes collect in a draft that goes through
-[draft review](DRAFT_REVIEW.md) once it calls `submit_draft`.
+[draft review](DRAFT_REVIEW.md) once it calls `submit_draft`. A writer or admin
+mints one under their own user for their own agent; in the web app they switch
+on **Propose as draft** instead ([The web app](WEB_APP.md#propose-as-draft)).
 
 **"I want a Claude Code skill to do dry-run analysis without ever
 writing."** → Mint a `reader`-scoped token under your own user (or a
