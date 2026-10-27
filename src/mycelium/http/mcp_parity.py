@@ -269,6 +269,7 @@ ROUTES: dict[tuple[str, str], Parity] = {
     # drafter lists their own drafts with `list_my_drafts`.
     ("GET", "/api/drafts"): Tool("list_drafts"),
     ("GET", "/api/drafts/{draft_id}"): Tool("get_draft"),
+    ("GET", "/api/me/draft"): Tool("list_my_drafts"),
     # A curator edits a submitted draft's operations through the corrections
     # of `review_draft`; the creator discards from an open one.
     ("PATCH", "/api/drafts/{draft_id}/ops/{seq}"): Tool("review_draft"),

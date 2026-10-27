@@ -219,6 +219,10 @@ class AuthMiddleware:
         # don't accidentally see a fake admin and grant write power.
         if principal is None:
             principal = auth.LOCAL_ADMIN if not auth.is_enabled() else None
+        if principal is not None:
+            principal = auth.proposing(
+                principal, request.headers.get(auth.PROPOSE_HEADER)
+            )
 
         request.state.principal = principal
         # Make the principal visible to code that doesn't see the

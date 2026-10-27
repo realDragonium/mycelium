@@ -20,7 +20,7 @@ from ..auth import Principal as AuthPrincipal
 from ..draft_review_runs import BacklogJob
 from ..draft_review_store import Application as AssessmentApplication
 from ..draft_review_store import Label as AssessmentLabel
-from .draft_queue import _require_draft_owner
+from .draft_queue import _require_draft_owner, auto_draft_session
 from .registry import tool
 from .runtime import _drafts_db
 
@@ -55,7 +55,7 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
     if draft_id is None:
         if principal is None:
             raise ValueError("no draft_id given and no caller identity")
-        session_id = _auth.current_session_id.get() or f"actor:{principal.id}"
+        session_id = auto_draft_session(principal)
         row = drafts_store.find_open_session_draft(
             _drafts_db(), session_id, principal.id
         )
