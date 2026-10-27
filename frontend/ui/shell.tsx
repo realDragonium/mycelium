@@ -25,6 +25,7 @@ import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, typ
 import { getJSON, getServerInfo, type KnowledgeGap, type Me } from './api';
 import { ensureSubstrate, loadSubstrate, substrate, substrateLoaded } from './data';
 import { usePrefs } from './prefs';
+import { ProposalBanner, ProposeToggle, useProposeMode } from './propose';
 import { dataOf, useAsync, useRefreshWhileVisible } from './use-async';
 import { useSetup } from './setup';
 
@@ -246,6 +247,7 @@ export function App({ me }: { me: Me }) {
   const [ingestNonce, setIngestNonce] = useState(0);
   const goIngest = useCallback(() => { setIngestNonce(n => n + 1); router.go({ view: 'ingest' }); }, [router]);
   const [navOpen, setNavOpen] = useState(false);
+  const [proposing, setProposing] = useProposeMode(me);
 
   return (
     <RouterCtx.Provider value={router}>
@@ -258,12 +260,14 @@ export function App({ me }: { me: Me }) {
               <div className="main-col">
                 <ServerBanners />
                 {me.role === 'admin' && <BlockedWorkBanner />}
+                {proposing && <ProposalBanner routeKey={routeToHash(route)} onTurnOff={() => setProposing(false)} />}
                 <header className="topbar">
                   <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)} aria-label="Open navigation"><I.menu /></button>
                   {route.view !== 'home' ? <CommandBar /> : <div className="topbar-spacer" />}
+                  <ProposeToggle me={me} on={proposing} onChange={setProposing} />
                   <button className="ingest-btn" onClick={goIngest}><I.ingest width="15" height="15" />Ingest</button>
                 </header>
-                <ErrorBoundary key={routeToHash(route)}>
+                <ErrorBoundary key={`${routeToHash(route)}:${proposing}`}>
                   <Screen route={route} ingestNonce={ingestNonce} refresh={refresh} />
                 </ErrorBoundary>
               </div>
