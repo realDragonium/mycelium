@@ -193,6 +193,22 @@ def get_vector_id(conn: sqlite3.Connection, statement_id: str) -> int | None:
     return int(row["vector_id"]) if row else None
 
 
+def statement_vector_texts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """(vector_id, text) of every mapped statement, by vector id."""
+    return conn.execute(
+        "SELECT v.vector_id, s.text FROM statement_vector_ids v "
+        "LEFT JOIN statements s ON s.id = v.statement_id ORDER BY v.vector_id"
+    ).fetchall()
+
+
+def name_vector_texts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """(vector_id, text) of every mapped name, by vector id."""
+    return conn.execute(
+        "SELECT v.vector_id, n.text FROM name_vector_ids v "
+        "LEFT JOIN names n ON n.id = v.name_id ORDER BY v.vector_id"
+    ).fetchall()
+
+
 def get_vector_ids(
     conn: sqlite3.Connection, statement_ids: Sequence[str]
 ) -> dict[str, int]:

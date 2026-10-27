@@ -122,7 +122,7 @@ Each index file SHALL record the embedder that built it and the index format as 
 - **THEN** the statement index is rebuilt by re-embedding and its sidecar is written with format 2
 
 ### Requirement: Startup index rebuild
-At startup the system SHALL load each index only when its file exists, carries no dirty marker and its recorded embedder equals the configured one; otherwise it MUST discard the index and rebuild it by re-embedding every statement or name, so vectors from two embedders are never mixed. An unreadable sidecar MUST count as a mismatch.
+At startup the system SHALL load each index only when its file exists, carries no dirty marker, records the configured embedder and, if its sidecar records a database fingerprint, that fingerprint is the database's. Otherwise it MUST rebuild the index by re-embedding every statement or name, logging the reason when an index file existed, so vectors from two embedders or another database state are never mixed. An unreadable sidecar MUST count as a mismatch.
 
 #### Scenario: Switching provider
 - **WHEN** the indexes were built with Ollama and the server restarts with `MYCELIUM_EMBED_PROVIDER=openai`
@@ -131,6 +131,14 @@ At startup the system SHALL load each index only when its file exists, carries n
 #### Scenario: Missing index file
 - **WHEN** `mycelium-names.vec` is absent, as after restoring a backup without vectors
 - **THEN** the name index is rebuilt from the names in the database
+
+#### Scenario: Snapshot of the restored database
+- **WHEN** the server starts on a restored database beside a snapshot taken of that same database state
+- **THEN** both indexes load without re-embedding
+
+#### Scenario: Snapshot older than the database
+- **WHEN** a statement "Invoice exports are queued" was added, or an existing statement's text edited or deleted, after the snapshot was taken, and the server starts on the newer database beside that snapshot
+- **THEN** the statement index is rebuilt by re-embedding and the log names the fingerprint mismatch
 
 ### Requirement: Rebuild progress and failure
 An index rebuild SHALL re-embed in batches of 100, log its progress (`rebuilding <label> vector index: <done>/<total> re-embedded`), and keep each row's existing vector id; a rebuild that cannot embed MUST fail startup with the reason rather than serve a partial index. Startup state reporting is defined by the `operations` capability.
@@ -239,3 +247,14 @@ Writing a vector under an id the index already holds, live or marked deleted, SH
 #### Scenario: Freed ids reused
 - **WHEN** vector ids 0 and 1 are deleted and then written again with new vectors
 - **THEN** each id holds its new vector and a search for it returns that id first
+
+### Requirement: Index snapshots
+`mycelium snapshot-indexes <dir>` SHALL copy both index files and their sidecars into `<dir>` between index writes, so it is safe while the server runs, and each copied sidecar MUST also record a fingerprint of the database the copy matches: its mapped vector ids and their texts. It MUST exit non-zero and copy nothing when an index file is missing, carries a dirty marker or has no current sidecar.
+
+#### Scenario: Snapshot during a write
+- **WHEN** `snapshot-indexes` runs while a statement write is changing the statement index
+- **THEN** it waits for the write to commit and copies the index with that statement's vector
+
+#### Scenario: Dirty index
+- **WHEN** `mycelium-names.vec.dirty` exists
+- **THEN** `snapshot-indexes` exits non-zero saying the index is marked dirty
