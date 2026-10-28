@@ -27,7 +27,9 @@ health**, `#/health`):
 | `unused` | No statement mentions any of the concept's names | Merge it into the concept statements do use, or delete it in **Names & aliases** |
 | `unlabelled` | Only internal audiences see the statement | Label it on the statement page; read the failed labelling error first |
 
-The counts also cover open gaps, out-of-date documents and pending drafts;
+The counts also cover open gaps, out-of-date documents, drafts awaiting a
+decision (`pending_drafts`) and drafts still open with their authors
+(`open_drafts`);
 those have their own queues (gaps below, `mycelium-documentation`,
 `mycelium-draft-review`).
 

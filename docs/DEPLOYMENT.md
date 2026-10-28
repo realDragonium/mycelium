@@ -435,6 +435,9 @@ research feature's data is deleted, as are its settings (see
 [Startup changes that are not migrations](#startup-changes-that-are-not-migrations)).
 Documentation runs gain summaries, review notes and plans. Saved ingest and
 documentation output limits that are still at the old defaults are raised.
+Open drafts with no operations and no creator, which earlier builds'
+automations left behind, are withdrawn (see
+[Startup changes that are not migrations](#startup-changes-that-are-not-migrations)).
 
 **Before:** take a snapshot or `mycelium export`. The previous build refuses
 to start on migrated data, so the way back is a restore, as described in
@@ -833,6 +836,14 @@ unscoped.
 The same start turns the retired `asker` role into `reader` on users, MCP
 tokens (OAuth grants included) and invites, logging how many rows of each
 changed. Importing an older archive does the same, with a deprecation warning.
+
+Each start withdraws open drafts in `mycelium-drafts.db` that have no
+operations, no creator and no repository source. Earlier builds' connect and
+curation automations opened such drafts and added nothing to them. The
+withdrawal is recorded as made by `upgrade`, and the start logs how many it
+withdrew; nothing is deleted. Open drafts a person, agent or repository
+created stay open, even when empty. A count logged after the first start of
+this build means something still leaves empty drafts behind.
 
 ---
 

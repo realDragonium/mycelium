@@ -14,7 +14,7 @@ count opens the list behind it:
 | Out-of-date documents | A statement the current revision cites has changed, or an image it places was replaced, deleted or relabelled | Documents |
 | Statements no `<profile>` document cites | One count per writing profile: its audience may see the statement, no document of the profile cites it, and it was not dismissed for the profile (`uncovered_by_profile`; [Uncovered statements](DOCUMENTATION_PLANNING.md#uncovered-statements)) | Documents → Plan |
 | Old media | Captured longer ago than the configured age, or against another product version ([Media](MEDIA.md#out-of-date)) | Curate → Media, **Old** |
-| Pending drafts | Open with their author, or submitted and undecided | Drafts |
+| Drafts awaiting a decision | Submitted and undecided (`pending_drafts`); the drafts still open with their authors are shown beside it (`open_drafts`) | Drafts |
 
 The server computes every count in SQL (`GET /api/knowledge-health`) and pages
 each list by id (`GET /api/knowledge-health/statements/<list>` and
