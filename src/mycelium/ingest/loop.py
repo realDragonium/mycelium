@@ -694,30 +694,23 @@ def _assemble_draft(
     trace.proposed_ops = [p.model_dump() for p in validated]
     trace.flagged = flagged
 
-    # Create a draft if there is at least one queue-able op OR the model raised a
-    # real flag (a contradiction is itself a reviewable artifact). If every op
-    # was rejected by validation and the model raised no flag of its own, there
-    # is nothing worth a draft — degrade gracefully rather than emit an empty one.
-    if not validated and not model_flags:
-        reason = (
-            "no valid ops survived validation; see flagged trace"
-            if ops
-            else "nothing extractable"
-        )
+    if not validated:
+        if not ops:
+            reason = "nothing extractable"
+        else:
+            reason = "no valid ops survived validation; see flagged trace"
         return _nothing(reason, ctx)
 
-    # ---- The ONLY write path: create the draft + queue ops via the emitter ----
+    # ---- The ONLY write path: queue ops via the emitter ----
     # LOW-8 (deferred): a classification<->op cross-check (e.g. detecting a NEW
     # upsert that duplicates an existing statement the model already classified
     # as a duplicate) is NOT implemented here — it needs fragile text heuristics
     # and is a deliberate deferral.
     #
-    # MED-4: draft assembly is atomic in spirit — once create() returns a
-    # draft_id we NEVER discard it. A create() failure means no draft exists, so
-    # we degrade with NothingToIngest. But once the draft exists, an add_op
-    # failure on one op moves that op to `flagged` and we keep queueing the rest,
-    # then always return DraftCreated with the real draft_id and whatever landed.
-    # That honors "emit what was processed; never partial/orphaned write".
+    # The emitter opens a draft together with its first op, so a draft exists
+    # only once something landed in it; flags alone travel in the trace. Once a
+    # draft exists its id is never discarded: an op that fails to queue moves
+    # to `flagged` and the rest still queue.
     #
     # Alias suggestions go to their own draft: each one needs an individual
     # human decision, and a draft holding one can be neither applied nor
@@ -726,43 +719,33 @@ def _assemble_draft(
     knowledge = [(i, p) for i, p in indexed if p.op != "alias_suggestion"]
     suggestions = [(i, p) for i, p in indexed if p.op == "alias_suggestion"]
     title = ctx.task.title
-    try:
-        draft_id = (
-            emitter.create(title=title)
-            if knowledge or model_flags
-            else emitter.create(title=f"Alias suggestions from {title}")
-        )
-    except Exception as exc:  # noqa: BLE001 — no draft exists yet: degrade cleanly
-        trace.notes.append(f"draft create failed: {exc}")
-        return _degrade_no_draft(
-            f"degraded: could not assemble a draft (draft store error: {exc})", ctx
-        )
-
-    queued = _queue_ops(draft_id, knowledge, flagged, ctx)
-    alias_draft_id = None
-    if suggestions:
-        alias_draft_id = (
-            _alias_draft(draft_id, title, ctx, flagged)
-            if knowledge or model_flags
-            else draft_id
-        )
+    draft_id, queued = _queue_ops(title, knowledge, flagged, ctx)
+    alias_draft_id, alias_queued = _queue_ops(
+        f"Alias suggestions from {title}"
+        if draft_id is None
+        else f"Alias suggestions from {draft_id}: {title}",
+        suggestions,
+        flagged,
+        ctx,
+    )
     if alias_draft_id is not None:
-        alias_queued = _queue_ops(alias_draft_id, suggestions, flagged, ctx)
-        queued.extend(alias_queued)
         try:
-            if alias_queued:
-                emitter.submit_aliases(alias_draft_id)
+            emitter.submit_aliases(alias_draft_id)
         except Exception as exc:  # noqa: BLE001 — never throw; the draft exists
             flagged.append(f"alias suggestions left unsubmitted: {exc}")
+    draft_id = draft_id or alias_draft_id
+    if draft_id is None:
+        return _degrade_no_draft(
+            "degraded: could not assemble a draft (no op could be queued)", ctx
+        )
 
-    trace.proposed_ops = [p.model_dump() for p in queued]
-    trace.flagged = flagged
+    trace.proposed_ops = [p.model_dump() for p in queued + alias_queued]
 
     trace_dict = _build_trace(trace, "draft_created", ctx)
     return DraftCreated(
         draft_id=draft_id,
         alias_draft_id=alias_draft_id,
-        ops=queued,
+        ops=queued + alias_queued,
         flagged=flagged,
         skipped_duplicates=list(skipped),
         trace=trace_dict,
@@ -811,52 +794,48 @@ def _screen_and_validate(
 _DRAFT_REFERENCE = re.compile(r"@(\d+):(\d+)")
 
 
-def _alias_draft(
-    draft_id: str, title: str, ctx: _RunContext, flagged: list[str]
-) -> str | None:
-    try:
-        return ctx.emitter.create(title=f"Alias suggestions from {draft_id}: {title}")
-    except Exception as exc:  # noqa: BLE001 — the knowledge draft already exists
-        flagged.append(f"alias suggestions dropped: draft store error: {exc}")
-        return None
-
-
 def _queue_ops(
-    draft_id: str,
+    title: str,
     ops: list[tuple[int, ProposedOp]],
     flagged: list[str],
     ctx: _RunContext,
-) -> list[ProposedOp]:
+) -> tuple[str | None, list[ProposedOp]]:
+    """Queue `ops` into a new draft, opened with the first op that lands.
+    Returns the draft id (None when nothing landed) and the queued ops."""
     # A `@seq:index` reference counts the model's emitted operations from 1.
     # Alias suggestions and dropped operations are not queued here, so the
     # draft numbers differ; rewrite each reference to the producer's real seq.
+    draft_id: str | None = None
     queued: list[ProposedOp] = []
     seqs: dict[int, int] = {}
     for i, p in ops:
-        if p.op == "alias_suggestion":
+        source_text = ctx.task.text if p.op == "alias_suggestion" else None
+        payload = p.payload
+        if p.op != "alias_suggestion":
             try:
-                ctx.emitter.add_op(draft_id, p.op, p.payload, source_text=ctx.task.text)
-                queued.append(p)
-            except Exception as exc:  # noqa: BLE001 — never throw; flag and continue
-                flagged.append(
-                    f"op[{i}] ({p.op}) dropped: draft store error queueing it: {exc}"
+                payload = _renumber_references(
+                    p.payload, seqs, own=i + 1 if p.op == "upsert_statements" else None
                 )
-            continue
+            except ValueError as exc:
+                flagged.append(f"op[{i}] ({p.op}) dropped: {exc}")
+                continue
         try:
-            payload = _renumber_references(
-                p.payload, seqs, own=i + 1 if p.op == "upsert_statements" else None
-            )
-        except ValueError as exc:
-            flagged.append(f"op[{i}] ({p.op}) dropped: {exc}")
-            continue
-        try:
-            seqs[i + 1] = ctx.emitter.add_op(draft_id, p.op, payload)
-            queued.append(p.model_copy(update={"payload": payload}))
+            if draft_id is None:
+                draft_id, seq = ctx.emitter.create(
+                    title=title, kind=p.op, payload=payload, source_text=source_text
+                )
+            else:
+                seq = ctx.emitter.add_op(
+                    draft_id, p.op, payload, source_text=source_text
+                )
         except Exception as exc:  # noqa: BLE001 — never throw; flag and continue
             flagged.append(
                 f"op[{i}] ({p.op}) dropped: draft store error queueing it: {exc}"
             )
-    return queued
+            continue
+        seqs[i + 1] = seq
+        queued.append(p.model_copy(update={"payload": payload}))
+    return draft_id, queued
 
 
 def _renumber_references(

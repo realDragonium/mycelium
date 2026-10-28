@@ -23,6 +23,7 @@ status is derived from which timestamp is set:
 from __future__ import annotations
 
 import json as _json
+import logging
 import sqlite3
 import uuid as _uuid
 from collections.abc import Mapping, Sequence
@@ -34,9 +35,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from . import errors, request_timing, timestamps
 from .connections import ConnectionProvider
 from .link_authoring import reject_entity_statement_additions
+from .prompt_defaults import UPGRADE_AUTHOR
 
 if TYPE_CHECKING:  # the record shape is the server's review contract
     from .server.draft_review import DraftReviewRecord
+
+logger = logging.getLogger(__name__)
 
 DRAFTS_SCHEMA = """
 -- A drafter's pending change set. One open draft per MCP session;
@@ -294,7 +298,24 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     draft_review_store.migrate(conn)
     ai_usage.migrate(conn)
+    withdraw_empty_server_drafts(conn)
     conn.commit()
+
+
+def withdraw_empty_server_drafts(conn: sqlite3.Connection) -> int:
+    """Withdraw open drafts with no operations that no person, agent or
+    repository created: earlier builds' automations opened them and added
+    nothing. Empty drafts someone created stay theirs."""
+    withdrawn = conn.execute(
+        "UPDATE drafts SET decided_at = ?, decided_by = ?, decision = 'withdrawn' "
+        "WHERE decided_at IS NULL AND submitted_at IS NULL AND created_by IS NULL "
+        "AND source_repository IS NULL "
+        "AND NOT EXISTS (SELECT 1 FROM draft_ops o WHERE o.draft_id = drafts.id)",
+        (_now(), UPGRADE_AUTHOR),
+    ).rowcount
+    if withdrawn:
+        logger.warning("withdrew %d empty drafts the server had left open", withdrawn)
+    return withdrawn
 
 
 def status_for(row: sqlite3.Row | dict) -> str:

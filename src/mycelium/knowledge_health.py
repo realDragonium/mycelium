@@ -58,8 +58,10 @@ class Counts(BaseModel):
     #: Unlabelled statements whose last labelling attempt failed.
     labelling_failed: int
     open_gaps: int
-    #: Drafts not yet decided: open with their author, or submitted.
+    #: Submitted drafts awaiting a curator's decision.
     pending_drafts: int
+    #: Drafts still open with their authors, not yet submitted.
+    open_drafts: int
     out_of_date_documents: int
     #: Media older than the configured age or captured against an older
     #: product version.
@@ -89,9 +91,10 @@ def counts(
         "(SELECT COUNT(*) FROM knowledge_gaps "
         "WHERE resolved_at IS NULL AND dismissed_at IS NULL) AS open_gaps"
     ).fetchone()
-    pending = drafts.execute(
-        "SELECT COUNT(*) FROM drafts WHERE decided_at IS NULL"
-    ).fetchone()[0]
+    pending, open_drafts = drafts.execute(
+        "SELECT COUNT(submitted_at), COUNT(*) - COUNT(submitted_at) "
+        "FROM drafts WHERE decided_at IS NULL"
+    ).fetchone()
     document_ids = [
         str(r[0]) for r in drafts.execute("SELECT id FROM generated_documents")
     ]
@@ -99,6 +102,7 @@ def counts(
     return Counts(
         **{key: int(row[key]) for key in row.keys()},
         pending_drafts=int(pending),
+        open_drafts=int(open_drafts),
         out_of_date_documents=sum(
             1 for f in freshness.values() if f.status == "out_of_date"
         ),

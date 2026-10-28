@@ -140,11 +140,19 @@ class FakeEmitter:
             return set()
         return set(sigs[kind].parameters)
 
-    def create(self, *, title: str | None = None) -> str:
+    def create(
+        self,
+        *,
+        title: str | None,
+        kind: str,
+        payload: dict,
+        source_text: str | None = None,
+    ) -> tuple[str, int]:
+        draft_id = f"drf_{self._n + 1}"
+        seq = self.add_op(draft_id, kind, payload, source_text=source_text)
         self._n += 1
-        draft_id = f"drf_{self._n}"
         self.created.append(title)
-        return draft_id
+        return draft_id, seq
 
     def add_op(
         self, draft_id: str, kind: str, payload: dict, *, source_text: str | None = None
@@ -471,14 +479,11 @@ def test_op_with_kind_not_in_valid_kinds_is_flagged():
         ledger=[
             _ledger_row("merge", "refinement", matched=["stm_1"], considered=["stm_2"])
         ],
-        flagged=["a real contradiction between stm_1 and stm_2"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, _e = _run(responses, emitter=emitter)
-    # model raised a real flag, so a draft is still created; the op is flagged out
-    assert isinstance(result, DraftCreated)
-    assert result.ops == []
-    assert any("not a registered substrate tool" in f for f in result.flagged)
+    assert isinstance(result, NothingToIngest)
+    assert any("not a registered substrate tool" in f for f in result.trace["flagged"])
 
 
 def test_missing_required_key_is_flagged():
@@ -511,13 +516,14 @@ def test_entity_statement_addition_is_an_ingest_finding():
                 },
             )
         ],
-        flagged=["keep the draft visible"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
-    assert isinstance(result, DraftCreated)
+    assert isinstance(result, NothingToIngest)
     assert emitter.queued == []
-    assert any("statement-to-statement" in finding for finding in result.flagged)
+    assert any(
+        "statement-to-statement" in finding for finding in result.trace["flagged"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -1080,10 +1086,10 @@ def test_d_contradiction_is_flagged_with_no_resolution_op():
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
 
-    assert isinstance(result, DraftCreated)  # the flag itself is a reviewable artifact
-    assert any("CONTRADICTION" in f for f in result.flagged)
-    assert result.ops == []  # no resolution op proposed
-    assert emitter.queued == []  # nothing queued for the contradiction
+    # a flag with nothing to queue is reported, never left as an empty draft
+    assert isinstance(result, NothingToIngest)
+    assert any("CONTRADICTION" in f for f in result.trace["flagged"])
+    assert emitter.created == []
 
 
 # (e) NO LIVE WRITE — read substrate never sees a write primitive; the only
@@ -1682,14 +1688,13 @@ def test_t11_upsert_entity_missing_description_is_flagged_not_queued():
     emit = _emit_input(
         ops=[_op("upsert_entity", {"name": "Acme"})],  # missing description
         ledger=[_ledger_row("Acme entity", "new", matched=["ent_0"], note="new")],
-        flagged=["a real contradiction so a draft is still created"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
-    assert isinstance(result, DraftCreated)  # the model's flag keeps the draft
-    assert result.ops == []  # the entity op was rejected
+    assert isinstance(result, NothingToIngest)
     assert any(
-        "missing required key" in f and "upsert_entity" in f for f in result.flagged
+        "missing required key" in f and "upsert_entity" in f
+        for f in result.trace["flagged"]
     )
     assert emitter.queued == []
 
@@ -1713,13 +1718,11 @@ def test_t11_add_entity_links_with_wrong_edge_keys_is_flagged():
                 "entity link", "refinement", matched=["ent_1"], considered=["ent_2"]
             )
         ],
-        flagged=["a real contradiction keeping the draft alive"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
-    assert isinstance(result, DraftCreated)
-    assert result.ops == []
-    assert any("add_entity_links" in f for f in result.flagged)
+    assert isinstance(result, NothingToIngest)
+    assert any("add_entity_links" in f for f in result.trace["flagged"])
     assert emitter.queued == []
 
 
@@ -1729,10 +1732,10 @@ def test_t11_partial_add_op_failure_still_returns_draft_with_real_id():
     and the failed op moved to flagged."""
 
     class FlakyEmitter(FakeEmitter):
-        def add_op(self, draft_id, kind, payload):
+        def add_op(self, draft_id, kind, payload, **kwargs):
             if kind == "add_links":
                 raise RuntimeError("simulated draft store write error")
-            return super().add_op(draft_id, kind, payload)
+            return super().add_op(draft_id, kind, payload, **kwargs)
 
     emitter = FlakyEmitter()
     emit = _emit_input(
@@ -1789,16 +1792,14 @@ def test_t12_patch_statement_with_unexpected_links_key_is_flagged_not_queued():
                 "invite reopened", "refinement", matched=["stm_1"], considered=["stm_1"]
             )
         ],
-        flagged=["a real contradiction so the draft is still created"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
-    assert isinstance(result, DraftCreated)  # the model flag keeps the draft alive
-    assert result.ops == []
+    assert isinstance(result, NothingToIngest)
     assert emitter.queued == []
     assert any(
         "patch_statement" in f and "unexpected key" in f and "links" in f
-        for f in result.flagged
+        for f in result.trace["flagged"]
     )
 
 
@@ -1819,16 +1820,14 @@ def test_t12_merge_statements_with_unexpected_reason_key_is_flagged():
         ledger=[
             _ledger_row("merge", "refinement", matched=["stm_1"], considered=["stm_2"])
         ],
-        flagged=["a real contradiction keeping the draft alive"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
-    assert isinstance(result, DraftCreated)
-    assert result.ops == []
+    assert isinstance(result, NothingToIngest)
     assert emitter.queued == []
     assert any(
         "merge_statements" in f and "unexpected key" in f and "reason" in f
-        for f in result.flagged
+        for f in result.trace["flagged"]
     )
 
 
@@ -1849,16 +1848,14 @@ def test_t12_replace_text_with_unexpected_links_key_is_flagged():
         ledger=[
             _ledger_row("reword", "refinement", matched=["stm_1"], considered=["stm_1"])
         ],
-        flagged=["a real contradiction keeping the draft alive"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
-    assert isinstance(result, DraftCreated)
-    assert result.ops == []
+    assert isinstance(result, NothingToIngest)
     assert emitter.queued == []
     assert any(
         "replace_text" in f and "unexpected key" in f and "links" in f
-        for f in result.flagged
+        for f in result.trace["flagged"]
     )
 
 
@@ -1869,15 +1866,14 @@ def test_t12_upsert_entity_with_none_description_is_flagged_not_queued():
     emit = _emit_input(
         ops=[_op("upsert_entity", {"name": "Acme", "description": None})],
         ledger=[_ledger_row("Acme entity", "new", matched=["ent_0"], note="new")],
-        flagged=["a real contradiction so the draft is still created"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
-    assert isinstance(result, DraftCreated)
-    assert result.ops == []
+    assert isinstance(result, NothingToIngest)
     assert emitter.queued == []
     assert any(
-        "missing required key" in f and "upsert_entity" in f for f in result.flagged
+        "missing required key" in f and "upsert_entity" in f
+        for f in result.trace["flagged"]
     )
 
 
@@ -1888,15 +1884,14 @@ def test_t12_upsert_statement_with_none_kind_and_text_is_flagged():
     emit = _emit_input(
         ops=[_op("upsert_statement", {"kind": None, "text": None})],
         ledger=[_ledger_row("x", "new", matched=["stm_1"], considered=["stm_1"])],
-        flagged=["a real contradiction so the draft is still created"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
-    assert isinstance(result, DraftCreated)
-    assert result.ops == []
+    assert isinstance(result, NothingToIngest)
     assert emitter.queued == []
     assert any(
-        "missing required key" in f and "upsert_statement" in f for f in result.flagged
+        "missing required key" in f and "upsert_statement" in f
+        for f in result.trace["flagged"]
     )
 
 
@@ -2130,3 +2125,18 @@ def test_an_emit_beside_reads_waits_for_their_results():
         ("read", False),
         ("early", True),
     ]
+
+
+def test_in_process_emitter_leaves_no_draft_when_the_first_op_is_refused():
+    from mycelium import drafts_store
+    from mycelium.ingest.draft import InProcessDraftEmitter
+
+    conn = drafts_store.connect(":memory:")
+    drafts_store.migrate(conn)
+    emitter = InProcessDraftEmitter(types.SimpleNamespace(_drafts_db=lambda: conn))
+    entity_link = {"from_id": "ent_sso", "to_id": "stm_login", "link_type": "performs"}
+
+    with pytest.raises(ValueError):
+        emitter.create(title="t", kind="add_links", payload={"links": [entity_link]})
+
+    assert conn.execute("SELECT COUNT(*) FROM drafts").fetchone()[0] == 0

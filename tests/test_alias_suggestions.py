@@ -329,11 +329,10 @@ def test_ingest_emitter_queues_non_replaying_human_suggestion(tmp_path, monkeypa
     with vocabulary(tmp_path, monkeypatch) as (_, entity_id, _):
         emitter = InProcessDraftEmitter(server)
         assert aliases.KIND in emitter.valid_kinds()
-        draft_id = emitter.create(title="Ingest")
-        emitter.add_op(
-            draft_id,
-            aliases.KIND,
-            proposal(entity_id).model_dump(),
+        draft_id, _ = emitter.create(
+            title="Ingest",
+            kind=aliases.KIND,
+            payload=proposal(entity_id).model_dump(),
             source_text="Single sign-on (SSO) is required for administrators",
         )
         entry = aliases.list_entries()[0]

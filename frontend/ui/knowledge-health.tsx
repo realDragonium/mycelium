@@ -36,7 +36,7 @@ function tiles(c: HealthCounts, uncovered: Record<string, number>): Tile[] {
     { n: c.out_of_date_documents, label: 'out-of-date documents', sub: 'a statement they cite has changed', to: { view: 'documentation' } },
     ...Object.entries(uncovered).map(([profile, n]): Tile => ({ n, label: `statements no ${profile} document cites`, sub: 'visible to its audience; plan them under Documents → Plan', to: { view: 'documentation' } })),
     { n: c.old_media, label: 'old media', sub: 'older than the configured age or an older product version', to: { view: 'media', show: 'old' } },
-    { n: c.pending_drafts, label: 'pending drafts', sub: 'open with their authors or awaiting a decision', to: { view: 'drafts' }, tone: 'write' },
+    { n: c.pending_drafts, label: 'drafts awaiting a decision', sub: `${c.open_drafts} still open with their authors`, to: { view: 'drafts' }, tone: 'write' },
   ];
 }
 

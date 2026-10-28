@@ -43,9 +43,10 @@ def _statements(_arguments):
     return {"statements": rows}
 
 
-def _connect(ops, *, known=(), **config):
+def _connect(ops, *, known=(), flagged=(), **config):
     emit = _emit_input(
         ops=ops,
+        flagged=list(flagged),
         ledger=[
             _ledger_row(
                 t.id, "new", matched=["stm_invoice"], considered=["stm_invoice"]
@@ -363,3 +364,15 @@ def test_reports_what_it_made_of_each_statement_it_reached():
     ]
     trace["candidate_ledger"][1]["classification"] = "unprocessed"
     assert [item.statement_id for item in looked_at(trace, BATCH)] == ["stm_export"]
+
+
+def test_a_run_whose_only_op_is_screened_out_leaves_no_draft():
+    result, emitter, _ = _connect(
+        [_op("upsert_statement", {"kind": "event", "text": "an export fails"})],
+        flagged=["stm_export may duplicate stm_invoice"],
+    )
+
+    assert isinstance(result, NothingToIngest)
+    assert result.reason == "no valid ops survived validation; see flagged trace"
+    assert emitter.created == []
+    assert any("may duplicate" in line for line in result.trace["flagged"])

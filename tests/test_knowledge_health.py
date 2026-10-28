@@ -79,10 +79,16 @@ def drafts():
     return conn
 
 
-def _draft(drafts, draft_id, *, decided=False, ops=()):
+def _draft(drafts, draft_id, *, decided=False, submitted=False, ops=()):
     drafts.execute(
-        "INSERT INTO drafts (id, created_at, decided_at, decision) VALUES (?, 'now', ?, ?)",
-        (draft_id, "later" if decided else None, "approved" if decided else None),
+        "INSERT INTO drafts (id, created_at, submitted_at, decided_at, decision) "
+        "VALUES (?, 'now', ?, ?, ?)",
+        (
+            draft_id,
+            "soon" if submitted or decided else None,
+            "later" if decided else None,
+            "approved" if decided else None,
+        ),
     )
     for seq, (kind, payload) in enumerate(ops, start=1):
         drafts.execute(
@@ -95,6 +101,7 @@ def _draft(drafts, draft_id, *, decided=False, ops=()):
 def test_counts_each_kind_of_attention(conn, drafts):
     # stm_e has no link of its own but is the condition of one: not isolated.
     _draft(drafts, "drf_open")
+    _draft(drafts, "drf_waiting", submitted=True)
     _draft(drafts, "drf_done", decided=True)
 
     counts = knowledge_health.counts(conn, drafts, lambda: conn)
@@ -110,6 +117,7 @@ def test_counts_each_kind_of_attention(conn, drafts):
         "labelling_failed": 1,
         "open_gaps": 1,
         "pending_drafts": 1,
+        "open_drafts": 1,
         "out_of_date_documents": 0,
         "old_media": 0,
     }
