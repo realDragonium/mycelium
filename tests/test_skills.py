@@ -28,6 +28,7 @@ _DESCRIPTION_LIMIT = 1536
 # Response fields that start with a tool's verb.
 _FIELDS = {
     "connect_error",
+    "open_drafts",
     "read_tools",
     "retry_of",
     "review_assessment",

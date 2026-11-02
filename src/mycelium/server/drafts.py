@@ -35,6 +35,52 @@ _evidence_list = TypeAdapter(list[drafts_store.Evidence])
 # the role-equivalence in auth.principal_satisfies.
 
 
+class OpenedDraft(TypedDict):
+    draft_id: str
+    status: Literal["open"]
+    title: str | None
+    op_count: int
+    #: False when the caller already had an open draft and got that one back.
+    created: bool
+
+
+@tool(role="drafter")
+def open_draft(title: str | None = None) -> OpenedDraft:
+    """Open a draft to propose changes into instead of writing live.
+
+    Pass the returned `draft_id` to any write tool to stage it on the draft,
+    then `submit_draft(draft_id)` sends it for review. A caller has one open
+    draft at a time, the same one the web app's Propose as draft fills: while
+    one is open it is returned (`created: false`) and `title` is ignored.
+    Withdraw an unwanted draft with `withdraw_draft`.
+    """
+    principal = _auth.current_principal.get()
+    if principal is None:
+        raise _auth.RoleRequired("open_draft requires an identified caller")
+    conn = _drafts_db()
+    session_id = auto_draft_session(principal)
+    with store.transaction(conn):
+        row = drafts_store.find_open_session_draft(conn, session_id, principal.id)
+        if row is None:
+            draft_id = drafts_store.create_draft(
+                conn, created_by=principal.id, session_id=session_id, title=title
+            )
+            return {
+                "draft_id": draft_id,
+                "status": "open",
+                "title": title,
+                "op_count": 0,
+                "created": True,
+            }
+    return {
+        "draft_id": row["id"],
+        "status": "open",
+        "title": row["title"],
+        "op_count": len(drafts_store.list_ops(conn, row["id"])),
+        "created": False,
+    }
+
+
 @tool
 def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
     """Submit a draft for curator review.

@@ -1,6 +1,6 @@
 ---
 name: mycelium-code-curation
-description: Work the Mycelium curation queue from inside a product's repository. Claims a small batch of knowledge-health work (isolated statements, statements naming no concept, rephrase requests, knowledge gaps, the draft reviewer's questions for a person, duplicate statement or concept pairs, concepts without a description or without statements), checks each item against the product's code, proposes links, concept names, descriptions, merges, rephrases or corrections through a drafter's draft with per-operation code evidence, answers reviewer questions with evidence, closes gaps it settled, submits the draft and releases every item with its outcome. Use when an agent with code access (Claude Code in the product repo, or a CI job) is asked to curate, connect or check Mycelium knowledge against the code, or to work the curation queue. Needs a drafter token. Content rules come from mycelium-authoring.
+description: Work the Mycelium curation queue from inside a product's repository. Claims a small batch of knowledge-health work (isolated statements, statements naming no concept, rephrase requests, knowledge gaps, the draft reviewer's questions for a person, duplicate statement or concept pairs, concepts without a description or without statements), checks each item against the product's code, proposes links, concept names, descriptions, merges, rephrases or corrections through a draft (open_draft, then draft_id on each write) with per-operation code evidence, answers reviewer questions with evidence, closes gaps it settled, submits the draft and releases every item with its outcome. Use when an agent with code access (Claude Code in the product repo, or a CI job) is asked to curate, connect or check Mycelium knowledge against the code, or to work the curation queue. Needs a writer, admin or drafter token. Content rules come from mycelium-authoring.
 ---
 
 # Curating Mycelium from the product's code
@@ -23,8 +23,11 @@ created.
 
 ## Connect
 
-Use a token with the **drafter** role (**Settings → Account & tokens**),
-never a writer's: a drafter's writes go to its draft, a writer's land live.
+Use a writer or admin token and propose through a draft: **`open_draft` →
+writes with `draft_id` → `submit_draft(draft_id)`**. A write without
+`draft_id` lands live. A token with the **drafter** role (**Settings →
+Account & tokens**) is the alternative: its writes go to its draft without a
+`draft_id`, and it cannot write live by mistake.
 
 - Claude Code in the product repo: `claude mcp add --transport http mycelium
   https://<host>/mcp --header "Authorization: Bearer myc_…"`.
@@ -37,14 +40,14 @@ never a writer's: a drafter's writes go to its draft, a writer's land live.
     -d '{"kind": "isolated", "limit": 3}'
   ```
 
-Check the tool list: `claim_curation_work` present and `list_drafts` absent
-means drafter. `list_drafts` present means writer or admin: stop and ask for
-a drafter token.
+Check the tool list: `list_drafts` present means writer or admin, so pass
+`draft_id` on every write; `claim_curation_work` present and `list_drafts`
+absent means drafter.
 
-Then `list_my_drafts()`. Every write joins your one open draft (per account,
-or per MCP session when the client keeps one). If an open draft already
-holds unrelated operations, stop and ask the operator whether to submit it
-first. Run one job per drafter account at a time.
+Then `open_draft()`. It returns your one open draft (per account, or per MCP
+session when the client keeps one), or opens it, with its `op_count`. If it
+already holds unrelated operations, stop and ask the operator whether to
+submit or withdraw it first. Run one job per account at a time.
 
 ## Workflow
 
@@ -68,7 +71,8 @@ first. Run one job per drafter account at a time.
    after it. Read the neighbours (and other candidates from
    `search_statements`, `grep_statements` and `search_entities`) with
    `get_statements` to see their links.
-3. **Decide** (rules below), and write at most what the code supports.
+3. **Decide** (rules below), and write at most what the code supports, each
+   write with your `draft_id`.
 4. **Attach evidence to each write.** Each write returns a receipt with
    `draft_id`, `operation_ref` and `revision`. Call
    `set_operation_evidence(draft_id, operation_ref, evidence,

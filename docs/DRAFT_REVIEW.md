@@ -19,7 +19,8 @@ and the backlog is not empty, and shows the review's progress with **Pause**
 and **Resume**.
 Drafts come from drafters, from ingest and the connect pass, and from writers
 and admins who propose instead of writing live: in the web app with **Propose
-as draft** ([The web app](WEB_APP.md#propose-as-draft)), and over MCP with a
+as draft** ([The web app](WEB_APP.md#propose-as-draft)), and over MCP with
+`open_draft`, writes that pass its `draft_id`, and `submit_draft`, or with a
 `drafter`-scoped token ([MCP tools](MCP_TOOLS.md#proposing-instead-of-writing-live)).
 A curator can explicitly review an existing submitted draft. Whatever the
 setting, a real writer or admin, a person in the web app or an agent over MCP,
@@ -396,7 +397,7 @@ their creator's choice.
 
 Both tools need a real writer or admin and refuse a draft the caller created:
 an agent never decides its own proposal. The web app does not refuse it: a
-writer who proposed through **Propose as draft** or a drafter-scoped token can
+writer who proposed through **Propose as draft**, `open_draft` or a drafter-scoped token can
 approve that draft on its page, as they could have written it live. Submitting
 it hands the decision to the reviewer or another curator instead. They work in every mode, `off`
 included, as the web app's controls do; `review-only` makes automatic reviews

@@ -117,7 +117,7 @@ def _resolve_draft_target(
     if draft_id is not None:
         row = drafts_store.get_draft(_drafts_db(), draft_id)
         if row is None:
-            raise ValueError(f"draft_id '{draft_id}' not found")
+            raise ValueError(f"draft_id '{draft_id}' not found; open_draft opens one")
         if drafts_store.status_for(row) != "open":
             raise ValueError(
                 f"draft '{draft_id}' is {drafts_store.status_for(row)}; "

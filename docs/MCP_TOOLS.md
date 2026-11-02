@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 84 of its 117 registered tools over MCP. Every
+question. Mycelium therefore advertises 85 of its 118 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -11,7 +11,7 @@ The list lives in `server.MCP_TOOLS`. `tests/test_mcp_surface.py` keeps this fil
 that set, and the registered tools in agreement.
 
 Role filtering still applies: `tools/list` shows a caller only the tools their role
-can invoke. The minimum role is reader: a reader sees 33 tools. A drafter sees 57
+can invoke. The minimum role is reader: a reader sees 33 tools. A drafter sees 58
 because their writes are queued on a draft, but they do not see the tools that
 land live and so need a real writer: `list_drafts`, `review_draft`,
 `reopen_draft`, `request_draft_review`,
@@ -19,11 +19,11 @@ land live and so need a real writer: `list_drafts`, `review_draft`,
 documentation tools that start runs, edit, retry, plan, decide or deliver,
 `save_writing_profile`, `edit_prompt_text`, `edit_names`, `edit_media`,
 `curate_audiences`, `update_knowledge_gap`, the admin tools below, or the tools
-that claim and do agent tasks. A writer sees 76 and does not see the admin-only
+that claim and do agent tasks. A writer sees 77 and does not see the admin-only
 `delete_statement`, `merge_statements`, `merge_entities`,
 `retire_writing_profile`, `restore_writing_profile`, `manage_audiences`,
 `manage_draft_review_backlog` or `unblock_automation`. An admin sees all
-84. While Ask is set to External agent, `ask` is listed to no one, so each
+85. While Ask is set to External agent, `ask` is listed to no one, so each
 count is one lower.
 
 A grouped tool can hold an action a stricter role takes: `edit_names` merges
@@ -48,13 +48,22 @@ operates the server, while `get_settings` lets an agent read them.
 
 ### Proposing instead of writing live
 
-A writer or admin whose agent should propose rather than write live gives it a
-`drafter`-scoped token of their own (**Settings → Account & tokens**, scope
-`drafter`; see [Users](USERS.md)). Over that token they are a drafter: every
-write tool queues onto their open draft, which they submit for
-[draft review](DRAFT_REVIEW.md), and the tools that land live are not listed.
-There is no other MCP mechanism for it. Without an MCP session the open draft is
-per account, so it is the same draft the web app's **Propose as draft** fills.
+A writer or admin whose agent should propose rather than write live calls
+`open_draft`, passes the returned `draft_id` to every write tool, and then
+calls `submit_draft(draft_id)` to send the draft for
+[draft review](DRAFT_REVIEW.md). A write with `draft_id` is queued on the draft
+and leaves live knowledge unchanged; a write without it still lands live.
+A caller has one open draft at a time: while one is open, `open_draft` returns
+it instead of opening another. Without an MCP session that draft is per
+account, so it is the same draft the web app's **Propose as draft** fills.
+`withdraw_draft` discards a draft its creator no longer wants, empty or not;
+until then it counts among the drafts open with their authors in
+[Knowledge health](KNOWLEDGE_HEALTH.md).
+
+The alternative is a `drafter`-scoped token of their own (**Settings → Account
+& tokens**, scope `drafter`; see [Users](USERS.md)). Over that token every
+write tool queues onto their open draft without a `draft_id`, and the tools
+that land live are not listed, so an agent cannot write live by mistake.
 
 ## Over MCP
 
@@ -99,6 +108,7 @@ records stay off MCP: they run in-process.
 | `find_entity_duplicates` | Lists concepts that may be duplicates, as the names workspace does. |
 | `get_names_workspace` | Reads the Names & aliases workspace: the catalogue, one concept with the `revision` an edit needs, dismissed duplicate pairs, and the AI's alias suggestions. |
 | `edit_names` | Edits names as the workspace does, landing live: preview and apply an add, correct, prefer, move, split, merge or remove (merge and remove need an admin), dismiss or restore a duplicate pair, ask the AI for alias suggestions, and review one (a human writer). Real writers and admins only. |
+| `open_draft` | Opens the caller's draft, or returns the one already open, so a writer or admin proposes through review instead of writing live: pass its `draft_id` to each write. See [Proposing instead of writing live](#proposing-instead-of-writing-live). |
 | `submit_draft` | Submits the caller's draft and starts internal review. |
 | `get_draft` | Inspects a draft and its review assessment. |
 | `discard_draft_op` | Lets the author correct their open draft. |
