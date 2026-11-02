@@ -1,6 +1,6 @@
 ---
 name: mycelium-draft
-description: Research a product domain against its codebase and propose the Mycelium statements, links and entities that document it as a submitted substrate draft, which the server's internal draft reviewer then assesses and, in review-and-apply mode, applies. Writes only through a drafter-scoped connection (upsert_statements and friends, set_draft_review_evidence, submit_draft), so nothing lands live without review. Use this whenever the operator wants a domain documented through review rather than written directly. Content rules come from mycelium-authoring (and mycelium-guide-authoring for how-to and troubleshooting content).
+description: Research a product domain against its codebase and propose the Mycelium statements, links and entities that document it as a submitted substrate draft, which the server's internal draft reviewer then assesses and, in review-and-apply mode, applies. Writes only onto a draft — opened with open_draft on a writer or admin connection and named by draft_id in every write, or automatic on a drafter-scoped connection — then set_draft_review_evidence and submit_draft, so nothing lands live without review. Use this whenever the operator wants a domain documented through review rather than written directly. Content rules come from mycelium-authoring (and mycelium-guide-authoring for how-to and troubleshooting content).
 ---
 
 # Mycelium Draft Authoring
@@ -13,19 +13,19 @@ Research a product domain, plan the statements and links needed to document it i
 
 ## Connection check — before anything else
 
-A draft is only guaranteed when the MCP connection is **drafter**-scoped: the server then queues every write tool call onto the caller's open draft instead of applying it. A writer or admin connection applies writes immediately, and has no MCP tool to open a draft. Writers and admins propose by minting a `drafter`-scoped token under their own account; its writes go onto their own open draft.
+The flow is **`open_draft` → writes with `draft_id` → `submit_draft(draft_id)`**. Read your tool list:
 
-Read your tool list:
-
-- `upsert_statements` present and `list_drafts` **absent** → drafter. Proceed.
-- `list_drafts` present → writer or admin (including a local server with authentication off). **Stop.** Writes would land live. Ask the operator for a drafter token (**Settings → Account & tokens**, scope `drafter`; a writer or admin mints one for their own account; see `docs/USERS.md`).
+- `list_drafts` present → writer or admin (including a local server with authentication off). Call `open_draft()` and keep its `draft_id`. **Pass `draft_id` to every write tool call**: a write without it lands live. Proceed.
+- `upsert_statements` present and `list_drafts` **absent** → drafter. Every write goes onto your open draft without a `draft_id`; `open_draft()` returns that draft's id. Proceed.
 - No `upsert_statements` → reader. Stop and say so.
 
-Then call `list_my_drafts()`. A drafter has **one open draft per account** (per MCP session when the client keeps one), and every write joins it. If an open draft already holds unrelated operations, stop and ask the operator whether to submit it first. For the same reason, parallel runs on different domains need separate drafter accounts.
+A drafter-scoped token (**Settings → Account & tokens**, scope `drafter`; see `docs/USERS.md`) is the alternative for an operator who wants the connection itself unable to write live.
+
+Each account has **one open draft** (per MCP session when the client keeps one); `open_draft` returns it while it is open, with its `op_count`. If it already holds unrelated operations, stop and ask the operator whether to submit or withdraw it first. For the same reason, parallel runs on different domains need separate accounts.
 
 **Substrate reads:** `search_statements`, `grep_statements`, `get_statements`, `discover_facts`, `list_entities`, `search_entities`, `get_entity`, `list_link_types`, `list_entity_link_types`, `list_statement_kinds`, `list_statements`.
 
-**Draft writes (queued, never live):** `upsert_entity`, `upsert_name`, `upsert_statements`, `add_links`, `add_entity_links`, `patch_statement`; then `set_operation_evidence`, `set_draft_review_evidence`, `attach_draft_source` (CI only) and `submit_draft`. `upsert_name` and `add_entity_links` take entity ids, and a queued `upsert_entity` returns none, so they can only target entities that already exist (see "Writing the draft"). `discard_draft_op` removes a queued operation while the draft is open; `get_draft` shows it.
+**Draft writes (queued, never live, with `draft_id` on a writer or admin connection):** `upsert_entity`, `upsert_name`, `upsert_statements`, `add_links`, `add_entity_links`, `patch_statement`; then `set_operation_evidence`, `set_draft_review_evidence`, `attach_draft_source` (CI only) and `submit_draft`. `upsert_name` and `add_entity_links` take entity ids, and a queued `upsert_entity` returns none, so they can only target entities that already exist (see "Writing the draft"). `discard_draft_op` removes a queued operation while the draft is open; `get_draft` shows it; `withdraw_draft` discards the whole draft.
 
 **Files / shell:** read-only. Nothing is written to disk.
 
@@ -387,7 +387,7 @@ After incorporating all corrections, triaging Uncertainties, and re-syncing the 
 
 ## Writing the draft
 
-Queue the operations in dependency order. Each call returns a receipt (`draft_id`, `seq`, `queued`, `revision`), not a substrate result; the draft replays them in `seq` order.
+Queue the operations in dependency order, each with the `draft_id` from `open_draft`. Each call returns a receipt (`draft_id`, `seq`, `queued`, `revision`), not a substrate result; the draft replays them in `seq` order.
 
 1. **Entities first** — `upsert_entity` for each new entity, so its name exists when the statements replay and their mentions resolve. Aliases (`upsert_name`) and entity links (`add_entity_links`) need entity ids: queue them only for entities that already exist. For a new entity, list its aliases and entity links in the evidence and your report, to be added once the draft is applied; never guess an id, because a missing entity fails the whole replay.
 2. **All new statements in one `upsert_statements` batch.** Queued statements have no ids until the draft is applied, so every link that touches a new statement belongs in this batch: outgoing edges in each item's `links`, edges from existing statements in `incoming_links`, and `@N` (the item's 0-based position) wherever an edge or a `when` leaf points at another new statement. Existing statements are referenced by their real `stm_` ids.
