@@ -235,11 +235,16 @@ def _draft(
         allowed = emitter.allowed_keys(kind)
         if not allowed or not set(payload) <= allowed:
             raise ValueError(f"invalid arguments for {kind}")
+    if not operations:
+        raise ValueError("a draft needs at least one operation")
     conn = _drafts_db()
     with store.transaction(conn):
-        draft_id = emitter.create(title=title)
-        for kind, payload in operations:
-            seq = emitter.add_op(draft_id, kind, payload)
+        (first_kind, first_payload), *rest = operations
+        draft_id, first_seq = emitter.create(
+            title=title, kind=first_kind, payload=first_payload
+        )
+        seqs = [first_seq, *(emitter.add_op(draft_id, k, p) for k, p in rest)]
+        for seq in seqs:
             row = conn.execute(
                 "SELECT id FROM draft_ops WHERE draft_id = ? AND seq = ?",
                 (draft_id, seq),

@@ -6,7 +6,7 @@ Show curators what in the knowledge base needs attention and give them, the serv
 ## Requirements
 
 ### Requirement: Health counts
-The system SHALL answer `GET /api/knowledge-health` for any authenticated user with `counts` holding `statements`, `entities`, `isolated`, `unmentioned`, `undescribed`, `unused`, `unlabelled`, `labelling_failed`, `open_gaps`, `pending_drafts`, `out_of_date_documents` and `old_media`, each computed from current data on every request.
+The system SHALL answer `GET /api/knowledge-health` for any authenticated user with `counts` holding `statements`, `entities`, `isolated`, `unmentioned`, `undescribed`, `unused`, `unlabelled`, `labelling_failed`, `open_gaps`, `pending_drafts`, `open_drafts`, `out_of_date_documents` and `old_media`, each computed from current data on every request.
 
 #### Scenario: Curator opens knowledge health
 - **WHEN** a signed-in reader requests `GET /api/knowledge-health`
@@ -28,11 +28,22 @@ The system SHALL count and list a statement as `isolated` when no statement link
 - **THEN** it is counted as undescribed
 
 ### Requirement: Queue counts
-The system SHALL count `labelling_failed` as unlabelled statements whose last labelling attempt recorded an error, `open_gaps` as knowledge gaps neither resolved nor dismissed, `pending_drafts` as drafts not yet decided (open or submitted), `out_of_date_documents` as generated documents whose freshness is out of date, and `old_media` as media flagged old (0 when no media store is configured).
+The system SHALL count `labelling_failed` as unlabelled statements whose last labelling attempt recorded an error, `open_gaps` as knowledge gaps neither resolved nor dismissed, `pending_drafts` as submitted drafts awaiting a decision, `open_drafts` as drafts still open with their authors, `out_of_date_documents` as generated documents whose freshness is out of date, and `old_media` as media flagged old (0 when no media store is configured).
 
 #### Scenario: Draft decided
 - **WHEN** a submitted draft is approved
 - **THEN** `pending_drafts` no longer counts it
+
+#### Scenario: Draft still with its author
+- **WHEN** a drafter has an open draft they have not submitted
+- **THEN** `open_drafts` counts it and `pending_drafts` does not
+
+### Requirement: Drafts count on the health screen
+The Knowledge health screen SHALL show `pending_drafts` as its drafts count, labelled as drafts awaiting a decision, with `open_drafts` beside it as the drafts still open with their authors.
+
+#### Scenario: Drafts waiting and open
+- **WHEN** two drafts are submitted and three are open with their authors
+- **THEN** the drafts count reads 2 and notes 3 still open with their authors
 
 ### Requirement: Statement health lists
 The system SHALL page each statement list at `GET /api/knowledge-health/statements/{isolated|unmentioned|unlabelled}` in id order, taking `after` (an id) and `limit` (1 to 200, default 50), returning `filter`, `items` and `next_after` (null on the last page); each item carries `id`, `kind`, `text`, `links` (count), `mentions` (concept names in its text), `label_error`, `in_pending_draft` and `settled_at`.

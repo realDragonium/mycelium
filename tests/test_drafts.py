@@ -1245,3 +1245,47 @@ def test_only_the_owner_or_a_curator_submits_or_withdraws_over_http(
             id="d1", name="Drafter One", role="drafter", type="human"
         )
         assert endpoint(victim, _request_as(owner))["ok"] is True
+
+
+def test_migrate_withdraws_only_empty_open_drafts_the_server_created():
+    conn = drafts_store.connect(":memory:")
+    drafts_store.migrate(conn)
+
+    def draft(created_by=None, *, op=False, submitted=False, repository=None):
+        draft_id = drafts_store.create_draft(
+            conn, created_by=created_by, session_id=None
+        )
+        if op:
+            drafts_store.add_op(
+                conn,
+                draft_id=draft_id,
+                kind="add_links",
+                payload={"links": []},
+                created_by=created_by,
+            )
+        if submitted:
+            drafts_store.set_submitted(conn, draft_id)
+        if repository:
+            conn.execute(
+                "UPDATE drafts SET source_repository = ? WHERE id = ?",
+                (repository, draft_id),
+            )
+        return draft_id
+
+    empty = draft()
+    kept = [
+        draft(op=True),
+        draft("usr_writer"),
+        draft(submitted=True),
+        draft(repository="acme/billing"),
+    ]
+
+    drafts_store.migrate(conn)
+    drafts_store.migrate(conn)
+
+    def status(draft_id):
+        row = drafts_store.get_draft(conn, draft_id)
+        return drafts_store.status_for(row), row["decided_by"]
+
+    assert status(empty) == ("withdrawn", "upgrade")
+    assert [status(d)[0] for d in kept] == ["open", "open", "submitted", "open"]

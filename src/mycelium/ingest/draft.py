@@ -10,6 +10,8 @@ That is the structural guarantee: the inner model is handed read tools plus one
 terminal `emit_draft` tool and never sees a write tool; the only write path in
 the whole package is `drafts_store.create_draft` / `add_op` against this
 thread's drafts connection (`server._drafts_db()`), reached only through here.
+A draft is only ever created together with its first op, in one transaction,
+so no run can leave an empty draft behind.
 Alias suggestions also read existing names and statements to capture review
 preconditions; they never invoke a substrate write.
 
@@ -37,7 +39,14 @@ class DraftEmitter(Protocol):
 
     def allowed_keys(self, kind: str) -> set[str]: ...
 
-    def create(self, *, title: str | None = None) -> str: ...
+    def create(
+        self,
+        *,
+        title: str | None,
+        kind: str,
+        payload: dict,
+        source_text: str | None = None,
+    ) -> tuple[str, int]: ...
 
     def add_op(
         self, draft_id: str, kind: str, payload: dict, *, source_text: str | None = None
@@ -86,15 +95,26 @@ class InProcessDraftEmitter:
             return set()
         return set(sigs[kind].parameters)
 
-    def create(self, *, title: str | None = None) -> str:
+    def create(
+        self,
+        *,
+        title: str | None,
+        kind: str,
+        payload: dict,
+        source_text: str | None = None,
+    ) -> tuple[str, int]:
+        """Open a draft holding its first op; returns the draft id and the
+        op's seq. If the op can't be queued, no draft is left behind."""
         conn = self._server._drafts_db()
         with store.transaction(conn):
-            return drafts_store.create_draft(
+            draft_id = drafts_store.create_draft(
                 conn,
                 created_by=None,
                 session_id=None,
                 title=title,
             )
+            seq = self.add_op(draft_id, kind, payload, source_text=source_text)
+        return draft_id, seq
 
     def add_op(
         self, draft_id: str, kind: str, payload: dict, *, source_text: str | None = None

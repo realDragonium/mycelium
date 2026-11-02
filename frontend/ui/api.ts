@@ -473,7 +473,7 @@ export interface HealthCounts {
   statements: number; entities: number;
   isolated: number; unmentioned: number; undescribed: number; unused: number;
   unlabelled: number; labelling_failed: number;
-  open_gaps: number; pending_drafts: number; out_of_date_documents: number; old_media: number;
+  open_gaps: number; pending_drafts: number; open_drafts: number; out_of_date_documents: number; old_media: number;
 }
 // `max_run_tokens` is 0 when runs have no token cap.
 export interface ConnectLimits { batch_size: number; max_run_tokens: number; provider: string; model: string; external_agent: boolean }
