@@ -213,6 +213,7 @@ MCP_TOOLS = frozenset(
         "get_names_workspace",
         "edit_names",
         # Drafts
+        "open_draft",
         "submit_draft",
         "get_draft",
         "discard_draft_op",
