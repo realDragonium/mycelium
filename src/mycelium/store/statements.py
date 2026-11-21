@@ -175,6 +175,24 @@ def update_statement_text(
     )
 
 
+def system_vector_ids(conn: sqlite3.Connection, system: str) -> frozenset[int]:
+    """Vector ids of the statements with `system` (an entity id, or
+    `MAIN_SYSTEM` for those without one)."""
+    from .names import MAIN_SYSTEM
+
+    condition = (
+        "s.system_entity_id IS NULL"
+        if system == MAIN_SYSTEM
+        else "s.system_entity_id = :system"
+    )
+    rows = conn.execute(
+        "SELECT v.vector_id FROM statement_vector_ids v "
+        f"JOIN statements s ON s.id = v.statement_id WHERE {condition}",
+        {"system": system},
+    ).fetchall()
+    return frozenset(int(r[0]) for r in rows)
+
+
 def count_system_uses(conn: sqlite3.Connection, entity_id: str) -> int:
     """How many statements have `entity_id` as their system."""
     row = conn.execute(

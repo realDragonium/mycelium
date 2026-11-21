@@ -215,9 +215,12 @@ def format_vocab(vocab: dict[str, Any]) -> str:
     return json.dumps(compact, ensure_ascii=False, indent=2)
 
 
-def initial_user_message(text: str, vocab: dict[str, Any]) -> str:
+def initial_user_message(
+    text: str, vocab: dict[str, Any], *, system: str | None = None
+) -> str:
     return (
-        "LIVE VOCABULARY (fetched from the substrate just now — pick kinds and "
+        _system_note(system)
+        + "LIVE VOCABULARY (fetched from the substrate just now — pick kinds and "
         "link types from here; reuse before inventing):\n"
         f"{format_vocab(vocab)}\n\n"
         "TEXT TO INGEST:\n"
@@ -229,6 +232,18 @@ def initial_user_message(text: str, vocab: dict[str, Any]) -> str:
         "classify, find adjacent statements to link to, then call emit_draft "
         "exactly once with your ops, the per-candidate ledger, the flagged "
         "contradictions, and the skipped duplicates."
+    )
+
+
+def _system_note(system: str | None) -> str:
+    if system is None:
+        return ""
+    return (
+        f"SYSTEM: this text is about {system}, another app or platform; every "
+        "statement you create belongs to it. A matching statement only "
+        f"duplicates a candidate when its `system` is also {system} (check "
+        "with get_statements): the same words about another app are a "
+        "separate fact, so propose the candidate.\n\n"
     )
 
 

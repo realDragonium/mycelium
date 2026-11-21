@@ -70,8 +70,10 @@ submit or withdraw it first. Run one job per account at a time.
    as a payment platform's connector), claim only that platform's statements:
    `claim_curation_work(kind, limit=3, system="Paylark")` for `isolated`,
    `unnamed`, `rephrase` and `duplicate` work; `system="main"` limits it to
-   statements of our own product. Statements you write there pass the same
-   `system` (`mycelium-authoring` §3a).
+   statements of our own product. New statements you write in an
+   integration's repository pass the platform's `system` (`mycelium-authoring`
+   §3a); `"main"` is only a filter value, so leave `system` out on writes for
+   our own product.
 2. **Find the behaviour in the code.** Search the repository for the
    statement's terms, the UI copy, the setting name or the event. Read the
    handler, the job or the check that implements it, and what runs before and

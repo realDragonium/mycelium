@@ -23,7 +23,7 @@ A statement SHALL have an optional system: the entity of the app or platform its
 - **THEN** every item but item 2 belongs to Paylark and item 2 has no system
 
 ### Requirement: A system change is not a content change
-Changing only a statement's system MUST NOT re-embed it, re-derive its mentions or change its `updated_at`, so curation and document freshness do not read it as a content change. The change SHALL be recorded in the statement's history, and setting the system it already has SHALL write nothing.
+A `patch_statement` that changes only a statement's system, and moving statements to another system by merging entities, MUST NOT re-embed them, re-derive their mentions or change their `updated_at`, so curation and document freshness do not read it as a content change. The change SHALL be recorded in history, and setting the system a statement already has SHALL write nothing. `upsert_statement` with an `id` stays a wholesale write.
 
 #### Scenario: Clearing the system
 - **WHEN** a writer calls `patch_statement` with `system: null` on a statement whose system is Paylark

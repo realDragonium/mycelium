@@ -2197,3 +2197,21 @@ def test_ingest_stamps_its_system_over_each_batch_item():
 
     assert stamped["system"] == "ent_paylark"
     assert [item["system"] for item in stamped["statements"]] == ["ent_paylark"] * 3
+
+
+def test_ingest_drafts_keep_a_null_that_clears_a_system():
+    emitter, conn, drafts_store = _real_emitter_against_memory_db()
+
+    draft_id, _ = emitter.create(
+        title="t", kind="patch_statement", payload={"id": "stm_1", "system": None}
+    )
+
+    [op] = drafts_store.list_ops(conn, draft_id)
+    assert drafts_store.serialize_op(op)["payload"] == {"id": "stm_1", "system": None}
+
+
+def test_the_ingest_prompt_names_the_system_the_text_is_about():
+    from mycelium.ingest.prompts import initial_user_message
+
+    assert "about Paylark" in initial_user_message("x", {}, system="Paylark")
+    assert "SYSTEM:" not in initial_user_message("x", {})

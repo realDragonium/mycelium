@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from pydantic import JsonValue
 
-from .. import embed, statement_connections, store, survey
+from .. import embed, statement_connections, store, survey, vector
 from ..store.connection_graph import ConnectionGraph
 from ..tracing import trace_span
 from . import systems
@@ -307,6 +307,14 @@ def _search_statement_candidates(
     )[0]
 
 
+def _system_index(system: str | None) -> vector.Index:
+    """The statement index, ranking only `system`'s statements when given, so
+    a top-k is the nearest statements of that system."""
+    if system is None:
+        return _idx()
+    return _idx().restricted(store.system_vector_ids(_db(), system))
+
+
 def _vector_candidates(
     vec: list[float],
     limit: int,
@@ -321,12 +329,11 @@ def _vector_candidates(
     entity_boost = _alias_entity_boost(vec, name_boost, name_top_k, name_min_score)
     # Filtering and alias boosts need a wider pool before ranking.
     fetch_k = (
-        max(limit * 4, 40)
-        if entity_boost or required_entity_ids or kind or system
-        else limit
+        max(limit * 4, 40) if entity_boost or required_entity_ids or kind else limit
     )
+    index = _system_index(system)
     with trace_span("vector_search"):
-        raw_hits = _idx().search(vec, k=fetch_k)
+        raw_hits = index.search(vec, k=fetch_k)
     return _score_candidates(
         raw_hits,
         required_entity_ids=required_entity_ids,
@@ -698,18 +705,26 @@ def find_duplicates(
     `merge_statements(from, into)` to consolidate, or `replace_text` /
     `add_links` if the duplication is structural rather than textual.
     """
+    return duplicate_pairs(threshold, limit)
 
+
+def duplicate_pairs(
+    threshold: float | None = None, limit: int = 50, system: str | None = None
+) -> list[dict[str, Any]]:
+    """`find_duplicates`, narrowed to `system`'s statements (an entity id or
+    `store.MAIN_SYSTEM`) before `limit` applies."""
     threshold = (
         embed.thresholds().statement_duplicate if threshold is None else threshold
     )
     seen_pairs: set[tuple[str, str]] = set()
     pairs: list[dict[str, Any]] = []
 
+    index = _system_index(system)
     for bid in store.all_statement_ids(_db()):
         vid = store.get_vector_id(_db(), bid)
-        if vid is None:
+        if vid is None or (system is not None and not index.allows(vid)):
             continue
-        vec = _idx().get_vector(vid)
+        vec = index.get_vector(vid)
         if vec is None:
             # Slot is stranded — SQLite mapping points at an id the
             # hnsw file doesn't have. Skip rather than crash the audit.
@@ -717,7 +732,7 @@ def find_duplicates(
         # k=20 is a balance between catching all candidates and per-call
         # cost. At MVP scales this comfortably covers any cluster of
         # near-duplicates.
-        hits = _idx().search(vec, k=20)
+        hits = index.search(vec, k=20)
         for other_vid, distance in hits:
             if other_vid == vid:
                 continue

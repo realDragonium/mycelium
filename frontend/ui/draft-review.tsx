@@ -265,8 +265,8 @@ function OpBody({ op }: { op: DraftOp }) {
     case 'merge_statements':
       return <div className="op-link-line"><Ref id={p.from_id} /><span className="arr">⤳ merge into</span><Ref id={p.into_id} /></div>;
     case 'patch_statement': {
-      const { id, ...rest } = p;
-      return <><div className="op-name-line"><span className="arr">patch</span><Ref id={id} /></div><KV obj={rest} /></>;
+      const rest = Object.fromEntries(Object.entries(p).filter(([k]) => k !== 'id' && k !== 'system'));
+      return <><div className="op-name-line"><span className="arr">patch</span><Ref id={p.id} /></div><KV obj={rest} /><SystemLine payload={p} /></>;
     }
     case 'flag':
       return <><div className="op-stmt-text">{str(p.text) || <i className="muted">(no text on this flag)</i>}</div><FlagExplanation op={op} /></>;

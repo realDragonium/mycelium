@@ -29,7 +29,7 @@ from . import systems
 from .names import find_entity_duplicates
 from .registry import tool
 from .runtime import _db, _drafts_db
-from .search import find_duplicates, search_statements
+from .search import duplicate_pairs, search_statements
 from .vocabulary import list_link_types
 
 #: Statements offered with each item as its nearest neighbours.
@@ -209,13 +209,11 @@ def duplicate_candidates(
     # rather than once per page.
     parsed: dict[str, _StatementDuplicate] = {}
     statement_candidates: list[curation.DuplicateCandidate] = []
-    for raw_statement in find_duplicates(limit=STATEMENT_AUDIT_PAIRS):
+    for raw_statement in duplicate_pairs(limit=STATEMENT_AUDIT_PAIRS, system=system):
         statement_pair = _StatementDuplicate.model_validate(raw_statement)
         a_id, b_id = sorted((statement_pair.a_id, statement_pair.b_id))
         item_id = f"{a_id}~{b_id}"
         text = curation.item_text(_db(), "duplicate", item_id)
-        if system is not None and not curation.pair_in_system(_db(), item_id, system):
-            continue
         if text is not None:
             parsed[item_id] = statement_pair
             statement_candidates.append(curation.DuplicateCandidate(item_id, text))

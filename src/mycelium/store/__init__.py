@@ -184,6 +184,7 @@ from .statements import (
     set_statement_system,
     set_vector_id,
     statement_vector_texts,
+    system_vector_ids,
     update_statement,
     update_statement_text,
 )
@@ -321,6 +322,7 @@ __all__ = [
     "set_name_vector_id",
     "set_vector_id",
     "statement_vector_texts",
+    "system_vector_ids",
     "statements_mentioning_name",
     "statements_sharing_entities",
     "substrate_connection",

@@ -241,3 +241,27 @@ def test_a_system_duplicate_claim_looks_past_other_systems_pairs(paylark):
     side = context[pairs[0].id]["a"]
     assert isinstance(side, dict)
     assert side["system"] == {"entity_id": paylark, "name": "Paylark"}
+
+
+def test_a_system_search_ranks_only_that_systems_statements(paylark):
+    for n in range(200):
+        _create(f"A webhook delivery is retried {n}")
+    theirs = _create("A payout reaches the bank account", system=paylark)
+
+    hits = server.search_statements(
+        "A webhook delivery is retried 7", limit=1, system=paylark
+    )
+
+    assert [h["id"] for h in hits] == [theirs]
+
+
+def test_a_system_duplicate_audit_looks_past_other_systems_pairs(paylark):
+    from mycelium.server.search import duplicate_pairs
+
+    for _ in range(2):
+        _create("An invoice export is requested")
+    theirs = {_create("A payout is sent", system=paylark) for _ in range(2)}
+
+    [pair] = duplicate_pairs(limit=1, system=paylark)
+
+    assert {pair["a_id"], pair["b_id"]} == theirs

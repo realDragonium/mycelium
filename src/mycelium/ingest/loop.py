@@ -31,7 +31,7 @@ from typing import Any
 
 import httpx
 
-from .. import ai, ai_prompts, link_rules, tracing, when_expression
+from .. import ai, ai_prompts, link_rules, store, tracing, when_expression
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
@@ -142,12 +142,22 @@ def ingest_task(
     task = Task(
         text=guarded,
         system_prompt=prompts.build_system_prompt(instructions.text),
-        first_message=lambda vocab: prompts.initial_user_message(guarded, vocab),
+        first_message=lambda vocab: prompts.initial_user_message(
+            guarded, vocab, system=_system_name(system)
+        ),
         title=_draft_title(guarded),
         notes=tuple(n for n in (instructions.note, input_note) if n),
         system=system,
     )
     return task, instructions
+
+
+def _system_name(system: str | None) -> str | None:
+    if system is None:
+        return None
+    return store.entity_names(store.substrate_connection(), [system]).get(
+        system, system
+    )
 
 
 def run(

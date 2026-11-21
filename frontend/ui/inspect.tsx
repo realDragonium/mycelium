@@ -483,7 +483,7 @@ export function StatementDetail({ id }: { id: string }) {
             )}
           </header>
 
-          <SystemField key={s.id} statement={s} onSaved={() => setEdits(n => n + 1)} />
+          <SystemField key={`${s.id}:${s.system ?? ''}`} statement={s} onSaved={() => setEdits(n => n + 1)} />
 
           <section className="sec">
             <div className="sec-head"><span className="sh-title">Mentions · entities</span><span className="sh-count">{mentions.length}</span></div>
