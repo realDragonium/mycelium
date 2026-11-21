@@ -12,7 +12,10 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
+from pydantic.experimental.missing_sentinel import MISSING
+
 from .. import media, phrasing, store
+from . import systems
 from .batch_planning import (
     _assemble_batch_results,
     _materialize_batch_edges,
@@ -78,6 +81,7 @@ def upsert_statement(
     id: str | None = None,
     incoming_links: list[IncomingLinkSpec] = [],
     allow_phrasing_violations: bool = False,
+    system: str | None | MISSING = MISSING,
 ) -> dict[str, Any]:
     """Create a new statement or update an existing one.
 
@@ -102,6 +106,13 @@ def upsert_statement(
     new `text` and overwrites outgoing `links` with the exact list you pass
     (they are NOT appended). To add a single outgoing link, pass the full
     updated list, not just the addition. Raises if `id` does not exist.
+
+    `system` is the app or platform the statement's behaviour or step
+    belongs to, as an entity id or exact name; leave it out (or `null`) for
+    the knowledge base's own product. On an update an omitted `system`
+    keeps the current one and `null` clears it — the one field the
+    wholesale replace keeps. A `system` that names no entity fails the call
+    before anything is written.
 
     Mentions (which entities this statement refers to) are NOT passed in —
     they are derived automatically from the text and kept up to date. The
@@ -134,6 +145,12 @@ def upsert_statement(
         return reject
 
     statement_rows = _validate_statement_refs(id, links, incoming_links)
+    if system is not MISSING:
+        system_id = systems.resolve(system)
+    elif id is not None:
+        system_id = statement_rows[id]["system_entity_id"]
+    else:
+        system_id = None
 
     flip_edges: list[tuple[str, str, str, str, str, str]] = []
     for i, spec in enumerate(links):
@@ -177,12 +194,12 @@ def upsert_statement(
 
     with _persisted_index_write(statements=True):
         if id is not None:
-            store.update_statement(_db(), id, kind, text)
+            store.update_statement(_db(), id, kind, text, system_id)
             _set_statement_vector(id, vec)
             store.replace_links(_db(), id, link_pairs)
             statement_id = id
         else:
-            statement_id = store.create_statement(_db(), kind, text)
+            statement_id = store.create_statement(_db(), kind, text, system_id)
             _set_statement_vector(statement_id, vec)
             store.replace_links(_db(), statement_id, link_pairs)
 
@@ -212,6 +229,7 @@ def upsert_statement(
 @draftable_tool
 def upsert_statements(
     statements: list[BatchStatementSpec],
+    system: str | None = None,
 ) -> dict[str, Any]:
     """Insert several statements in one call, with cross-references between
     siblings resolved server-side.
@@ -230,6 +248,11 @@ def upsert_statements(
 
     Mentions are derived from each item's text automatically (see
     `upsert_statement`); there is no mentions field to pass.
+
+    `system` (an entity id or exact name) is the app or platform every
+    item belongs to; an item's own `system`, `null` included, overrides it.
+    Leave both out for the knowledge base's own product. A `system` that
+    names no entity fails the whole call before anything is written.
 
     Phrasing validation runs per item before any mutation. Items whose
     text trips the phrasing catalog are rejected unless that item carries
@@ -260,6 +283,11 @@ def upsert_statements(
     n = len(statements)
     if n == 0:
         return {"results": [], "near_duplicates": {}}
+    batch_system = systems.resolve(system)
+    system_ids = [
+        systems.resolve(spec["system"]) if "system" in spec else batch_system
+        for spec in statements
+    ]
 
     # Phase 0: decide who survives (phrasing → cascade → flip) with no writes.
     plan = _plan_batch(statements)
@@ -281,7 +309,9 @@ def upsert_statements(
         for i, spec in enumerate(statements):
             if i in plan.rejected:
                 continue
-            bid = store.create_statement(_db(), spec["kind"], spec["text"])
+            bid = store.create_statement(
+                _db(), spec["kind"], spec["text"], system_ids[i]
+            )
             _set_statement_vector(bid, vecs[i])
             store.derive_mentions(_db(), bid, spec["text"], name_index)
             statement_ids[i] = bid
@@ -377,6 +407,7 @@ def patch_statement(
     kind: str | None = None,
     text: str | None = None,
     allow_phrasing_violations: bool = False,
+    system: str | None | MISSING = MISSING,
 ) -> dict[str, Any]:
     """Partial update of an existing statement.
 
@@ -391,6 +422,9 @@ def patch_statement(
         the *effective* kind (the new kind if you also pass `kind`,
         otherwise the existing one). Mentions are re-derived from the new
         text automatically.
+      - `system` — the app or platform the statement belongs to, as an
+        entity id or exact name; `null` clears it (the knowledge base's own
+        product). A name that resolves to no entity fails the call.
 
     Out of scope by design:
       - Mentions are derived from text, never set directly.
@@ -400,8 +434,8 @@ def patch_statement(
         if you really want to replace the whole edge set.
 
     Embedding cost: we re-embed only when `text` is provided. Patching
-    `kind` alone does not call the embedder and does not update the vector
-    index or mentions — it's a single SQL update.
+    `kind` or `system` alone does not call the embedder and does not update
+    the vector index or mentions — it's a single SQL update.
 
     Phrasing validation behaves identically to `replace_text`: returns
     `{"rejected": True, "violations": [...]}` without writing on
@@ -416,10 +450,13 @@ def patch_statement(
     if row is None:
         raise ValueError(f"statement {id!r} does not exist")
 
-    if kind is None and text is None:
+    if kind is None and text is None and system is MISSING:
         return {"statement_id": id, "no_change": True}
 
     effective_kind = kind if kind is not None else row["kind"]
+    system_id = (
+        row["system_entity_id"] if system is MISSING else systems.resolve(system)
+    )
 
     # Phrasing check + embedding only when text is being patched. The
     # check runs under the *effective* kind so a same-call kind+text
@@ -434,20 +471,19 @@ def patch_statement(
             return reject
         vec = _try_embed(text)
 
-    # Mutate field-by-field so omitted fields stay untouched.
     with _persisted_index_write(statements=text is not None):
-        if text is not None and kind is not None:
-            store.update_statement(_db(), id, kind, text)
-        elif text is not None:
-            store.update_statement_text(_db(), id, text)
-        elif kind is not None:
-            store.update_statement_kind(_db(), id, kind)
-
+        if kind is None and text is None:
+            store.set_statement_system(_db(), id, system_id)
+        else:
+            store.update_statement(
+                _db(),
+                id,
+                effective_kind,
+                text if text is not None else row["text"],
+                system_id,
+            )
         if text is not None:
             _set_statement_vector(id, vec)
-        # Re-derive mentions only when the text changed (kind-only patches
-        # don't affect what entities the text mentions).
-        if text is not None:
             _derive_statement_mentions(id, text)
 
     response: dict[str, Any] = {"statement_id": id}
@@ -500,6 +536,10 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     reflect rows actually inserted onto the target — duplicates and
     self-loops are excluded.
 
+    Two statements with different systems (the apps or platforms they
+    belong to) are not duplicates: merging them fails, naming both, and
+    writes nothing. Change one's `system` first if they truly are one fact.
+
     No-op when `from_id == into_id`. Raises
     ValueError if either id does not exist.
     """
@@ -512,10 +552,25 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
             "incoming_links_moved": 0,
         }
 
-    if store.get_statement(_db(), from_id) is None:
+    source = store.get_statement(_db(), from_id)
+    if source is None:
         raise ValueError(f"statement {from_id!r} does not exist")
-    if store.get_statement(_db(), into_id) is None:
+    target = store.get_statement(_db(), into_id)
+    if target is None:
         raise ValueError(f"statement {into_id!r} does not exist")
+    if source["system_entity_id"] != target["system_entity_id"]:
+        refs = systems.refs([source["system_entity_id"], target["system_entity_id"]])
+
+        def named(entity_id: str | None) -> str:
+            if entity_id is None:
+                return "no system"
+            return f"system {refs[entity_id]['name']!r}"
+
+        raise ValueError(
+            f"statement {from_id!r} has {named(source['system_entity_id'])} and "
+            f"{into_id!r} has {named(target['system_entity_id'])}; statements of "
+            "different systems cannot be merged"
+        )
 
     # Mentions are derived from text: the target keeps its own (text
     # unchanged) and the source's derived rows are cleared so the source

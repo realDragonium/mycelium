@@ -1289,3 +1289,52 @@ def test_migrate_withdraws_only_empty_open_drafts_the_server_created():
 
     assert status(empty) == ("withdrawn", "upgrade")
     assert [status(d)[0] for d in kept] == ["open", "open", "submitted", "open"]
+
+
+def test_queued_statement_ops_carry_their_system_through_approval(
+    tmp_path, monkeypatch
+):
+    from pydantic.experimental.missing_sentinel import MISSING
+
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        server.upsert_entity(name="Paylark", description="A payment platform.")
+        theirs = server.upsert_statement(
+            kind="action", text="Open the Paylark dashboard", links=[], system="Paylark"
+        )["statement_id"]
+        retagged = server.upsert_statement(
+            kind="action", text="Open the Paylark settings", links=[], system="Paylark"
+        )["statement_id"]
+        tokens = _as_drafter("sess-systems")
+        try:
+            receipt = server.upsert_statement(
+                kind="action",
+                text="Copy the signing secret from the Paylark Webhooks page",
+                links=[],
+                system="Paylark",
+            )
+            server.patch_statement(id=theirs, system=None)
+            # MCP passes an omitted argument as MISSING; it must not reach the op.
+            server.patch_statement(id=retagged, kind="check", system=MISSING)
+        finally:
+            _restore(tokens)
+        draft_id = receipt["draft_id"]
+        payloads = [op["payload"] for op in server.get_draft(draft_id)["ops"]]
+        assert payloads[0]["system"] == "Paylark"
+        assert payloads[1] == {"id": theirs, "system": None}
+        assert payloads[2] == {"id": retagged, "kind": "check"}
+
+        client.post(f"/api/drafts/{draft_id}/submit")
+        approved = client.post(f"/api/drafts/{draft_id}/approve")
+        assert approved.status_code == 200, approved.text
+
+        conn = store.substrate_connection()
+        paylark = store.get_name_by_text(conn, "Paylark")["entity_id"]
+        systems = dict(
+            conn.execute("SELECT text, system_entity_id FROM statements").fetchall()
+        )
+        assert systems == {
+            "Open the Paylark dashboard": None,
+            "Open the Paylark settings": paylark,
+            "Copy the signing secret from the Paylark Webhooks page": paylark,
+        }

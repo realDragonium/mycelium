@@ -119,7 +119,8 @@ class InProcessDraftEmitter:
     def add_op(
         self, draft_id: str, kind: str, payload: dict, *, source_text: str | None = None
     ) -> int:
-        clean = {k: v for k, v in payload.items() if v is not None}
+        # A null `system` clears it, so it is kept; other nulls mean omitted.
+        clean = {k: v for k, v in payload.items() if v is not None or k == "system"}
         if kind == "alias_suggestion":
             from ..alias_suggestions import Proposal, prepare
 

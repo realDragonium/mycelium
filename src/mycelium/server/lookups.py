@@ -8,12 +8,14 @@ one call to fit the Ask loop's turn budget.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import sqlite3
+from collections.abc import Callable, Sequence
 from typing import Annotated, Any
 
 from pydantic import Field, JsonValue
 
 from .. import store
+from . import systems
 from .entities import get_entity, list_entities, search_entities
 from .hydration import _hydrate_statement_full
 from .registry import draft_listing_tool, tool
@@ -141,6 +143,7 @@ def list_statements(
     entity_id: str | None = None,
     name: str | None = None,
     kind: str | None = None,
+    system: str | None = None,
 ) -> dict[str, Any]:
     """Page through statements in insertion order.
 
@@ -158,16 +161,23 @@ def list_statements(
     in `missing`, so you can fix the spelling rather than retry.
 
     `kind` ("event" / "state" / "capability") restricts to statements
-    of that kind. Combines with the entity filter under AND.
+    of that kind. `system` (an entity id or exact name, or `"main"` for
+    statements without a system) restricts to statements of that app or
+    platform; an unresolved one matches nothing and lands in `missing`.
+    Filters combine under AND.
 
-    Returns `{total, statements: [{id, kind, text}], missing}` — text only,
-    with no mentions or links to keep the response light. To inspect a
-    single statement's full structure use `get_statements([id])`. `limit` is
-    at most 100; page with `offset`.
+    Returns `{total, statements: [{id, kind, text, system?}], missing}` —
+    text only, with no mentions or links to keep the response light;
+    `system` is `{entity_id, name}` on statements that have one. To inspect
+    a single statement's full structure use `get_statements([id])`. `limit`
+    is at most 100; page with `offset`.
     """
     _check_limit(limit)
     if entity_id is not None and name is not None:
         raise ValueError("pass at most one of entity_id / name, not both")
+    system_id = None if system is None else systems.resolve_filter(system)
+    if system is not None and system_id is None:
+        return {"total": 0, "statements": [], "missing": [system]}
     if name is not None:
         row = store.get_name_by_text(_db(), name)
         if row is None:
@@ -176,15 +186,33 @@ def list_statements(
     if entity_id is not None and store.get_entity_by_id(_db(), entity_id) is None:
         return {"total": 0, "statements": [], "missing": [entity_id]}
     rows = store.list_statements(
-        _db(), limit=limit, offset=offset, entity_id=entity_id, kind=kind
+        _db(),
+        limit=limit,
+        offset=offset,
+        entity_id=entity_id,
+        kind=kind,
+        system=system_id,
     )
     return {
         "missing": [],
-        "total": store.count_statements(_db(), entity_id=entity_id, kind=kind),
-        "statements": [
-            {"id": r["id"], "kind": r["kind"], "text": r["text"]} for r in rows
-        ],
+        "total": store.count_statements(
+            _db(), entity_id=entity_id, kind=kind, system=system_id
+        ),
+        "statements": _rows(rows),
     }
+
+
+def _rows(rows: Sequence[sqlite3.Row]) -> list[dict[str, Any]]:
+    """List and grep rows: `{id, kind, text}`, plus the statement's `system`
+    when it has one."""
+    refs = systems.refs(r["system_entity_id"] for r in rows)
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        item: dict[str, Any] = {"id": r["id"], "kind": r["kind"], "text": r["text"]}
+        if r["system_entity_id"] is not None:
+            item["system"] = refs[r["system_entity_id"]]
+        out.append(item)
+    return out
 
 
 @tool
@@ -197,6 +225,7 @@ def grep_statements(
     match_aliased_mentions: bool = True,
     limit: int = 50,
     offset: int = 0,
+    system: str | None = None,
 ) -> dict[str, Any]:
     """Literal substring search over statement `text`, alias-aware.
 
@@ -232,12 +261,18 @@ def grep_statements(
     exist is a filter matching nothing, not a failure: you get
     `total: 0` and the unresolved value in `missing`.
 
+    Optional `system` (an entity id or exact name, or `"main"` for
+    statements without a system) restricts results to statements of that
+    app or platform; an unresolved one matches nothing and lands in
+    `missing`.
+
     A `query` that is exactly a statement id (surrounding whitespace
     ignored) returns that statement first with `matched_via: "id"`; the
-    `kind` and entity filters apply to it. An id that does not exist is
-    matched as text.
+    `kind`, entity and system filters apply to it. An id that does not
+    exist is matched as text.
 
-    Returns `{total, statements: [{id, kind, text, matched_via}], missing}`.
+    Returns `{total, statements: [{id, kind, text, system?, matched_via}],
+    missing}`; `system` is `{entity_id, name}` on statements that have one.
     `missing` is always present and empty when the filters resolved. Use
     `get_statements(ids)` for full mentions and links.
     """
@@ -245,6 +280,9 @@ def grep_statements(
         raise ValueError("query must be a non-empty string")
     if entity_id is not None and name is not None:
         raise ValueError("pass at most one of entity_id / name, not both")
+    system_id = None if system is None else systems.resolve_filter(system)
+    if system is not None and system_id is None:
+        return {"total": 0, "statements": [], "missing": [system]}
     if name is not None:
         row = store.get_name_by_text(_db(), name)
         if row is None:
@@ -257,6 +295,7 @@ def grep_statements(
         query,
         kind=kind,
         required_entity_ids={entity_id} if entity_id is not None else set(),
+        system=system_id,
     )
     if id_match is None:
         return _grep_page(
@@ -264,6 +303,7 @@ def grep_statements(
             case_sensitive,
             entity_id,
             kind,
+            system_id,
             match_aliased_mentions,
             limit,
             offset,
@@ -274,21 +314,14 @@ def grep_statements(
         case_sensitive,
         entity_id,
         kind,
+        system_id,
         match_aliased_mentions,
         limit - 1 if offset == 0 else limit,
         max(offset - 1, 0),
     )
     rows = [row for row in page["statements"] if row["id"] != id_match["id"]]
     if offset == 0:
-        rows.insert(
-            0,
-            {
-                "id": id_match["id"],
-                "kind": id_match["kind"],
-                "text": id_match["text"],
-                "matched_via": "id",
-            },
-        )
+        rows.insert(0, _rows([id_match])[0] | {"matched_via": "id"})
     return {"missing": [], "total": page["total"] + 1, "statements": rows}
 
 
@@ -297,6 +330,7 @@ def _grep_page(
     case_sensitive: bool,
     entity_id: str | None,
     kind: str | None,
+    system: str | None,
     match_aliased_mentions: bool,
     limit: int,
     offset: int,
@@ -309,6 +343,7 @@ def _grep_page(
         case_sensitive=case_sensitive,
         entity_id=entity_id,
         kind=kind,
+        system=system,
         limit=10_000 if (match_aliased_mentions and entity_id is None) else limit,
         offset=0 if (match_aliased_mentions and entity_id is None) else offset,
     )
@@ -320,69 +355,32 @@ def _grep_page(
             case_sensitive=case_sensitive,
             entity_id=entity_id,
             kind=kind,
+            system=system,
         )
         return {
             "missing": [],
             "total": total,
-            "statements": [
-                {
-                    "id": r["id"],
-                    "kind": r["kind"],
-                    "text": r["text"],
-                    "matched_via": "text",
-                }
-                for r in text_rows
-            ],
+            "statements": [row | {"matched_via": "text"} for row in _rows(text_rows)],
         }
 
     mention_rows = store.grep_statements_via_mentions(
-        _db(), query, case_sensitive=case_sensitive, kind=kind
+        _db(), query, case_sensitive=case_sensitive, kind=kind, system=system
     )
-    mention_ids = {r["id"]: r for r in mention_rows}
+    mention_ids = {r["id"] for r in mention_rows}
+    text_ids = {r["id"] for r in text_rows}
+    combined = [*text_rows, *(r for r in mention_rows if r["id"] not in text_ids)]
+    combined.sort(key=lambda r: r["rid"])
 
-    combined: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for r in text_rows:
-        sid = r["id"]
-        seen.add(sid)
-        matched_via = "both" if sid in mention_ids else "text"
-        combined.append(
-            {
-                "id": sid,
-                "kind": r["kind"],
-                "text": r["text"],
-                "matched_via": matched_via,
-                "_rid": r["rid"],
-            }
-        )
-    for r in mention_rows:
-        sid = r["id"]
-        if sid in seen:
-            continue
-        seen.add(sid)
-        combined.append(
-            {
-                "id": sid,
-                "kind": r["kind"],
-                "text": r["text"],
-                "matched_via": "mention",
-                "_rid": r["rid"],
-            }
-        )
+    def matched_via(statement_id: str) -> str:
+        if statement_id not in text_ids:
+            return "mention"
+        return "both" if statement_id in mention_ids else "text"
 
-    combined.sort(key=lambda x: x["_rid"])
-    total = len(combined)
-    sliced = combined[offset : offset + limit]
     return {
         "missing": [],
-        "total": total,
+        "total": len(combined),
         "statements": [
-            {
-                "id": s["id"],
-                "kind": s["kind"],
-                "text": s["text"],
-                "matched_via": s["matched_via"],
-            }
-            for s in sliced
+            row | {"matched_via": matched_via(row["id"])}
+            for row in _rows(combined[offset : offset + limit])
         ],
     }

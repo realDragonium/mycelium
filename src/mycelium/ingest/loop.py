@@ -31,7 +31,7 @@ from typing import Any
 
 import httpx
 
-from .. import ai, ai_prompts, link_rules, tracing, when_expression
+from .. import ai, ai_prompts, link_rules, store, tracing, when_expression
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
@@ -110,17 +110,18 @@ def run_ingest(
     substrate: SubstrateReader | None = None,
     emitter: DraftEmitter | None = None,
     config: IngestConfig | None = None,
+    system: str | None = None,
 ) -> IngestResult:
     """Turn `text` into a reviewable DRAFT. Returns `DraftCreated` or
     `NothingToIngest` — never raises for extraction/closure reasons, and never
-    writes live.
+    writes live. Statements the draft creates get `system`, an entity id.
 
     `client` / `substrate` / `emitter` / `config` are injectable for tests; in
     production they default to the shared model transport, the in-process
     substrate, the in-process draft emitter, and effective saved configuration.
     """
     config = config or IngestConfig.from_env()
-    task, instructions = ingest_task(text, config)
+    task, instructions = ingest_task(text, config, system)
     return run(
         task,
         instructions,
@@ -132,18 +133,31 @@ def run_ingest(
     )
 
 
-def ingest_task(text: str, config: IngestConfig) -> tuple[Task, ai_prompts.Snapshot]:
+def ingest_task(
+    text: str, config: IngestConfig, system: str | None = None
+) -> tuple[Task, ai_prompts.Snapshot]:
     """The loop's task for ingesting `text`, and the instructions it runs under."""
     instructions = ai_prompts.resolve(DOCTRINE_NAME, default_path=config.doctrine_path)
     guarded, input_note = _guard_input(text, config)
     task = Task(
         text=guarded,
         system_prompt=prompts.build_system_prompt(instructions.text),
-        first_message=lambda vocab: prompts.initial_user_message(guarded, vocab),
+        first_message=lambda vocab: prompts.initial_user_message(
+            guarded, vocab, system=_system_name(system)
+        ),
         title=_draft_title(guarded),
         notes=tuple(n for n in (instructions.note, input_note) if n),
+        system=system,
     )
     return task, instructions
+
+
+def _system_name(system: str | None) -> str | None:
+    if system is None:
+        return None
+    return store.entity_names(store.substrate_connection(), [system]).get(
+        system, system
+    )
 
 
 def run(
@@ -207,6 +221,8 @@ class Task:
     edge_check: directions.EdgeCheck = link_rules.flip_error
     #: Statements alias evidence may quote instead of `text`, by id.
     quotable: Mapping[str, str] = field(default_factory=dict)
+    #: The system entity id stamped on every statement the draft creates.
+    system: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -819,6 +835,7 @@ def _queue_ops(
             except ValueError as exc:
                 flagged.append(f"op[{i}] ({p.op}) dropped: {exc}")
                 continue
+        payload = _with_system(p.op, payload, ctx.task.system)
         try:
             if draft_id is None:
                 draft_id, seq = ctx.emitter.create(
@@ -836,6 +853,27 @@ def _queue_ops(
         seqs[i + 1] = seq
         queued.append(p.model_copy(update={"payload": payload}))
     return draft_id, queued
+
+
+def _with_system(op: str, payload: dict, system: str | None) -> dict:
+    """`payload` with `system` stamped on the statements it creates, over any
+    the model wrote on a batch item."""
+    if system is None:
+        return payload
+    if op == "upsert_statement" and payload.get("id") is None:
+        return payload | {"system": system}
+    if op == "upsert_statements":
+        items = payload.get("statements")
+        stamped = (
+            [
+                item | {"system": system} if isinstance(item, dict) else item
+                for item in items
+            ]
+            if isinstance(items, list)
+            else items
+        )
+        return payload | {"system": system, "statements": stamped}
+    return payload
 
 
 def _renumber_references(

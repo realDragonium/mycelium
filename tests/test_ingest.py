@@ -1587,6 +1587,46 @@ def test_t9_real_emitter_persists_draft_and_ops_via_drafts_store_and_drops_none(
     assert "mentions" not in queued["payload"]  # derived from text, dropped
 
 
+def test_ingest_stamps_its_system_on_the_statements_it_creates():
+    emitter, conn, drafts_store = _real_emitter_against_memory_db()
+    emit = _emit_input(
+        ops=[
+            _op(
+                "upsert_statement",
+                {"kind": "event", "text": "an invite is submitted", "links": []},
+                targets=["stm_99"],
+            )
+        ],
+        ledger=[
+            _ledger_row(
+                "an invite is submitted",
+                "new",
+                matched=["stm_99"],
+                considered=["stm_99"],
+                note="adjacent",
+            )
+        ],
+    )
+    result = run_ingest(
+        "An invite is submitted.",
+        client=FakeAnthropic(
+            _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
+        ),
+        substrate=FakeSubstrate(),
+        emitter=emitter,
+        config=IngestConfig(
+            model="claude-sonnet-4-6",
+            limits=IngestSettings(thinking=True),
+            trace_log_path=None,
+        ),
+        system="ent_paylark",
+    )
+
+    assert isinstance(result, DraftCreated)
+    [op] = drafts_store.list_ops(conn, result.draft_id)
+    assert drafts_store.serialize_op(op)["payload"]["system"] == "ent_paylark"
+
+
 # --------------------------------------------------------------------------- #
 # T-10: the untested forced-finalize reasons — wall_clock and floor_stuck.
 # --------------------------------------------------------------------------- #
@@ -2140,3 +2180,38 @@ def test_in_process_emitter_leaves_no_draft_when_the_first_op_is_refused():
         emitter.create(title="t", kind="add_links", payload={"links": [entity_link]})
 
     assert conn.execute("SELECT COUNT(*) FROM drafts").fetchone()[0] == 0
+
+
+def test_ingest_stamps_its_system_over_each_batch_item():
+    from mycelium.ingest.loop import _with_system
+
+    payload = {
+        "statements": [
+            {"kind": "action", "text": "Open the Webhooks page"},
+            {"kind": "action", "text": "Add an endpoint", "system": None},
+            {"kind": "action", "text": "Copy the secret", "system": "Paylrk"},
+        ]
+    }
+
+    stamped = _with_system("upsert_statements", payload, "ent_paylark")
+
+    assert stamped["system"] == "ent_paylark"
+    assert [item["system"] for item in stamped["statements"]] == ["ent_paylark"] * 3
+
+
+def test_ingest_drafts_keep_a_null_that_clears_a_system():
+    emitter, conn, drafts_store = _real_emitter_against_memory_db()
+
+    draft_id, _ = emitter.create(
+        title="t", kind="patch_statement", payload={"id": "stm_1", "system": None}
+    )
+
+    [op] = drafts_store.list_ops(conn, draft_id)
+    assert drafts_store.serialize_op(op)["payload"] == {"id": "stm_1", "system": None}
+
+
+def test_the_ingest_prompt_names_the_system_the_text_is_about():
+    from mycelium.ingest.prompts import initial_user_message
+
+    assert "about Paylark" in initial_user_message("x", {}, system="Paylark")
+    assert "SYSTEM:" not in initial_user_message("x", {})

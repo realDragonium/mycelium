@@ -8,7 +8,7 @@ import { Link, type Route } from './router';
 import {
   errorMessage, getReviewMode, isStatementFilter, knowledgeHealth,
   type AutomationKind, type AutomationStop, type ConnectLimits, type ConnectResult, type CurationSummary, type EntityFilter, type HealthCounts, type HealthEntity,
-  type HealthList, type HealthStatement, type StatementFilter,
+  type HealthList, type HealthStatement, type StatementFilter, type SystemCount,
 } from './api';
 import { dataOf, useAsync } from './use-async';
 import { tokens } from './ai-usage';
@@ -92,6 +92,22 @@ function RunStatus({ run }: { run: Run }) {
         {result.submitted_for_review ? ', submitted to the AI reviewer' : ''}; {cost}{flagged ? `; ${flagged} note${flagged === 1 ? '' : 's'} for the reviewer` : ''}{filed}.
       </span>
     </Notice>
+  );
+}
+
+// Where the knowledge lives: our product, then each other app or platform.
+function SystemCounts({ systems, main }: { systems: SystemCount[]; main: number }) {
+  return (
+    <section className="card health-systems" aria-labelledby="health-systems">
+      <h2 id="health-systems">Statements by system</h2>
+      <p className="muted small">The app or platform each statement belongs to.</p>
+      <div className="linkline"><span className="ll-dir">{main}</span><span /><span className="ll-target">Our product</span><span /></div>
+      {systems.map(s => (
+        <Link key={s.entity_id} to={{ view: 'entity', id: s.entity_id }} className="linkline">
+          <span className="ll-dir">{s.statements}</span><span /><span className="ll-target">{s.name}</span><span className="ll-tid">{s.entity_id}</span>
+        </Link>
+      ))}
+    </section>
   );
 }
 
@@ -342,6 +358,7 @@ export function KnowledgeHealthScreen({ list }: { list: HealthList | null }) {
             </Link>
           ))}
         </div>
+        {view.systems.length > 0 && <SystemCounts systems={view.systems} main={view.main_statements} />}
         {canConnect && (view.connect
           ? <ConnectPanel limits={view.connect} onDone={reload} />
           : <Notice tone="warn">Connecting statements is unavailable: {view.connect_error}</Notice>)}

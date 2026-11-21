@@ -12,6 +12,7 @@ from typing import Any
 
 from .. import store
 from ..require import require
+from . import systems
 from .runtime import _db
 
 
@@ -51,6 +52,10 @@ def _hydrate_statement(statement_id: str, score: float | None) -> dict[str, Any]
         "id": row["id"],
         "kind": row["kind"],
         "text": row["text"],
+    }
+    if row["system_entity_id"] is not None:
+        out["system"] = systems.ref(row["system_entity_id"])
+    out |= {
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "created_by": row["created_by"],

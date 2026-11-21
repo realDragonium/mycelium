@@ -253,6 +253,14 @@ export async function editStatement(id: string, text: string, force: boolean): P
   return { status: 'saved' };
 }
 
+// A statement's system is set or cleared (null) through patch_statement; a
+// drafter's change is staged in their draft instead.
+export async function setStatementSystem(id: string, system: string | null): Promise<{ status: 'saved' } | { status: 'staged'; draftId: string }> {
+  const raw = await postJSON<RawReplaceText | null>('/patch-statement', { id, system });
+  if (raw?.draft_id && raw.queued) return { status: 'staged', draftId: raw.draft_id };
+  return { status: 'saved' };
+}
+
 /* -------------------------------- write ------------------------------- */
 // Creating an entity or attaching an alias enqueues a mention rescan, so
 // statements containing the new name pick up the mention on the next drain.
@@ -273,7 +281,9 @@ export type IngestResult =
 // whether an accepted review applies without a person.
 export type ReviewMode = 'off' | 'review-only' | 'review-and-apply';
 export const getReviewMode = () => getJSON<{ mode: ReviewMode }>('/api/draft-review/settings').then(r => r.mode);
-export const ingest = (text: string) => postJSON<IngestResult>('/ingest', { text });
+// `system` names the app or platform the text is about, when not our own product.
+export const ingest = (text: string, system: string | null = null) =>
+  postJSON<IngestResult>('/ingest', system ? { text, system } : { text });
 
 /* ---------------------------- knowledge gaps --------------------------- */
 export type GapStatus = 'open' | 'resolved' | 'dismissed';
@@ -487,7 +497,10 @@ export interface CurationSummary {
 }
 export type AutomationKind = 'audience_review' | 'connect' | 'gap_follow_up' | 'draft_review' | 'curation' | 'mention' | 'embedding';
 export interface AutomationStop { kind: AutomationKind; item_id: string; failures: number; reason: string; updated_at: string }
-export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null; curation: CurationSummary[]; uncovered_by_profile: Record<string, number>; stopped: AutomationStop[] }
+// Statements per system, most first; `main_statements` counts those of the
+// knowledge base's own product.
+export interface SystemCount { entity_id: string; name: string; statements: number }
+export interface HealthView { systems: SystemCount[]; main_statements: number; counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null; curation: CurationSummary[]; uncovered_by_profile: Record<string, number>; stopped: AutomationStop[] }
 export interface HealthStatement {
   id: string; kind: string; text: string; links: number; mentions: string[];
   label_error: string | null; in_pending_draft: boolean; settled_at: string | null;

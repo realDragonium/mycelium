@@ -82,6 +82,31 @@ def test_edit_changes_one_statement_and_nothing_else():
     assert result.payloads["op_links"] == _links().payload
 
 
+def test_an_edit_keeps_the_statement_system():
+    step = Operation(
+        ref="op_step",
+        seq=1,
+        kind="upsert_statement",
+        payload={
+            "kind": "action",
+            "text": "Copy the signing secret",
+            "links": [],
+            "system": "Paylark",
+        },
+    )
+    result = draft_corrections.apply(
+        [step],
+        [
+            correction(
+                "edit",
+                operation_ref="op_step",
+                text="Copy the signing secret from the Webhooks page",
+            )
+        ],
+    )
+    assert result.payloads["op_step"]["system"] == "Paylark"
+
+
 def test_dropping_a_statement_keeps_every_other_reference_on_its_target():
     result = draft_corrections.apply(
         [_batch(), _links()],

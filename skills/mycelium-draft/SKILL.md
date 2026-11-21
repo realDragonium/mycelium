@@ -53,7 +53,7 @@ Before reading any code, walk the substrate to understand what already exists ar
 
 **Run in this order:**
 
-1. `search_statements(query=<domain>, depth=2, direction="both")` — semantic 2-hop neighbourhood scan. Collect every hit and its neighbours.
+1. `search_statements(query=<domain>, depth=2, direction="both")` — semantic 2-hop neighbourhood scan. Collect every hit and its neighbours. Researching an integration, add `system=<platform>` to see what is already recorded for that platform.
 2. `grep_statements(query=<core-term>)` — literal match to catch anything the semantic search missed.
 3. `get_statements(ids=[...])` — hydrate the top 10–15 most relevant hits. Read their `links` and `incoming_links` to map the live graph edges into and out of the domain.
 4. From the hydrated results, identify:
@@ -390,7 +390,7 @@ After incorporating all corrections, triaging Uncertainties, and re-syncing the 
 Queue the operations in dependency order, each with the `draft_id` from `open_draft`. Each call returns a receipt (`draft_id`, `seq`, `queued`, `revision`), not a substrate result; the draft replays them in `seq` order.
 
 1. **Entities first** — `upsert_entity` for each new entity, so its name exists when the statements replay and their mentions resolve. Aliases (`upsert_name`) and entity links (`add_entity_links`) need entity ids: queue them only for entities that already exist. For a new entity, list its aliases and entity links in the evidence and your report, to be added once the draft is applied; never guess an id, because a missing entity fails the whole replay.
-2. **All new statements in one `upsert_statements` batch.** Queued statements have no ids until the draft is applied, so every link that touches a new statement belongs in this batch: outgoing edges in each item's `links`, edges from existing statements in `incoming_links`, and `@N` (the item's 0-based position) wherever an edge or a `when` leaf points at another new statement. Existing statements are referenced by their real `stm_` ids.
+2. **All new statements in one `upsert_statements` batch.** Queued statements have no ids until the draft is applied, so every link that touches a new statement belongs in this batch: outgoing edges in each item's `links`, edges from existing statements in `incoming_links`, and `@N` (the item's 0-based position) wherever an edge or a `when` leaf points at another new statement. Existing statements are referenced by their real `stm_` ids. When the code is an integration's (another app or platform, such as a payment platform's connector), give each statement about that platform its `system`: the batch `system="Paylark"` when all of them are, or a per-item `system` where steps alternate between the platform and our product (`mycelium-authoring` §3a). The draft has no default system; a statement without one belongs to our product.
 3. **Links between two existing statements** — `add_links`.
 4. **Entity ↔ entity links between existing entities** — `add_entity_links`.
 5. **Text updates** to existing statements — `patch_statement`.

@@ -98,7 +98,7 @@ class BatchStatementSpec(TypedDict):
     `"stm_abc..."` or the literal string `"@N"` (where N is a 0-based
     integer) to refer to the Nth statement in the same batch. This lets
     callers wire siblings together in one call without round-tripping for
-    ids first.
+    ids first. An item's `system`, even `null`, overrides the batch's.
     """
 
     kind: str
@@ -106,6 +106,7 @@ class BatchStatementSpec(TypedDict):
     links: NotRequired[list[LinkSpec]]
     incoming_links: NotRequired[list[IncomingLinkSpec]]
     allow_phrasing_violations: NotRequired[bool]
+    system: NotRequired[str | None]
 
 
 #: Ceiling on rows a paged or ranked read returns: hits are hydrated, so an

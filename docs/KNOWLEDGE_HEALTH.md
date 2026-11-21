@@ -8,7 +8,7 @@ count opens the list behind it:
 | Isolated statements | No link leads to or from the statement, and no link holds only when it does | `#/health/isolated` |
 | Statements naming no concept | No concept name or alias appears in its text | `#/health/unmentioned` |
 | Concepts without a description | The description is empty | `#/health/undescribed` |
-| Concepts no statement mentions | No statement uses any of its names | `#/health/unused` |
+| Concepts no statement mentions | No statement uses any of its names, and no statement has it as its system | `#/health/unused` |
 | Statements without an audience label | Only internal audiences see it; the list shows a failed labelling attempt's error | `#/health/unlabelled` |
 | Open knowledge gaps | Neither resolved nor dismissed | Knowledge gaps |
 | Out-of-date documents | A statement the current revision cites has changed, or an image it places was replaced, deleted or relabelled | Documents |
@@ -23,6 +23,11 @@ that an undecided draft already links or takes an alias from, and when the
 connect pass or an outside agent last looked at them (`settled_at`);
 `to_connect=true` leaves out both, and statements an agent holds, giving the
 statements the pass should be offered next.
+
+The same response counts statements per system: `systems` holds
+`{entity_id, name, statements}` for each entity that is a statement's system,
+most statements first, and `main_statements` counts the statements without
+one, which belong to the knowledge base's own product.
 
 ## Connecting statements with AI
 
@@ -160,8 +165,10 @@ An item's id is the statement's id for `isolated` and `unnamed`, the
 gap's id for `rephrase`, `gap` and `question`, the concept's id for
 `undescribed` and `unused`, and both ids sorted and joined by `~` for
 `duplicate`. A `duplicate` item carries `pair`: its kind (`statement` or
-`concept`), both sides (for concepts with their names, description and some
-statements naming them) and the score. `undescribed` and `unused` items carry
+`concept`), both sides (for statements with their system when they have one,
+for concepts with their names, description and some statements naming them)
+and the score. Statements of different systems are never paired: the same
+words in two apps are two facts, and `merge_statements` refuses them. `undescribed` and `unused` items carry
 `concept`: its names, description and the statements naming it. A `rephrase`
 or `gap` item whose gap names a draft carries `draft`: its id, title, status,
 the latest review's rationale and its operations. A `question` item is the
@@ -189,6 +196,13 @@ since their draft is still undecided.
    lease on every item of that kind you still hold; `limit=0` only renews.
    An item whose lease runs out goes back to the pool, and that counts as a
    skip (see below).
+
+   An agent working in an integration's repository passes `system` (the
+   platform's entity id or name, or `"main"` for our own product) so that
+   it gets only statements of that system: it narrows `isolated`, `unnamed`
+   and `rephrase` items to their statement's system, and `duplicate` items
+   to statement pairs whose statements both have it. `system` with any other
+   kind, or one that names no entity, fails the call.
 2. **Check each item in the codebase.** Find where the product implements
    what the statement says, and what the neighbouring statements describe.
    Read the neighbours and any other candidates with `get_statements`, and
