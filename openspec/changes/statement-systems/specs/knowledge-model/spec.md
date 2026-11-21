@@ -1,23 +1,18 @@
 ## ADDED Requirements
 
 ### Requirement: Statement system
-A statement SHALL have an optional system: the entity of the app or platform its behaviour or step belongs to. A statement without one belongs to the knowledge base's own product. `upsert_statement`, `upsert_statements` and `patch_statement` SHALL accept `system` as an entity id or an exact name resolved case-insensitively; `upsert_statements` SHALL also accept a batch `system` that an item's own `system` overrides. On an update, an omitted `system` MUST keep the current one and `system: null` MUST clear it. A `system` that does not resolve MUST fail the call before anything is written. Changing only the system MUST NOT re-embed the statement, re-derive its mentions or change its `updated_at`, so curation and document freshness do not read it as a content change; the change SHALL still be recorded in its history, and setting the system it already has SHALL write nothing.
+A statement SHALL have an optional system: the entity of the app or platform its behaviour or step belongs to. A statement without one belongs to the knowledge base's own product.
 
 #### Scenario: A step in another platform
 - **WHEN** a writer creates the action "Copy the signing secret from the Webhooks page" with `system: "Paylark"`
 - **THEN** the statement's system is the Paylark entity
 
+### Requirement: Writing a statement's system
+`upsert_statement`, `upsert_statements` and `patch_statement` SHALL accept `system` as an entity id or an exact name resolved case-insensitively; `upsert_statements` SHALL also accept a batch `system` that an item's own `system` overrides. On an update, an omitted `system` MUST keep the current one and `system: null` MUST clear it. A `system` that does not resolve MUST fail the call before anything is written.
+
 #### Scenario: Text fix keeps the system
 - **WHEN** a statement's system is Paylark and a writer calls `upsert_statement` with its `id`, new text and no `system`
 - **THEN** the text changes and the system is still Paylark
-
-#### Scenario: Clearing the system
-- **WHEN** a writer calls `patch_statement` with `system: null` on a statement whose system is Paylark
-- **THEN** the statement has no system and its text, links and mentions are unchanged
-
-#### Scenario: Assigning a system keeps settled curation settled
-- **WHEN** a statement settled as `no_link` in curation gets `system: "Paylark"` and nothing else changes
-- **THEN** its `updated_at` is unchanged, it is not offered again as `isolated`, and its history shows the change
 
 #### Scenario: Unknown system
 - **WHEN** a writer passes `system: "Paylrk"` and no entity has that name
@@ -26,6 +21,17 @@ A statement SHALL have an optional system: the entity of the app or platform its
 #### Scenario: Batch default with an override
 - **WHEN** a writer sends a batch with `system: "Paylark"` whose item 2 passes `system: null`
 - **THEN** every item but item 2 belongs to Paylark and item 2 has no system
+
+### Requirement: A system change is not a content change
+Changing only a statement's system MUST NOT re-embed it, re-derive its mentions or change its `updated_at`, so curation and document freshness do not read it as a content change. The change SHALL be recorded in the statement's history, and setting the system it already has SHALL write nothing.
+
+#### Scenario: Clearing the system
+- **WHEN** a writer calls `patch_statement` with `system: null` on a statement whose system is Paylark
+- **THEN** the statement has no system and its text, links and mentions are unchanged
+
+#### Scenario: Assigning a system keeps settled curation settled
+- **WHEN** a statement settled as `no_link` in curation gets `system: "Paylark"` and nothing else changes
+- **THEN** its `updated_at` is unchanged, it is not offered again as `isolated`, and its history shows the change
 
 ### Requirement: Systems in drafts
 A queued statement operation SHALL carry the `system` it was written with, show it in the draft's operations, and apply it on approval. `open_draft` SHALL take no default system.
