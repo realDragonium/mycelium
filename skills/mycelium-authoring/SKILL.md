@@ -97,6 +97,15 @@ A statement records what the *product* does or is true of — not how code imple
 | *"The `members` table has columns id, name, status"* | *"A member record holds a name, an email and a status"* (state) |
 | *"`SsoCallback` calls `verify_state()`"* | *"An SSO callback is rejected"* (event), with `when` *"The callback state parameter does not match the sign-in request"* (state) |
 
+### 3a. Systems — whose app the claim is about
+
+A statement's **system** is the app or platform its behaviour or step belongs to: an app or platform a user can name, ours or a third party's (*our app*, *Paylark*), never a repository, service or internal component. Leave it out for the knowledge base's own product, which is most statements. Set it for what happens in, or is done in, another platform: `upsert_statement(…, system="Paylark")`, as an entity id or exact name.
+
+- **The system is an entity at app level.** Create it with `upsert_entity` before naming it; a write naming an unknown system fails. Sections of the platform (*Paylark Webhooks*) are entities the system `contains` (`add_entity_links`), not systems of their own.
+- **One system per statement.** Behaviour that spans two apps is split into linked statements, each with its own system: *"Paylark sends a payment webhook"* (Paylark) `triggers` *"An invoice is marked paid"* (no system).
+- **It is not a mention.** The system is set on the write, never derived from the text, so the text need not name the platform.
+- **Batches and edits.** On `upsert_statements` a batch `system` applies to every item without its own (an item's `system: null` opts out). An update without `system` keeps the current one, even `upsert_statement(id=…)`; `patch_statement(id, system=null)` clears it.
+
 ---
 
 ## 4. Atomicity — strict on order, pragmatic on phrasing
@@ -226,7 +235,7 @@ These are combinations of the rules above, not special primitives. Recognising t
 **Per statement:**
 
 1. **Decomposed to the action *and* derivation layer?** Distinct actions are separate statements wired in order (`proceeds`/`contains`); computation stages are separate statements wired in derivation order (`valued-by`/`composes`/`cases`); nothing collapsed except indivisible actions and invisible plumbing (§1, §1e).
-2. **Framed from outside?** Survives the refactor test; no class/function/table names; domain entities preserved (§3).
+2. **Framed from outside?** Survives the refactor test; no class/function/table names; domain entities preserved (§3). A claim about another app or platform carries that `system`, and spans one app only (§3a).
 3. **Atomic — or a justified carve-out?** One claim, or one get-or-create/inline-guard with `allow_phrasing_violations`; never two orderable actions fused (§4).
 4. **Inputs as properties, real states as states?** (§4a, §4c)
 5. **Right `kind`, phrasing routed not bypassed?** Every concept the text names exists, so the mention is derived (§5, §8).

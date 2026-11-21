@@ -24,9 +24,22 @@ generated as names of their own. Names have their own vector index for entity
 search and alias-aware retrieval; exact name matching still decides identity.
 See [Names and aliases](NAMES_AND_ALIASES.md).
 
-A **statement** is an atomic unit of knowledge: an opaque id, a `kind` and text.
-It is the unit that carries meaning, is embedded and searched, and links to
-other statements.
+A **statement** is an atomic unit of knowledge: an opaque id, a `kind`, text
+and an optional system. It is the unit that carries meaning, is embedded and
+searched, and links to other statements.
+
+A statement's **system** is the entity of the app or platform its behaviour or
+step belongs to: our own app, or a third party's such as a payment platform. A
+statement without one belongs to the knowledge base's own product. The system
+is an ordinary entity, so its names, description, history and entity links
+(`Paylark contains Paylark Webhooks`) need nothing new. It is a fixed-role
+reference, not a statement link and not a mention: it is set explicitly on
+write (by entity id or exact name), never derived from the text, and the text
+need not name it. A statement has at most one system; behaviour that spans
+two apps is split into linked statements. Reads show it as
+`system: {entity_id, name}` and filter by it, with `"main"` selecting
+statements without one (so an entity named "main" filters by its id, not
+its name); reads as an audience leave it out.
 
 A **mention** associates a statement with a *name*, not directly with an entity.
 Mentions are derived from the distinctive names found in a statement's text
@@ -95,12 +108,19 @@ not list is accepted. What the substrate does enforce is below.
   entity. A statement used as a condition leaf cannot be deleted until the
   condition is rewritten or removed.
 - **Entity links** cannot point an entity at itself.
+- **Systems.** A `system` that names no entity fails the write before anything
+  changes. On an update an omitted `system` keeps the current one and `null`
+  clears it; changing only the system neither re-embeds the statement nor
+  re-derives its mentions. Two statements with different systems cannot be
+  merged. Merging entities moves the source's system references to the
+  target, and an entity that is still a statement's system cannot be deleted.
 - **Drafters do not write directly.** For a `drafter` principal, every
   substrate write tool queues its call as an operation on an open draft
   instead of changing the substrate. Other tools that change state (draft
   submission, documentation runs, settings) keep their own role checks; see [Managing users](USERS.md#roles) and
   [Internal draft review](DRAFT_REVIEW.md).
-- **History.** Every change to entities, names, statements, mentions,
+- **History.** Every change to entities, names, statements (their system
+  included), mentions,
   statement links and entity links records an event in the history database,
   in the same transaction as the write. Changes to audience labels, knowledge
   gaps, the glossaries, link type aliases and duplicate dismissals are not

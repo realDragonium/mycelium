@@ -65,6 +65,13 @@ submit or withdraw it first. Run one job per account at a time.
    `draft` (its operations and the review's rationale). A gap whose chain of
    rejected curation proposals is past the saved limit is not offered: a
    person decides it, so do not propose another draft for it by other means.
+
+   **In an integration's repository** (code for another app or platform, such
+   as a payment platform's connector), claim only that platform's statements:
+   `claim_curation_work(kind, limit=3, system="Paylark")` for `isolated`,
+   `unnamed`, `rephrase` and `duplicate` work; `system="main"` limits it to
+   statements of our own product. Statements you write there pass the same
+   `system` (`mycelium-authoring` §3a).
 2. **Find the behaviour in the code.** Search the repository for the
    statement's terms, the UI copy, the setting name or the event. Read the
    handler, the job or the check that implements it, and what runs before and

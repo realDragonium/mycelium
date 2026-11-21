@@ -75,11 +75,11 @@ records stay off MCP: they run in-process.
 
 | Tool | Why it is on MCP |
 | --- | --- |
-| `search_statements` | Semantic retrieval with alias boost and graph expansion. `decompose` searches each part of a multi-part question and ranks statements several parts surface first. This is the main read. While the embedding provider is down it falls back to keyword matching and marks hits `retrieval: "keyword"`. A query that is exactly a statement id returns that statement first, marked `matched_via: "id"` with no score. |
+| `search_statements` | Semantic retrieval with alias boost and graph expansion. `decompose` searches each part of a multi-part question and ranks statements several parts surface first. This is the main read. While the embedding provider is down it falls back to keyword matching and marks hits `retrieval: "keyword"`. A query that is exactly a statement id returns that statement first, marked `matched_via: "id"` with no score. `system` keeps direct hits of one app or platform (`"main"` for our own product). |
 | `get_statements` | Hydrates known ids and follows links. |
 | `find_statement_connections` | Finds bounded routes between statements. It cannot be composed cheaply from other reads. |
-| `grep_statements` | Literal lookup for identifiers and quoted strings that semantic search misses. A statement id as the query returns that statement first, `matched_via: "id"`. |
-| `list_statements` | Enumerates statements that mention an entity or have a kind, without a query. |
+| `grep_statements` | Literal lookup for identifiers and quoted strings that semantic search misses. A statement id as the query returns that statement first, `matched_via: "id"`. Filters by `system` as `search_statements` does. |
+| `list_statements` | Enumerates statements that mention an entity, have a kind or belong to a system, without a query. |
 | `discover_facts` | Checks many candidate texts in one call before writing (`exists` / `near` / `new`). The repository's authoring and draft skills depend on it. |
 | `get_entity` | Hydrates an entity's names and entity links. |
 | `list_entities` | Pages entities and matches literal prefixes across aliases. |
@@ -90,12 +90,12 @@ records stay off MCP: they run in-process.
 | `list_link_type_aliases` | Lists the phrasings each link type accepts, as the Glossary shows them. |
 | `get_history` | Reads the Activity feed: who created, edited, linked or deleted what, with before and after snapshots, filtered by operation, kind or id. |
 | `ask` | Runs the server's answer loop. Hidden while Ask is set to External agent. |
-| `ingest` | Turns prose into a reviewable draft, submitted at once while internal draft review is on. While Ingest is set to External agent it queues the work for an outside agent instead. |
+| `ingest` | Turns prose into a reviewable draft, submitted at once while internal draft review is on. While Ingest is set to External agent it queues the work for an outside agent instead. `system` stamps every statement the draft creates with the app or platform the text is about. |
 | `upsert_entity` | Creates or describes the entity a statement names. |
 | `upsert_name` | Adds an alias so mentions resolve. |
-| `upsert_statement` | Creates or replaces one statement. Its description holds the statement-kind definitions that the authoring skills refer to. When embedding is unavailable, the response has `embedding_pending: true` and `near_duplicates: []`. |
-| `upsert_statements` | Creates one or more statements with links, including cross-references within the batch. A non-empty `embedding_pending` list identifies statements awaiting vectors. |
-| `patch_statement` | Edits the text or kind of an existing statement without touching its links. A text edit can return `embedding_pending: true`. |
+| `upsert_statement` | Creates or replaces one statement. Its description holds the statement-kind definitions that the authoring skills refer to. `system` names the app or platform the statement belongs to; a replace keeps it unless passed. When embedding is unavailable, the response has `embedding_pending: true` and `near_duplicates: []`. |
+| `upsert_statements` | Creates one or more statements with links, including cross-references within the batch. A batch `system` applies to every item without its own. A non-empty `embedding_pending` list identifies statements awaiting vectors. |
+| `patch_statement` | Edits the text, kind or system of an existing statement without touching its links; `system: null` clears the system. A text edit can return `embedding_pending: true`. |
 | `add_links` | Adds statement links. |
 | `remove_links` | Removes statement links. |
 | `add_entity_links` | Adds structural entity↔entity edges, as the authoring skill instructs. |
@@ -133,7 +133,7 @@ records stay off MCP: they run in-process.
 | `list_media` | Lists the screenshots and recordings attached to a statement or concept, one item, or the media library by filter, with alt text, caption and the URL of the bytes. An agent checks what is already illustrated before uploading. |
 | `create_media_upload` | Returns a single-use upload link for a screenshot or recording an agent captured; the agent cites the resulting `media_id` as `media` evidence on a draft operation. See [Uploading media](#uploading-media). |
 | `edit_media` | Changes a media item as the library does: details, label, confirm a label, attach or detach, an upload link for new content, or delete (an admin). Real writers and admins only. |
-| `claim_curation_work` | Hands an agent working in the product's code a batch of knowledge-health work (isolated or unnamed statements, rephrase requests, open gaps, the draft reviewer's questions for a person, duplicate statement or concept pairs, concepts without a description or without statements) on a 30-minute lease, with each item's concepts, nearest statements and the link vocabulary. Only that agent can tell from the code whether two statements relate. See [Curation work for outside agents](KNOWLEDGE_HEALTH.md#curation-work-for-outside-agents). |
+| `claim_curation_work` | Hands an agent working in the product's code a batch of knowledge-health work (isolated or unnamed statements, rephrase requests, open gaps, the draft reviewer's questions for a person, duplicate statement or concept pairs, concepts without a description or without statements) on a 30-minute lease, with each item's concepts, nearest statements and the link vocabulary. `system` narrows statement work to one app or platform. Only that agent can tell from the code whether two statements relate. See [Curation work for outside agents](KNOWLEDGE_HEALTH.md#curation-work-for-outside-agents). |
 | `release_curation_work` | Records what came of claimed items (`proposed` with the draft, `no_link` with a reason, or `skipped`) in the memory the connect pass shares, so they are not offered again until they change; a skipped item is offered again until it was skipped, or its claim ran out, more often than its limit. Closes a gap as `resolved` by an applied draft or `not_applicable` with a reason, and answers a reviewer's question as `answered` with evidence, which starts the draft's fresh review. |
 | `report_knowledge_gap` | Lets an agent report knowledge it could not find, optionally naming the statement, draft or generated document it is about. A report about a draft is resolved when that draft is applied. |
 | `request_documentation` | Starts a documentation run. `anchor_entity_id`, with a guideline set and document type, names the entity the document is about, so a repeat request revises that document; without one, the run creates a document. |

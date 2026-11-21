@@ -278,6 +278,10 @@ external audiences do not. External audiences also see only the names visible
 statements were matched through, so an internal alias or codename of a
 visible concept stays hidden.
 
+Statements read as an audience come without their system (the app or platform
+they belong to), and the read tools are offered without the `system` filter;
+how documents present systems is not decided yet.
+
 Semantic search ranks only visible statements. The visible set is fixed when
 the run starts, and a document citing anything outside it is refused. The
 writer and the reviewer are given the audience description, and the reviewer
