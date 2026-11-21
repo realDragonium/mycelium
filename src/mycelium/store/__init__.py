@@ -104,6 +104,7 @@ from .links import (
     rewrite_when_references,
 )
 from .names import (
+    MAIN_SYSTEM,
     count_entities,
     count_grep_statements,
     count_statements,
@@ -111,6 +112,7 @@ from .names import (
     delete_name,
     delete_name_mentions,
     delete_names_clearing_generated_refs,
+    entity_names,
     find_names_containing,
     get_generated_children,
     get_name_by_id,
@@ -158,6 +160,7 @@ from .statement_mentions import (
 from .statements import (
     count_pending_names,
     count_pending_statements,
+    count_system_uses,
     create_statement,
     delete_name_vector_mapping,
     drop_vector_id,
@@ -176,15 +179,18 @@ from .statements import (
     name_vector_texts,
     next_name_vector_id,
     next_vector_id,
+    reassign_statement_systems,
     set_name_vector_id,
+    set_statement_system,
     set_vector_id,
     statement_vector_texts,
     update_statement,
-    update_statement_kind,
     update_statement_text,
 )
 
 __all__ = [
+    "MAIN_SYSTEM",
+    "entity_names",
     "HISTORY_SCHEMA",
     "SCHEMA",
     "activity_feed",
@@ -323,8 +329,10 @@ __all__ = [
     "substrate_dump",
     "transaction",
     "update_entity_description",
+    "set_statement_system",
     "update_statement",
-    "update_statement_kind",
+    "reassign_statement_systems",
+    "count_system_uses",
     "update_statement_text",
     "upsert_entity_link_type_glossary",
     "upsert_link_type_alias",

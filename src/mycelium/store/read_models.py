@@ -31,7 +31,8 @@ def substrate_dump(conn: sqlite3.Connection) -> dict[str, Any]:
           entity's preferred name (alphabetical fallback); falls back to the id if
           the entity has no names.
         - names: [{id, text, entity}] — `entity` is the entity_id.
-        - statements: [{id, kind, text, mentions: [entity_id]}] — entity_ids
+        - statements: [{id, kind, text, system, mentions: [entity_id]}] —
+          `system` is the system's entity_id or null; mention entity_ids
           are deduplicated from the underlying name_id mentions, since the UI
           renders mentions as entity chips.
         - links: [{from, to, link_type}] — with an optional `when` tree when
@@ -64,7 +65,9 @@ def substrate_dump(conn: sqlite3.Connection) -> dict[str, Any]:
         for r in entity_rows
     ]
 
-    statement_rows = conn.execute("SELECT id, kind, text FROM statements").fetchall()
+    statement_rows = conn.execute(
+        "SELECT id, kind, text, system_entity_id FROM statements"
+    ).fetchall()
     mention_rows = conn.execute(
         "SELECT bm.statement_id, n.entity_id "
         "FROM statement_mentions bm "
@@ -80,6 +83,7 @@ def substrate_dump(conn: sqlite3.Connection) -> dict[str, Any]:
             "id": r["id"],
             "kind": r["kind"],
             "text": r["text"],
+            "system": r["system_entity_id"],
             "mentions": mentions_by_statement.get(r["id"], []),
         }
         for r in statement_rows

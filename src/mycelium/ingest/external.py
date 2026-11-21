@@ -38,6 +38,8 @@ Action = Literal["ingest", "connect"]
 class LoopState(BaseModel):
     #: Ingest's text, or the statements the connect pass works on.
     text: str | None = None
+    #: The system entity id ingest stamps on the statements it creates.
+    system: str | None = None
     statement_ids: list[str] = []
     reader: str | None = None
     #: The reads the current claimant made that succeeded, for the floor.
@@ -95,7 +97,7 @@ def _open(kind: Kind, state: LoopState, claimant: str) -> loop._RunContext:
         task, _ = connect_task(_targets(state), _known_name)
     else:
         config = IngestConfig.from_env()
-        task, _ = loop.ingest_task(state.text or "", config)
+        task, _ = loop.ingest_task(state.text or "", config, state.system)
     # No model runs, so the run has no token cap.
     config = dataclasses.replace(config, model=f"agent:{claimant}", max_run_tokens=None)
     return loop._open(task, None, InProcessSubstrate(), InProcessDraftEmitter(), config)

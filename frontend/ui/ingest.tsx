@@ -4,6 +4,7 @@ import { EmptyState, I, Notice, PageHeader, type IconName } from './lib';
 import { Link, useRouter } from './router';
 import { errorMessage, getReviewMode, HttpError, ingest, type ReviewMode } from './api';
 import { useAsync } from './use-async';
+import { ensureSubstrate } from './data';
 
 const SOURCE_TYPES: { k: string; label: string; glyph: IconName }[] = [
   { k: 'brain-dump', label: 'Brain-dump', glyph: 'survey' },
@@ -36,6 +37,9 @@ export function IngestSurface() {
   const [state, setState] = useState<Phase>({ phase: 'compose' });
   const [source, setSource] = useState('');
   const [sourceType, setSourceType] = useState('brain-dump');
+  const [system, setSystem] = useState('');
+  const loaded = useAsync(ensureSubstrate).state;
+  const entityNames = loaded.status === 'ready' ? loaded.data.entities.map(e => e.name) : [];
   const [now, setNow] = useState(Date.now);
   const runId = useRef(0);
   const mode = useAsync(getReviewMode).state;
@@ -54,7 +58,7 @@ export function IngestSurface() {
     if (!source.trim() || processing) return;
     const mine = ++runId.current;
     setState({ phase: 'processing', startedAt: Date.now() });
-    ingest(source).then(res => {
+    ingest(source, system.trim() || null).then(res => {
       if (mine !== runId.current) return;
       if (res.outcome === 'draft_created' && res.alias_draft_id && res.alias_draft_id !== res.draft_id) {
         setState({ phase: 'two-drafts', draftId: res.draft_id, aliasDraftId: res.alias_draft_id, submitted: !!res.submitted_for_review });
@@ -141,6 +145,13 @@ export function IngestSurface() {
             {I[st.glyph]({ className: 'sc-glyph' })}{st.label}
           </button>
         ))}
+      </div>
+      <div className="src-type-row">
+        <label className="ll" htmlFor="ingest-system">system</label>
+        <input id="ingest-system" className="input" list="ingest-system-names" value={system} onChange={e => setSystem(e.target.value)}
+          placeholder="Our product" aria-describedby="ingest-system-help" spellCheck={false} />
+        <datalist id="ingest-system-names">{entityNames.map(n => <option key={n} value={n} />)}</datalist>
+        <span id="ingest-system-help" className="muted small">The app or platform the text is about, such as a payment platform. Leave empty for our product.</span>
       </div>
       <div className="ingest-field">
         <textarea value={source} onChange={e => setSource(e.target.value)} spellCheck={false} aria-label="Text to ingest"

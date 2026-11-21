@@ -775,3 +775,50 @@ def test_health_shows_holders_and_only_an_admin_frees_them(app, role):
     assert retried.status_code == (200 if role == "admin" else 403)
     if role == "admin":
         assert retried.json() == {"retried": True}
+
+
+def test_a_claim_narrowed_to_a_system_offers_only_its_statements(conn, drafts):
+    conn.execute("INSERT INTO entities (id) VALUES ('ent_paylark')")
+    conn.execute(
+        "UPDATE statements SET system_entity_id = 'ent_paylark' "
+        "WHERE id IN ('stm_a', 'stm_c')"
+    )
+    store.create_knowledge_gap(
+        conn,
+        knowledge_health.REPHRASE_GAP_PREFIX + "say what is enabled",
+        statement_id="stm_b",
+    )
+
+    def claim(kind, system, pairs=()):
+        chosen, _, _ = curation.claim(
+            conn,
+            drafts,
+            kind,
+            limit=5,
+            claimant=f"agent-{kind}-{system}",
+            now=NOW,
+            pairs=pairs,
+            system=system,
+        )
+        return [c.id for c in chosen]
+
+    assert claim("isolated", "ent_paylark") == ["stm_a", "stm_c"]
+    assert claim("isolated", store.MAIN_SYSTEM) == ["stm_b"]
+    assert claim("rephrase", "ent_paylark") == []
+    pairs = [_pair(conn, "stm_a", "stm_c"), _pair(conn, "stm_a", "stm_b")]
+    assert claim("duplicate", "ent_paylark", pairs) == ["stm_a~stm_c"]
+
+
+def test_a_system_claim_refuses_concept_work_and_unknown_systems(app):
+    from mycelium import auth, server
+
+    server.upsert_entity(name="Paylark", description="A payment platform.")
+    token = _as("drafter")
+    try:
+        with pytest.raises(ValueError, match="only to statement work"):
+            server.claim_curation_work("undescribed", system="Paylark")
+        with pytest.raises(ValueError, match="Paylrk"):
+            server.claim_curation_work("isolated", system="Paylrk")
+        assert server.claim_curation_work("isolated", system="paylark")["items"] == []
+    finally:
+        auth.current_principal.reset(token)

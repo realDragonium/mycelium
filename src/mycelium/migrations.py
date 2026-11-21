@@ -1194,6 +1194,19 @@ def _migration_v29_more_automation_stops(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE automation_stops_v28")
 
 
+def _migration_v30_statement_systems(conn: sqlite3.Connection) -> None:
+    """Let a statement name the app or platform it belongs to. Existing
+    statements keep none: they belong to the knowledge base's own product."""
+    if not _has_table(conn, "statements"):
+        return
+    _ensure_column(
+        conn, "statements", "system_entity_id", "TEXT REFERENCES entities(id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS statements_system ON statements (system_entity_id)"
+    )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1227,6 +1240,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (27, _migration_v27_gap_outcomes),
     (28, _migration_v28_automation_stops),
     (29, _migration_v29_more_automation_stops),
+    (30, _migration_v30_statement_systems),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
@@ -1317,7 +1331,8 @@ def _ensure_column(
     than at runtime — runtime now trusts `user_version` instead of
     checking every table on every startup."""
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    existing = {r["name"] for r in rows}
+    # By position: some callers' connections have no row factory.
+    existing = {r[1] for r in rows}
     if column in existing:
         return
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {type_decl}")
@@ -1337,8 +1352,8 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
     migration — `entities.created_at` (v1), absence of `when_nodes.link_kind` (v14),
     `names.generated_from_name_id` (v5), the NOCASE collation on
     `names.text` (v6), `link_type_aliases.direction` (v9), absence of
-    `link_type_aliases.embedding` (v15), and `knowledge_gaps.draft_id`
-    (v16). A fresh DB
+    `link_type_aliases.embedding` (v15), `knowledge_gaps.draft_id`
+    (v16) and `statements.system_entity_id` (v30). A fresh DB
     will have all of them (created in one
     shot by `SCHEMA`). A legacy DB at any prior version will be missing
     at least one (CREATE TABLE IF NOT EXISTS leaves existing tables
@@ -1371,4 +1386,5 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
         and _has("link_type_aliases", "direction")
         and not _has("link_type_aliases", "embedding")
         and _has("knowledge_gaps", "draft_id")
+        and _has("statements", "system_entity_id")
     )

@@ -19,6 +19,7 @@ from pydantic import JsonValue
 from .. import embed, statement_connections, store, survey
 from ..store.connection_graph import ConnectionGraph
 from ..tracing import trace_span
+from . import systems
 from .hydration import _REVERSE_EDGE_CAP, _expand_graph, _hydrate_statement_full
 from .registry import tool
 from .runtime import _db, _idx, _name_idx
@@ -39,7 +40,11 @@ def _entity_ids_for_names(name_texts: list[str]) -> set[str]:
 
 
 def _statement_id_match(
-    query: str, *, kind: str | None, required_entity_ids: set[str]
+    query: str,
+    *,
+    kind: str | None,
+    required_entity_ids: set[str],
+    system: str | None = None,
 ) -> sqlite3.Row | None:
     """The statement `query` is the id of, when it passes the filters.
 
@@ -51,11 +56,23 @@ def _statement_id_match(
     row = store.get_statement(_db(), statement_id)
     if row is None or (kind is not None and row["kind"] != kind):
         return None
+    if not _has_system(row, system):
+        return None
     if required_entity_ids and not required_entity_ids.issubset(
         m["entity_id"] for m in store.get_mentions(_db(), statement_id)
     ):
         return None
     return row
+
+
+def _has_system(row: sqlite3.Row, system: str | None) -> bool:
+    """Whether a statement row passes a resolved system filter: an entity id,
+    `store.MAIN_SYSTEM`, or None for any."""
+    if system is None:
+        return True
+    if system == store.MAIN_SYSTEM:
+        return row["system_entity_id"] is None
+    return bool(row["system_entity_id"] == system)
 
 
 #: Truncation cap for `text` snippets returned in `near_duplicates` and
@@ -135,11 +152,12 @@ def _score_candidates(
     entity_boost: dict[str, float],
     name_boost: float,
     min_score: float,
+    system: str | None = None,
 ) -> list[tuple[str, float, float]]:
     """Fold raw vector hits into deduped, filtered, boosted candidates.
     Returns (statement_id, final_score, cosine) tuples sorted by final
-    score descending. Applies the mentions-subset, kind, and min_score
-    filters that only direct hits are subject to."""
+    score descending. Applies the mentions-subset, kind, system and
+    min_score filters that only direct hits are subject to."""
     scored: list[tuple[str, float, float]] = []  # (statement_id, final, cosine)
     seen: set[str] = set()
     for vector_id, distance in raw_hits:
@@ -152,9 +170,11 @@ def _score_candidates(
         }
         if required_entity_ids and not required_entity_ids.issubset(mention_entity_ids):
             continue
-        if kind is not None:
+        if kind is not None or system is not None:
             row = store.get_statement(_db(), statement_id)
-            if row is None or row["kind"] != kind:
+            if row is None or (kind is not None and row["kind"] != kind):
+                continue
+            if not _has_system(row, system):
                 continue
         boost = 0.0
         for eid in mention_entity_ids:
@@ -175,6 +195,7 @@ def _keyword_candidates(
     limit: int,
     kind: str | None,
     required_entity_ids: set[str],
+    system: str | None = None,
 ) -> list[tuple[str, float, float]]:
     tokens = list(
         dict.fromkeys(
@@ -190,6 +211,7 @@ def _keyword_candidates(
         tokens,
         kind=kind,
         required_entity_ids=required_entity_ids,
+        system=system,
     )
     ranked: list[tuple[str, float, int, int]] = []
     for row in rows:
@@ -212,9 +234,10 @@ def _keyword_fallback(
     kind: str | None,
     required_entity_ids: set[str],
     error: embed.EmbeddingError,
+    system: str | None = None,
 ) -> list[tuple[str, float, float]]:
     logger.warning("embedding search failed; using keyword retrieval: %s", error)
-    candidates = _keyword_candidates(query, limit, kind, required_entity_ids)
+    candidates = _keyword_candidates(query, limit, kind, required_entity_ids, system)
     return [item for item in candidates if item[1] >= min_score]
 
 
@@ -227,8 +250,10 @@ def _search_statement_candidates_with_mode(
     name_boost: float = 0.3,
     name_top_k: int = 5,
     name_min_score: float | None = None,
+    system: str | None = None,
 ) -> tuple[list[tuple[str, float, float]], bool]:
-    """Rank hits without hydrating them; return whether keyword fallback ran."""
+    """Rank hits without hydrating them; return whether keyword fallback ran.
+    `system` is resolved: an entity id or `store.MAIN_SYSTEM`."""
     resolved_name_min_score = (
         embed.thresholds().name_match if name_min_score is None else name_min_score
     )
@@ -238,7 +263,9 @@ def _search_statement_candidates_with_mode(
             vec = embed.embed(query)
     except embed.EmbeddingError as exc:
         return (
-            _keyword_fallback(query, limit, min_score, kind, required_entity_ids, exc),
+            _keyword_fallback(
+                query, limit, min_score, kind, required_entity_ids, exc, system
+            ),
             True,
         )
     return (
@@ -251,6 +278,7 @@ def _search_statement_candidates_with_mode(
             name_boost,
             name_top_k,
             resolved_name_min_score,
+            system,
         ),
         False,
     )
@@ -288,11 +316,14 @@ def _vector_candidates(
     name_boost: float,
     name_top_k: int,
     name_min_score: float,
+    system: str | None = None,
 ) -> list[tuple[str, float, float]]:
     entity_boost = _alias_entity_boost(vec, name_boost, name_top_k, name_min_score)
     # Filtering and alias boosts need a wider pool before ranking.
     fetch_k = (
-        max(limit * 4, 40) if entity_boost or required_entity_ids or kind else limit
+        max(limit * 4, 40)
+        if entity_boost or required_entity_ids or kind or system
+        else limit
     )
     with trace_span("vector_search"):
         raw_hits = _idx().search(vec, k=fetch_k)
@@ -303,6 +334,7 @@ def _vector_candidates(
         entity_boost=entity_boost,
         name_boost=name_boost,
         min_score=min_score,
+        system=system,
     )[:limit]
 
 
@@ -315,6 +347,7 @@ def _decomposed_candidates(
     name_boost: float,
     name_top_k: int,
     name_min_score: float,
+    system: str | None = None,
 ) -> tuple[list[tuple[str, float]], bool]:
     """Search each clause of `query` separately and rank the union: first by
     how many clauses surfaced a statement, then by its best score. Returns
@@ -333,7 +366,7 @@ def _decomposed_candidates(
                 parts = [(query, embed.embed(query))]
     except embed.EmbeddingError as exc:
         keyword = _keyword_fallback(
-            query, limit, min_score, kind, required_entity_ids, exc
+            query, limit, min_score, kind, required_entity_ids, exc, system
         )
         return [(sid, score) for sid, score, _cosine in keyword], True
     union: dict[str, tuple[int, float]] = {}
@@ -347,6 +380,7 @@ def _decomposed_candidates(
             name_boost,
             name_top_k,
             name_min_score,
+            system,
         ):
             count, best = union.get(sid, (0, float("-inf")))
             union[sid] = (count + 1, max(best, final))
@@ -366,6 +400,7 @@ def search_statements(
     name_top_k: int = 5,
     name_min_score: float | None = None,
     decompose: bool = False,
+    system: str | None = None,
 ) -> list[dict[str, Any]]:
     """Vector-search statements by semantic similarity to `query`.
 
@@ -420,6 +455,12 @@ def search_statements(
     Optional `kind` ("event" / "state" / "capability") restricts direct
     hits to that kind.
 
+    Optional `system` (an entity id or exact name, or `"main"` for
+    statements without a system) restricts direct hits to statements of
+    that app or platform; expansions may come from any system. A `system`
+    that names no entity matches nothing: the result is empty. A hit with
+    a system carries `system: {entity_id, name}`.
+
     `decompose=True` is for a question that covers several distinct things.
     The query is split on conjunctions and strong punctuation, each part is
     searched as above (up to `limit` hits each, same filters and boost), and
@@ -429,8 +470,8 @@ def search_statements(
     A `query` that is exactly a statement id (surrounding whitespace
     ignored) returns that statement as the first hit, marked
     `matched_via: "id"` and carrying no `score`; the text search still
-    fills the rest. The `mentions` and `kind` filters apply to it. An id
-    that does not exist is searched as text.
+    fills the rest. The `mentions`, `kind` and `system` filters apply to it.
+    An id that does not exist is searched as text.
 
     If embedding is unavailable, keyword matching is used, hits carry
     `retrieval: "keyword"`, and scores are the fraction of query words matched.
@@ -445,10 +486,14 @@ def search_statements(
                          default (0.5 for nomic-embed-text).
     """
     _check_limit(limit)
+    system_id = None if system is None else systems.resolve_filter(system)
+    if system is not None and system_id is None:
+        return []
     id_match = _statement_id_match(
         query,
         kind=kind,
         required_entity_ids=_entity_ids_for_names(mentions) if mentions else set(),
+        system=system_id,
     )
     if decompose:
         ranked, keyword_fallback = _decomposed_candidates(
@@ -460,6 +505,7 @@ def search_statements(
             name_boost,
             name_top_k,
             embed.thresholds().name_match if name_min_score is None else name_min_score,
+            system_id,
         )
     else:
         scored, keyword_fallback = _search_statement_candidates_with_mode(
@@ -471,6 +517,7 @@ def search_statements(
             name_boost,
             name_top_k,
             name_min_score,
+            system_id,
         )
         ranked = [(sid, final) for sid, final, _cos in scored]
 
@@ -638,7 +685,9 @@ def find_duplicates(
     Walks every statement, queries the vector index for its closest
     neighbours, and returns pairs with cosine similarity at or above
     `threshold`. Sorted by score descending, capped at `limit`. Pairs
-    are reported once (not as both `(A,B)` and `(B,A)`).
+    are reported once (not as both `(A,B)` and `(B,A)`). Statements of
+    different systems are never paired: the same words in two apps are two
+    facts, and `merge_statements` refuses them.
 
     The configured embedding model supplies the default (0.92 for
     nomic-embed-text), tuned for high-confidence duplicate matches. Its
@@ -685,6 +734,8 @@ def find_duplicates(
             a_row = store.get_statement(_db(), key[0])
             b_row = store.get_statement(_db(), key[1])
             if a_row is None or b_row is None:
+                continue
+            if a_row["system_entity_id"] != b_row["system_entity_id"]:
                 continue
             pairs.append(
                 {

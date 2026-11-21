@@ -136,9 +136,10 @@ def test_delete_entity_records_before(tmp_path):
 def test_statement_lifecycle_records_events(tmp_path):
     conn = fresh_with_history(tmp_path)
     store.set_actor("alice")
+    paylark = store.create_entity(conn, "A payment platform")
     bid = store.create_statement(conn, "event", "user logs in")
     store.update_statement_text(conn, bid, "user authenticates")
-    store.update_statement_kind(conn, bid, "state")
+    store.update_statement(conn, bid, "state", "user authenticates", paylark)
 
     events = _events(conn, target_id=bid)
     ops = [e["op"] for e in events]
@@ -147,6 +148,8 @@ def test_statement_lifecycle_records_events(tmp_path):
     assert events[1]["after_json"]["text"] == "user authenticates"
     assert events[2]["before_json"]["kind"] == "event"
     assert events[2]["after_json"]["kind"] == "state"
+    assert events[2]["before_json"]["system_entity_id"] is None
+    assert events[2]["after_json"]["system_entity_id"] == paylark
 
 
 # --- names -----------------------------------------------------------------

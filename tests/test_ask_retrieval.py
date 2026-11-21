@@ -179,6 +179,12 @@ def test_recon_preserves_reverse_links_negation_and_conditions():
         assert compact[field] == ROOT[field]
 
 
+def test_recon_names_the_system_a_statement_belongs_to():
+    step = {**ROOT, "system": {"entity_id": "ent_paylark", "name": "Paylark"}}
+    assert json.loads(format_recon([step]))[0]["system"] == "Paylark"
+    assert "system" not in json.loads(format_recon([ROOT]))[0]
+
+
 def test_references_only_vouch_for_supplied_statement_records():
     evidence = Evidence()
     sent = json.loads(

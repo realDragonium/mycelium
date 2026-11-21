@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from . import kernel
@@ -176,51 +176,82 @@ def find_names_containing(
     ).fetchall()
 
 
+def entity_names(conn: sqlite3.Connection, entity_ids: Sequence[str]) -> dict[str, str]:
+    """Each existing entity's preferred name, falling back as `list_entities`
+    does: its alphabetically first name, then its id."""
+    found: dict[str, str] = {}
+    unique = list(dict.fromkeys(entity_ids))
+    for offset in range(0, len(unique), 500):
+        chunk = unique[offset : offset + 500]
+        placeholders = ", ".join("?" for _entity_id in chunk)
+        rows = conn.execute(
+            "SELECT e.id, COALESCE(MAX(CASE WHEN n.id = e.preferred_name_id "
+            "THEN n.text END), MIN(n.text), e.id) AS name "
+            "FROM entities e LEFT JOIN names n ON n.entity_id = e.id "
+            f"WHERE e.id IN ({placeholders}) GROUP BY e.id",
+            tuple(chunk),
+        )
+        found.update((str(row["id"]), str(row["name"])) for row in rows)
+    return found
+
+
+#: The statement-filter value selecting statements without a system: those
+#: about the knowledge base's own product.
+MAIN_SYSTEM = "main"
+
+
+def _statement_filters(
+    *, entity_id: str | None, kind: str | None, system: str | None
+) -> tuple[str, str, list[Any]]:
+    """The join and WHERE conditions (on alias `b`) restricting statements to
+    those mentioning `entity_id`, of `kind`, and with `system`: an entity id,
+    or `MAIN_SYSTEM` for none. Returns (join, conditions, args); `conditions`
+    starts with AND when non-empty."""
+    join = ""
+    conditions = ""
+    args: list[Any] = []
+    if entity_id is not None:
+        join = (
+            " JOIN statement_mentions bm ON bm.statement_id = b.id"
+            " JOIN names n ON n.id = bm.name_id"
+        )
+        conditions += " AND n.entity_id = ?"
+        args.append(entity_id)
+    if kind is not None:
+        conditions += " AND b.kind = ?"
+        args.append(kind)
+    if system == MAIN_SYSTEM:
+        conditions += " AND b.system_entity_id IS NULL"
+    elif system is not None:
+        conditions += " AND b.system_entity_id = ?"
+        args.append(system)
+    return join, conditions, args
+
+
 def list_statements(
     conn: sqlite3.Connection,
     limit: int = 50,
     offset: int = 0,
     entity_id: str | None = None,
     kind: str | None = None,
+    system: str | None = None,
 ) -> list[sqlite3.Row]:
     """Statements in insertion order (rowid ascending).
 
     When `entity_id` is given, restricts to statements mentioning any
     name attached to that entity. DISTINCT collapses statements that
-    mention multiple aliases of the same entity to a single row. When
-    `kind` is given, restricts to statements of that kind.
+    mention multiple aliases of the same entity to a single row. `kind`
+    and `system` (an entity id, or `MAIN_SYSTEM`) restrict further.
     """
-    where: list[str] = []
-    args: list[Any] = []
-    if entity_id is not None:
-        # Filter goes through the join below. Mark with a sentinel.
-        pass
-    if kind is not None:
-        where.append("b.kind = ?")
-        args.append(kind)
-    kind_clause = (" AND " + " AND ".join(where)) if where else ""
-
-    if entity_id is None:
-        # No join needed; plain table scan with optional kind filter.
-        sql = "SELECT id, kind, text FROM statements"
-        kargs: list[Any] = []
-        if kind is not None:
-            sql += " WHERE kind = ?"
-            kargs.append(kind)
-        sql += " ORDER BY rowid LIMIT ? OFFSET ?"
-        kargs.extend([limit, offset])
-        return conn.execute(sql, kargs).fetchall()
+    join, conditions, args = _statement_filters(
+        entity_id=entity_id, kind=kind, system=system
+    )
+    distinct = "DISTINCT " if join else ""
     return conn.execute(
-        f"""
-        SELECT DISTINCT b.id, b.kind, b.text, b.rowid AS rid
-        FROM statements b
-        JOIN statement_mentions bm ON bm.statement_id = b.id
-        JOIN names n             ON n.id           = bm.name_id
-        WHERE n.entity_id = ?{kind_clause}
-        ORDER BY rid
-        LIMIT ? OFFSET ?
-        """,
-        (entity_id, *args, limit, offset),
+        f"SELECT {distinct}b.id, b.kind, b.text, b.system_entity_id, b.rowid AS rid "
+        f"FROM statements b{join} WHERE 1{conditions} "
+        "ORDER BY rid LIMIT ? OFFSET ?",
+        (*args, limit, offset),
     ).fetchall()
 
 
@@ -259,38 +290,22 @@ def grep_statements(
     kind: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    system: str | None = None,
 ) -> list[sqlite3.Row]:
     """Statements whose `text` contains `query` as a literal substring.
-    Insertion order. Optional case sensitivity, entity, and kind filters."""
+    Insertion order. Optional case sensitivity, entity, kind and system
+    filters."""
     predicate, transform = _grep_match(case_sensitive)
-    needle = transform(query)
-    kind_extra = " AND kind = ?" if kind is not None and entity_id is None else ""
-    kind_extra_join = (
-        " AND b.kind = ?" if kind is not None and entity_id is not None else ""
+    join, conditions, args = _statement_filters(
+        entity_id=entity_id, kind=kind, system=system
     )
-    if entity_id is None:
-        args: list[Any] = [needle]
-        if kind is not None:
-            args.append(kind)
-        args.extend([limit, offset])
-        return conn.execute(
-            f"SELECT id, kind, text, rowid AS rid FROM statements "
-            f"WHERE {predicate.format(col='text')}{kind_extra} "
-            f"ORDER BY rowid LIMIT ? OFFSET ?",
-            args,
-        ).fetchall()
-    args = [entity_id, needle]
-    if kind is not None:
-        args.append(kind)
-    args.extend([limit, offset])
+    distinct = "DISTINCT " if join else ""
     return conn.execute(
-        f"SELECT DISTINCT b.id, b.kind, b.text, b.rowid AS rid "
-        f"FROM statements b "
-        f"JOIN statement_mentions bm ON bm.statement_id = b.id "
-        f"JOIN names n              ON n.id           = bm.name_id "
-        f"WHERE n.entity_id = ? AND {predicate.format(col='b.text')}{kind_extra_join} "
-        f"ORDER BY rid LIMIT ? OFFSET ?",
-        args,
+        f"SELECT {distinct}b.id, b.kind, b.text, b.system_entity_id, b.rowid AS rid "
+        f"FROM statements b{join} "
+        f"WHERE {predicate.format(col='b.text')}{conditions} "
+        "ORDER BY rid LIMIT ? OFFSET ?",
+        (transform(query), *args, limit, offset),
     ).fetchall()
 
 
@@ -300,9 +315,11 @@ def keyword_statement_candidates(
     *,
     kind: str | None,
     required_entity_ids: set[str],
+    system: str | None = None,
     limit: int = 500,
 ) -> list[sqlite3.Row]:
-    """Return a bounded pool matching any token and all requested entities."""
+    """Return a bounded pool matching any token and all requested entities,
+    of `kind` and `system` when given."""
     if not tokens:
         return []
 
@@ -312,9 +329,12 @@ def keyword_statement_candidates(
     token_clause = " OR ".join("lower(b.text) LIKE ? ESCAPE '\\'" for _token in tokens)
     args: list[Any] = [f"%{escape_like(token)}%" for token in tokens]
     filters = [f"({token_clause})"]
-    if kind is not None:
-        filters.append("b.kind = ?")
-        args.append(kind)
+    _join, conditions, filter_args = _statement_filters(
+        entity_id=None, kind=kind, system=system
+    )
+    if conditions:
+        filters.append(conditions.removeprefix(" AND "))
+        args.extend(filter_args)
     if required_entity_ids:
         placeholders = ", ".join("?" for _entity_id in required_entity_ids)
         filters.append(
@@ -338,6 +358,7 @@ def grep_statements_via_mentions(
     query: str,
     case_sensitive: bool = False,
     kind: str | None = None,
+    system: str | None = None,
 ) -> list[sqlite3.Row]:
     """Statements that mention an entity whose *name* (any alias)
     contains `query` as a literal substring. The statement's own text
@@ -351,23 +372,21 @@ def grep_statements_via_mentions(
     A statement matching via multiple aliases / entities shows up once
     (DISTINCT on statement id). Ordered by insertion (rowid)."""
     predicate, transform = _grep_match(case_sensitive)
-    needle = transform(query)
-    extra = " AND b.kind = ?" if kind else ""
-    args: list[Any] = [needle]
-    if kind:
-        args.append(kind)
+    _join, conditions, args = _statement_filters(
+        entity_id=None, kind=kind or None, system=system
+    )
     # Two joins on names: n1 binds the mention to an entity (via the
     # name actually used in the mention), n2 walks every alias of that
     # entity. We match the substring against n2 so any alias counts.
     return conn.execute(
-        f"SELECT DISTINCT b.id, b.kind, b.text, b.rowid AS rid "
+        f"SELECT DISTINCT b.id, b.kind, b.text, b.system_entity_id, b.rowid AS rid "
         f"FROM statements b "
         f"JOIN statement_mentions bm ON bm.statement_id = b.id "
         f"JOIN names n1 ON n1.id = bm.name_id "
         f"JOIN names n2 ON n2.entity_id = n1.entity_id "
-        f"WHERE {predicate.format(col='n2.text')}{extra} "
+        f"WHERE {predicate.format(col='n2.text')}{conditions} "
         f"ORDER BY rid",
-        args,
+        (transform(query), *args),
     ).fetchall()
 
 
@@ -377,59 +396,37 @@ def count_grep_statements(
     case_sensitive: bool = False,
     entity_id: str | None = None,
     kind: str | None = None,
+    system: str | None = None,
 ) -> int:
     predicate, transform = _grep_match(case_sensitive)
-    needle = transform(query)
-    if entity_id is None:
-        if kind is None:
-            return conn.execute(
-                f"SELECT COUNT(*) AS n FROM statements WHERE {predicate.format(col='text')}",
-                (needle,),
-            ).fetchone()["n"]
-        return conn.execute(
-            f"SELECT COUNT(*) AS n FROM statements "
-            f"WHERE {predicate.format(col='text')} AND kind = ?",
-            (needle, kind),
+    join, conditions, args = _statement_filters(
+        entity_id=entity_id, kind=kind, system=system
+    )
+    return int(
+        conn.execute(
+            f"SELECT COUNT(DISTINCT b.id) AS n FROM statements b{join} "
+            f"WHERE {predicate.format(col='b.text')}{conditions}",
+            (transform(query), *args),
         ).fetchone()["n"]
-    extra = " AND b.kind = ?" if kind is not None else ""
-    args: list[Any] = [entity_id, needle]
-    if kind is not None:
-        args.append(kind)
-    return conn.execute(
-        f"SELECT COUNT(DISTINCT b.id) AS n "
-        f"FROM statements b "
-        f"JOIN statement_mentions bm ON bm.statement_id = b.id "
-        f"JOIN names n              ON n.id           = bm.name_id "
-        f"WHERE n.entity_id = ? AND {predicate.format(col='b.text')}{extra}",
-        args,
-    ).fetchone()["n"]
+    )
 
 
 def count_statements(
     conn: sqlite3.Connection,
     entity_id: str | None = None,
     kind: str | None = None,
+    system: str | None = None,
 ) -> int:
-    if entity_id is None:
-        if kind is None:
-            return conn.execute("SELECT COUNT(*) AS n FROM statements").fetchone()["n"]
-        return conn.execute(
-            "SELECT COUNT(*) AS n FROM statements WHERE kind = ?", (kind,)
+    join, conditions, args = _statement_filters(
+        entity_id=entity_id, kind=kind, system=system
+    )
+    return int(
+        conn.execute(
+            f"SELECT COUNT(DISTINCT b.id) AS n FROM statements b{join} "
+            f"WHERE 1{conditions}",
+            args,
         ).fetchone()["n"]
-    extra = " AND b.kind = ?" if kind is not None else ""
-    args: list[Any] = [entity_id]
-    if kind is not None:
-        args.append(kind)
-    return conn.execute(
-        f"""
-        SELECT COUNT(DISTINCT b.id) AS n
-        FROM statements b
-        JOIN statement_mentions bm ON bm.statement_id = b.id
-        JOIN names n             ON n.id           = bm.name_id
-        WHERE n.entity_id = ?{extra}
-        """,
-        args,
-    ).fetchone()["n"]
+    )
 
 
 def reassign_names(

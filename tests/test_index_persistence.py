@@ -329,8 +329,10 @@ def test_persist_failure_marker_stays_sticky_until_restart(
     original_create_statement = store.create_statement
     created_ids: list[str] = []
 
-    def capture_statement_id(conn: sqlite3.Connection, kind: str, text: str) -> str:
-        statement_id = original_create_statement(conn, kind, text)
+    def capture_statement_id(
+        conn: sqlite3.Connection, kind: str, text: str, system: str | None = None
+    ) -> str:
+        statement_id = original_create_statement(conn, kind, text, system)
         created_ids.append(statement_id)
         return statement_id
 

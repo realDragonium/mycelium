@@ -215,6 +215,12 @@ function Ref({ id }: { id: unknown }) {
   return to ? <Link to={to} className="lp" title={label}>{label}</Link> : <span className="lp" title={label}>{label}</span>;
 }
 
+// A queued statement's system: an entity id or name, or null to clear it.
+function SystemLine({ payload }: { payload: Payload }) {
+  if (!('system' in payload)) return null;
+  return <div className="op-name-line"><span className="arr">system</span>{payload.system == null ? <span className="muted small">our product</span> : <Ref id={payload.system} />}</div>;
+}
+
 function KV({ obj }: { obj: Payload }) {
   const entries = Object.entries(obj);
   if (!entries.length) return null;
@@ -235,12 +241,13 @@ function OpBody({ op }: { op: DraftOp }) {
       </div>;
     }
     case 'upsert_statement':
-      return <><div className="op-kind"><KindTag kind={str(p.kind)} /></div><div className="op-stmt-text">{str(p.text)}</div></>;
+      return <><div className="op-kind"><KindTag kind={str(p.kind)} /></div><div className="op-stmt-text">{str(p.text)}</div><SystemLine payload={p} /></>;
     case 'upsert_statements': {
       const stmts = arr(p.statements);
       return <>
         <div className="mono small muted">{stmts.length} statement{stmts.length === 1 ? '' : 's'}</div>
-        {stmts.map((s, i) => <div key={i} className="op-stmt-text row gap-sm">{!!s.kind && <KindTag kind={str(s.kind)} />}<span>{str(s.text)}</span></div>)}
+        <SystemLine payload={p} />
+        {stmts.map((s, i) => <div key={i} className="op-stmt-text row gap-sm">{!!s.kind && <KindTag kind={str(s.kind)} />}<span>{str(s.text)}</span>{'system' in s && <SystemLine payload={s} />}</div>)}
       </>;
     }
     case 'upsert_entity':
@@ -360,7 +367,7 @@ function scopedSubstrate(ops: DraftOp[], full: SubstrateData): SubstrateData {
       const id = newId('stm');
       const mentions = (Array.isArray(p.mentions) ? p.mentions : []).map(str);
       mentions.forEach(m => touchedEnt.add(m));
-      synthStmts.push({ id, kind: str(p.kind) || 'claim', text: str(p.text), mentions, title: str(p.text) });
+      synthStmts.push({ id, kind: str(p.kind) || 'claim', text: str(p.text), system: p.system ? str(p.system) : null, mentions, title: str(p.text) });
       for (const l of arr(p.links)) { touchedStm.add(str(l.to_id)); synthLinks.push({ from: id, to: str(l.to_id), link_type: str(l.link_type) }); }
     } else if (op.kind === 'delete_entity' || op.kind === 'delete_statement') {
       touch(str(p.id));

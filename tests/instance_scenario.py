@@ -76,6 +76,7 @@ def _substrate(server) -> dict[str, str]:
         ids[key] = server.upsert_statement(kind=kind, text=text, links=[])[
             "statement_id"
         ]
+    _systems(server, ids)
     server.add_links(
         [
             {
@@ -214,6 +215,21 @@ def _substrate(server) -> dict[str, str]:
         )
     db.commit()
     return ids
+
+
+def _systems(server, ids: dict[str, str]) -> None:
+    """A step in another platform, on builds where statements have systems."""
+    if "system" not in inspect.signature(server.upsert_statement).parameters:
+        return
+    ids["paylark"] = server.upsert_entity(
+        name="Paylark", description="A payment platform."
+    )["entity_id"]
+    ids["signing_secret"] = server.upsert_statement(
+        kind="action",
+        text="Copy the signing secret from the Paylark Webhooks page.",
+        links=[],
+        system=ids["paylark"],
+    )["statement_id"]
 
 
 def _vocabulary(server) -> None:

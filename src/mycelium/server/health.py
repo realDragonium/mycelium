@@ -62,6 +62,10 @@ class HealthView(BaseModel):
     uncovered_by_profile: dict[str, int]
     #: Automatic work that exhausted its saved retry limit.
     stopped: list[automation_stops.Stop]
+    #: Each entity that is a statement's system, with its statement count.
+    systems: list[knowledge_health.SystemCount]
+    #: Statements without a system: the knowledge base's own product.
+    main_statements: int
 
 
 def _curation() -> list[CurationView]:
@@ -107,6 +111,7 @@ def _connect() -> tuple[ConnectLimits | None, str | None]:
 
 def health_view() -> HealthView:
     connect, connect_error = _connect()
+    systems = knowledge_health.systems(_db())
     return HealthView(
         counts=knowledge_health.counts(_db(), _drafts_db(), store.substrate_connection),
         substrate=store.substrate_counts(_db()),
@@ -117,6 +122,8 @@ def health_view() -> HealthView:
             _drafts_db(), _db()
         ),
         stopped=automation_stops.stops(_db()),
+        systems=systems.systems,
+        main_statements=systems.main_statements,
     )
 
 
@@ -152,8 +159,11 @@ def get_knowledge_health(
     Without `which`: the counts of each kind of curation work, how much
     knowledge there is (`substrate`), whether the connect pass can run and
     its limits, who holds curation claims and what came of them, statements
-    no document covers per writing profile, and `stopped`: automatic work
-    that failed too often and waits for an admin (`unblock_automation`).
+    no document covers per writing profile, `stopped`: automatic work
+    that failed too often and waits for an admin (`unblock_automation`),
+    and statements per system: `systems` (`{entity_id, name, statements}`
+    per entity that is a statement's system) and `main_statements` (those
+    without one).
 
     With `which`, one page of that list: statements `isolated`,
     `unmentioned` (naming no concept) or `unlabelled` (no audience label),

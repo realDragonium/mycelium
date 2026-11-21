@@ -18,6 +18,7 @@ from typing import Any, ParamSpec, TypeVar, overload
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
+from pydantic.experimental.missing_sentinel import MISSING
 
 from .. import auth as _auth
 from .. import hosts as _hosts
@@ -421,11 +422,25 @@ def draftable_tool(func: Callable[P, R]) -> Callable[P, R | DraftReceipt]:
             # positional args become named — keeps the stored payload uniform
             # regardless of how the caller invoked the tool.
             bound = _ORIG_SIGNATURES[name].bind_partial(*args, **kwargs)
-            return _queue_draft_op(redirect, name, dict(bound.arguments), principal)
+            return _queue_draft_op(redirect, name, _draft_payload(bound), principal)
         return _run_tool(lambda: func(*args, **kwargs), budgeted=False)
 
     _register(func, wrapper, required=required, real_role=False, draftable=True)
     return wrapper
+
+
+def _draft_payload(bound: inspect.BoundArguments) -> dict[str, Any]:
+    """The arguments a queued op stores: only those the caller supplied, so
+    replay re-applies defaults at apply time. A `None` is kept where the
+    parameter defaults to `MISSING`: there it clears a value rather than
+    leaving it out."""
+    params = bound.signature.parameters
+    return {
+        key: value
+        for key, value in bound.arguments.items()
+        if value is not MISSING
+        and (value is not None or params[key].default is MISSING)
+    }
 
 
 def draft_listing_tool(func: Callable[P, R]) -> Callable[P, R | list[QueuedOp]]:

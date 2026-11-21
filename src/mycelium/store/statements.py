@@ -13,12 +13,18 @@ from .kernel import _now, _record, _row_dict
 # --- statements --------------------------------------------------------------
 
 
-def create_statement(conn: sqlite3.Connection, kind: str, text: str) -> str:
+def create_statement(
+    conn: sqlite3.Connection,
+    kind: str,
+    text: str,
+    system_entity_id: str | None = None,
+) -> str:
     statement_id = f"stm_{uuid.uuid4().hex}"
     conn.execute(
-        "INSERT INTO statements (id, kind, text, created_at, created_by) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (statement_id, kind, text, _now(), kernel.get_actor()),
+        "INSERT INTO statements "
+        "(id, kind, text, system_entity_id, created_at, created_by) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (statement_id, kind, text, system_entity_id, _now(), kernel.get_actor()),
     )
     _record(
         conn,
@@ -33,7 +39,8 @@ def create_statement(conn: sqlite3.Connection, kind: str, text: str) -> str:
 
 def get_statement(conn: sqlite3.Connection, statement_id: str) -> sqlite3.Row | None:
     row: sqlite3.Row | None = conn.execute(
-        "SELECT id, kind, text, created_at, updated_at, created_by, updated_by "
+        "SELECT id, kind, text, system_entity_id, "
+        "created_at, updated_at, created_by, updated_by "
         "FROM statements WHERE id = ?",
         (statement_id,),
     ).fetchone()
@@ -99,16 +106,44 @@ def merge_targets(
 
 
 def update_statement(
-    conn: sqlite3.Connection, statement_id: str, kind: str, text: str
+    conn: sqlite3.Connection,
+    statement_id: str,
+    kind: str,
+    text: str,
+    system_entity_id: str | None,
 ) -> None:
+    """Set every authored field; pass the current value of one to keep it."""
     before = _row_dict(get_statement(conn, statement_id))
     conn.execute(
-        "UPDATE statements SET kind = ?, text = ?, updated_at = ?, updated_by = ? "
-        "WHERE id = ?",
-        (kind, text, _now(), kernel.get_actor(), statement_id),
+        "UPDATE statements SET kind = ?, text = ?, system_entity_id = ?, "
+        "updated_at = ?, updated_by = ? WHERE id = ?",
+        (kind, text, system_entity_id, _now(), kernel.get_actor(), statement_id),
     )
     if before is not None and before["text"] != text:
         audience_labels.text_changed(conn, statement_id, str(before["text"]))
+    _record(
+        conn,
+        "update",
+        "statement",
+        statement_id,
+        before=before,
+        after=_row_dict(get_statement(conn, statement_id)),
+    )
+
+
+def set_statement_system(
+    conn: sqlite3.Connection, statement_id: str, system_entity_id: str | None
+) -> None:
+    """Change only the statement's system, recorded in history. It leaves
+    `updated_at` alone: curation and freshness read that as the content
+    changing, and the system is not content."""
+    before = _row_dict(get_statement(conn, statement_id))
+    if before is None or before["system_entity_id"] == system_entity_id:
+        return
+    conn.execute(
+        "UPDATE statements SET system_entity_id = ? WHERE id = ?",
+        (system_entity_id, statement_id),
+    )
     _record(
         conn,
         "update",
@@ -140,26 +175,27 @@ def update_statement_text(
     )
 
 
-def update_statement_kind(
-    conn: sqlite3.Connection, statement_id: str, kind: str
-) -> None:
-    """Update only the kind — used by `patch_statement` when text is unchanged.
+def count_system_uses(conn: sqlite3.Connection, entity_id: str) -> int:
+    """How many statements have `entity_id` as their system."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM statements WHERE system_entity_id = ?",
+        (entity_id,),
+    ).fetchone()
+    return int(row["n"])
 
-    Avoids touching `text` (and thus the embedding) when the caller is
-    only re-classifying a statement."""
-    before = _row_dict(get_statement(conn, statement_id))
-    conn.execute(
-        "UPDATE statements SET kind = ?, updated_at = ?, updated_by = ? WHERE id = ?",
-        (kind, _now(), kernel.get_actor(), statement_id),
-    )
-    _record(
-        conn,
-        "update",
-        "statement",
-        statement_id,
-        before=before,
-        after=_row_dict(get_statement(conn, statement_id)),
-    )
+
+def reassign_statement_systems(
+    conn: sqlite3.Connection, from_entity_id: str, into_entity_id: str
+) -> int:
+    """Move every statement whose system is `from_entity_id` to
+    `into_entity_id`, recording each change. Returns how many moved."""
+    moved = conn.execute(
+        "SELECT id FROM statements WHERE system_entity_id = ? ORDER BY rowid",
+        (from_entity_id,),
+    ).fetchall()
+    for row in moved:
+        set_statement_system(conn, row["id"], into_entity_id)
+    return len(moved)
 
 
 # --- vector id mapping ------------------------------------------------------
