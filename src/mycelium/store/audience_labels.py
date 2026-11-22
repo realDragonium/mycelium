@@ -92,8 +92,9 @@ _BACKOFF = timedelta(minutes=1)
 
 
 #: What a profile writes for when it writes from every statement, whatever its
-#: label. Not an audience: nothing is labelled for it and nothing includes it.
-EVERYTHING = "all-statements"
+#: label. Not an audience, and no audience id can spell it, so no audience,
+#: include or label can reach what it sees.
+EVERYTHING = "*"
 
 
 def visibility_clause(

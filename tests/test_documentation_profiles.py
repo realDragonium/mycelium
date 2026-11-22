@@ -391,11 +391,9 @@ def test_a_profile_writes_for_one_audience_and_only_admins_change_it(db):
 
 
 def test_a_profile_can_write_from_every_statement_without_an_audience(db):
-    saved = profiles.save(
-        "reference", _with_audience("", "all-statements"), principal("admin")
-    )
+    saved = profiles.save("reference", _with_audience("", "*"), principal("admin"))
 
-    assert saved.ready and saved.effective_audience == "all-statements"
+    assert saved.ready and saved.effective_audience == "*"
     assert profiles.capture(db).audience("reference") == audiences.ALL_STATEMENTS
     brief = profiles.brief("reference")
     assert brief.audience is not None and brief.audience.name == "All statements"

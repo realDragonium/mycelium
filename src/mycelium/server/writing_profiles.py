@@ -87,7 +87,7 @@ def save_writing_profile(
     "" creates a profile that does not exist yet. A stale revision is refused
     and nothing is written. Needs a real writer; removing a template or
     slot, or changing the audience or destinations of an existing profile,
-    needs an admin. `audience` must be a live audience id, `all-statements` to
+    needs an admin. `audience` must be a live audience id, `*` to
     write from every statement whatever its audience label, or null for the
     default internal audience. `delivery_destination` is the configured
     destination `auto` delivery publishes a never-published document to;

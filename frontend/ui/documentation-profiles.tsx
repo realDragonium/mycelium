@@ -205,7 +205,7 @@ interface Profile {
 }
 interface Profiles { profiles: Profile[]; default_profile: string | null; can_write: boolean; can_retire: boolean }
 // What a profile's audience holds when it writes from every statement.
-const ALL_STATEMENTS = 'all-statements';
+const ALL_STATEMENTS = '*';
 const ALL_STATEMENTS_NAME = 'All statements';
 interface ProfilesView extends Profiles { audiences: AudienceView[]; destinations: string[] }
 interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null; maintenance: Maintenance; planning: Planning; plan_review: PlanReview; recovery: Recovery; delivery: Delivery; delivery_destination: string; destinations: string[] }

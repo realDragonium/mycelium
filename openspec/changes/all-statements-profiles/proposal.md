@@ -4,10 +4,10 @@ A profile always wrote for an audience, so a document could only draw on stateme
 
 ## What Changes
 
-- A profile's audience can be `all-statements`. Its documents are written, reviewed, planned, checked for freshness and exported from every statement and media item, whatever its audience label.
-- `all-statements` is not an audience: it is not listed, edited, retired, labelled for or included, and no audience can take its id.
+- A profile's audience can be `*`. Its documents are written, reviewed, planned, checked for freshness and exported from every statement and media item, whatever its audience label.
+- `*` is not an audience: it is not listed, edited, retired, labelled for or included, and its value cannot be an audience id.
 - The writer and reviewer of such a profile are told the reader is internal and nothing is withheld; the profile's own disclosure rules still apply.
-- The profile form offers **All statements · no audience**, and `save_writing_profile` accepts `audience: "all-statements"`. As with any audience, only an administrator changes it on an existing profile.
+- The profile form offers **All statements · no audience**, and `save_writing_profile` accepts `audience: "*"`. As with any audience, only an administrator changes it on an existing profile.
 
 ## Impact
 

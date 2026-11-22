@@ -444,11 +444,6 @@ def create(request: CreateAudience, principal: auth.Principal) -> Audience:
     _require_admin(principal)
     conn = prompt_store.connection()
     audience_id = request.id or _slug(request.name)
-    if audience_id == ALL_STATEMENTS_ID:
-        raise ValueError(
-            f"The id {audience_id!r} is what a profile holds when it writes "
-            "from every statement; choose another id."
-        )
     with store.write_lock(), prompt_store._writing(conn):
         if prompt_store.history(conn, TYPE, audience_id):
             raise Conflict(

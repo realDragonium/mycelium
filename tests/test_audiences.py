@@ -268,12 +268,10 @@ def test_all_statements_sees_every_statement_whatever_its_label(db, prompts):
     ) == {unlabelled, retired}
     assert store.audience_labels.grants(["anyone"], everything.sees, True)
     assert everything not in audiences.live()
-    with pytest.raises(ValueError, match="writes from every statement"):
-        audiences.create(
-            audiences.CreateAudience(
-                name="All statements", scope="internal", description="Everyone."
-            ),
-            ADMIN,
+    # No audience can take its id, so none can be given what it sees.
+    with pytest.raises(ValueError, match="lowercase letters"):
+        audiences.CreateAudience(
+            id=everything.id, name="Everyone", scope="internal", description="All."
         )
 
 

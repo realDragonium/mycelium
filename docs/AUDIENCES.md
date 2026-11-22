@@ -44,7 +44,7 @@ is retired, the profile is not ready and its runs refuse rather than widen.
 
 A profile can also write from **all statements**, with no audience: choose
 **All statements · no audience** in the profile, or pass
-`audience: "all-statements"` to `save_writing_profile`. Its runs, reviews,
+`audience: "*"` to `save_writing_profile`. Its runs, reviews,
 plans and downloaded website read every statement and media item, whatever
 its label, including statements labelled only for an audience that was since
 retired. It is not an audience: it is not listed here and nothing is labelled
