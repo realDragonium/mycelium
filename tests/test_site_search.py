@@ -565,6 +565,9 @@ def test_equally_near_corrections_prefer_the_more_frequent_then_alphabetical():
     entries[1] = _entry("b.html", "More", _section("A latch, a latch, a latch."))
     more = _call("correct", entries, "zatch")
     assert isinstance(more, dict) and more["query"] == "latch"
+    once = [_entry("a.html", "Notes", _section("A latch and a batch."))]
+    first = _call("correct", once, "xatch")
+    assert isinstance(first, dict) and first["query"] == "batch"
 
 
 def test_short_or_distant_words_are_not_corrected():

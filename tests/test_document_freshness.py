@@ -434,3 +434,18 @@ def test_every_flow_asked_about_shares_one_read_of_links(db, drafts, monkeypatch
     )
 
     assert len(reads) == 1
+
+
+def test_a_flow_change_withholds_a_step_the_audience_lost(db, drafts):  # noqa: F811
+    corpus = _corpus(db)
+    external, _stored = _flow_document(drafts, corpus, EXTERNAL)
+    store.audience_labels.set_label(
+        db, corpus.queued, [INTERNAL.id], source="ai", reason="r"
+    )
+    db.commit()
+
+    changes = _fresh(drafts, external).flow_changes
+    assert changes
+    assert "The export is queued." not in {
+        text for change in changes for text in (change.source_text, change.target_text)
+    }

@@ -1162,6 +1162,34 @@ def _write_refusal(
     )
 
 
+def _refuse_other_drawing(
+    conn: sqlite3.Connection,
+    existing: sqlite3.Row | None,
+    concept_links: str | None,
+    flows: str | None,
+) -> None:
+    """An identical body replaces nothing, but a reader also sees the concept
+    links and flows stored beside it, and this write did not name the
+    document."""
+    if existing is None:
+        return
+    stored = conn.execute(
+        "SELECT concept_links, flows FROM generated_document_revisions "
+        "WHERE document_id = ? AND revision = ?",
+        (existing["id"], existing["current_revision"]),
+    ).fetchone()
+    if stored is None or (stored["concept_links"], stored["flows"]) == (
+        concept_links,
+        flows,
+    ):
+        return
+    raise ValueError(
+        "document write refused because it would replace the concept links or "
+        f"flows stored with document {existing['id']!r}; to deliberately replace "
+        f"them, pass updates={existing['id']!r} and replacing=body_digest(stored_body)"
+    )
+
+
 def upsert_document(
     conn: sqlite3.Connection,
     *,
@@ -1253,6 +1281,11 @@ def upsert_document(
         )
         if refusal is not None:
             raise ValueError(refusal)
+        links_json = _json_list(concept_links or None)
+        flows_json = _json_list(flows or None)
+        _refuse_other_drawing(
+            conn, None if updates else existing, links_json, flows_json
+        )
         now = _now()
         if existing is None:
             document_id = "gdc_" + _uuid.uuid4().hex[:12]
@@ -1315,10 +1348,8 @@ def upsert_document(
                 None
                 if cited_statements is None
                 else json.dumps(dict(cited_statements)),
-                json.dumps([dict(link) for link in concept_links])
-                if concept_links
-                else None,
-                json.dumps([dict(flow) for flow in flows]) if flows else None,
+                links_json,
+                flows_json,
                 document_id,
             ),
         )

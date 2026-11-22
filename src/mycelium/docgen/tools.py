@@ -348,7 +348,8 @@ def parse_emit_flows(data: dict) -> list[FlowDefinition]:
 
     Wire shape only, as `parse_emit_input`: whether a flow may stand is the
     loop's gate."""
-    return FLOW_DEFINITIONS.validate_python(data.get("flows") or [])
+    flows = data.get("flows")
+    return FLOW_DEFINITIONS.validate_python([] if flows is None else flows)
 
 
 def parse_review_input(

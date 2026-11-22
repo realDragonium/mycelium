@@ -116,7 +116,22 @@ def test_every_problem_with_the_flows_comes_back_in_one_refusal(db):  # noqa: F8
     ):
         assert reason in problem
     assert problem.count("its flows cannot be stored") == 1
-    assert corpus.failed not in ctx.retrieved_ids
+    # A drawing is not a read: a later submission may not cite from it.
+    assert ctx.retrieved_ids == {corpus.queued}
+
+
+def test_a_flow_placed_twice_is_refused(db):  # noqa: F811
+    corpus = _corpus(db)
+    ctx = _context(INTERNAL)
+    ctx.retrieved_ids.add(corpus.queued)
+    body = BODY + f"\n```flow\n{NAME}\n```\n"
+
+    problem, _drawn = loop._submission_problem(
+        ctx, "Exports", body, [corpus.queued], [_flow(corpus.requested)]
+    )
+
+    assert problem is not None
+    assert f"the body places flow '{NAME}' 2 times; place it once" in problem
 
 
 def test_a_document_without_flows_or_links_reads_nothing_more(db):  # noqa: F811
@@ -137,6 +152,8 @@ def test_a_document_without_flows_or_links_reads_nothing_more(db):  # noqa: F811
 def test_a_malformed_flows_value_is_a_malformed_submission():
     with pytest.raises(ValueError):
         parse_emit_flows({"flows": [{"name": "a", "title": "A", "start": 7}]})
+    with pytest.raises(ValueError):
+        parse_emit_flows({"flows": False})
 
 
 def test_concept_links_resolve_ignoring_case_inside_the_audience(db):  # noqa: F811

@@ -23,6 +23,7 @@ import zipfile
 from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import dataclass, field, replace
+from functools import cached_property
 from html import escape
 from html.parser import HTMLParser
 from pathlib import Path
@@ -100,6 +101,8 @@ class PageNote:
 
     page: str
     text: str
+    #: Where the page is, from the top of the site.
+    href: str
 
 
 @dataclass(frozen=True)
@@ -238,6 +241,10 @@ class _Export:
     feedback_url: str | None
     #: The generated pages: concepts a written page links to.
     stubs: dict[str, _Stub] = field(default_factory=dict)
+
+    @cached_property
+    def several_templates(self) -> bool:
+        return len({page.template for page in self.pages}) > 1
 
 
 _STRUCTURE: dict[tuple[str, bool], str] = {
@@ -818,7 +825,7 @@ def _page_item(
     its first sentence on the home page."""
     marked = ' aria-current="page"' if page.path == current else ""
     sentence = _first_sentence(page.body) if summary else ""
-    several = len({item.template for item in export.pages}) > 1
+    several = export.several_templates
     return (
         f'<a href="{escape(root + page.href)}"{marked}>{escape(page.title)}</a>'
         + (f' <span class="template">{escape(page.template)}</span>' if several else "")
@@ -1162,12 +1169,9 @@ def _page_link(page: _Page, fragment: str = "") -> str:
 def _images_wanted(export: _Export) -> tuple[str, int]:
     rows: list[list[str]] = []
     for page in export.pages:
-        anchors: dict[str, str] = {}
-        for heading, anchor_id in render.contents(page.body):
-            anchors.setdefault(heading, anchor_id)
         rows += [
             [
-                _page_link(page, anchors.get(item.section or "", "")),
+                _page_link(page, item.anchor or ""),
                 escape(item.section or "Lead"),
                 escape(item.description),
             ]
@@ -1185,10 +1189,14 @@ def _images_wanted(export: _Export) -> tuple[str, int]:
 
 
 def _report_html(export: _Export, site: Site) -> str:
-    titles = {page.title: page for page in export.pages}
-
     def notes(items: tuple[PageNote, ...]) -> list[list[str]]:
-        return [[_page_link(titles[item.page]), escape(item.text)] for item in items]
+        return [
+            [
+                f'<a href="{escape(item.href)}">{escape(item.page)}</a>',
+                escape(item.text),
+            ]
+            for item in items
+        ]
 
     by_name = {stub.name: stub for stub in export.stubs.values()}
     return _frame(
@@ -1556,13 +1564,13 @@ def _build(
         ),
         images_wanted=wanted,
         cut_flows=tuple(
-            PageNote(page.title, flow.title.strip() or flow.name)
+            PageNote(page.title, flow.title.strip() or flow.name, page.href)
             for page in pages
             for flow in schema.revision_flows(page.revision)
             if flow.drawing.truncated
         ),
         unmatched_links=tuple(
-            PageNote(page.title, name)
+            PageNote(page.title, name, page.href)
             for page in pages
             for name in bodies[page.id].unmatched
         ),
@@ -1598,7 +1606,11 @@ def _feedback_template(template: str | None) -> str | None:
     if template is None:
         return None
     template = template.strip()
-    if urlsplit(template).scheme.lower() not in FEEDBACK_SCHEMES:
+    try:
+        scheme = urlsplit(template).scheme.lower()
+    except ValueError:
+        scheme = ""
+    if scheme not in FEEDBACK_SCHEMES:
         raise SiteRefused(
             f"The feedback address {template!r} is not one a page may link to. "
             "It must start with http:, https: or mailto:."

@@ -202,7 +202,7 @@ def test_an_index_a_page_per_document_and_one_stylesheet_are_written(
         "How-to/exporting.html",
     }
     assert {
-        str(path.relative_to(out)) for path in out.rglob("*") if path.is_file()
+        path.relative_to(out).as_posix() for path in out.rglob("*") if path.is_file()
     } == set(written.files)
     index = (out / "index.html").read_text()
     assert '<link rel="stylesheet" href="site.css">' in index
@@ -514,7 +514,11 @@ def test_concept_links_lead_to_the_pages_of_this_export(db, docs, tmp_path):  # 
         'title="The record of who did what.">audit log</a>, '
         f"{csv}rows</a> and Ledgr.</p>"
     ) in page
-    assert written.unmatched_links == (site.PageNote("Workspace export", "Ledgr"),)
+    assert written.unmatched_links == (
+        site.PageNote(
+            "Workspace export", "Ledgr", "Entity%20page/workspace-export.html"
+        ),
+    )
 
 
 def test_a_document_whose_statements_left_the_audience_is_left_out(
@@ -1599,9 +1603,13 @@ def test_the_report_and_the_summary_say_what_the_pages_reveal(
         site.StubCount("audit log", 1),
     )
     assert written.cut_flows == (
-        site.PageNote("Exporting", "From request to download"),
+        site.PageNote(
+            "Exporting", "From request to download", "Entity%20page/exporting.html"
+        ),
     )
-    assert written.unmatched_links == (site.PageNote("Exporting", "Ledgr"),)
+    assert written.unmatched_links == (
+        site.PageNote("Exporting", "Ledgr", "Entity%20page/exporting.html"),
+    )
     assert site.summary(written) == [
         "left out 'Gone': it cites 1 statement that the audience Internal "
         "technical can no longer see: stm_gone",

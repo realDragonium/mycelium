@@ -356,6 +356,11 @@ def _drawn_statements(steps: Sequence[Step]) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
+def _cut_statements(steps: Sequence[Step]) -> list[str]:
+    """Statements a limit left undrawn, whose text the drawing still shows."""
+    return [item.statement_id for step in steps for item in step.cut]
+
+
 def _link_set(reads: _Reads, statement_ids: Iterable[str]) -> list[StepLink]:
     found = {
         StepLink(
@@ -387,7 +392,9 @@ def _draw(reads: _Reads, start: str, stop: Collection[str]) -> Drawing | None:
         steps=walk.steps,
         conditions=conditions,
         truncated=any(step.continues for step in walk.steps),
-        statement_ids=list(dict.fromkeys([*drawn, *conditions])),
+        statement_ids=list(
+            dict.fromkeys([*drawn, *conditions, *_cut_statements(walk.steps)])
+        ),
         link_set=_link_set(reads, drawn),
     )
 

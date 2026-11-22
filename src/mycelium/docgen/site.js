@@ -194,8 +194,10 @@
     const section = entry.sections.reduce((top, s) => (sum(s) > sum(top) ? s : top));
     const textWords = rest.filter((word) => worth(section.text, word, 0) >= worth(section.heading, word, 1) && fit(section.text, word));
     if (!textWords.length) return { phrase: 0, ...hit, anchor: section.anchor, detail: section.heading };
-    const at = Math.min(...textWords.map((word) => occurrences(section.text, word, fit(section.text, word))[0][0]));
-    return { phrase: 0, ...hit, anchor: section.anchor, detail: excerpt(section.text, at, 0) };
+    const [at, end] = textWords
+      .map((word) => occurrences(section.text, word, fit(section.text, word))[0])
+      .reduce((first, found) => (found[0] < first[0] ? found : first));
+    return { phrase: 0, ...hit, anchor: section.anchor, detail: excerpt(section.text, at, end - at) };
   };
 
   // How often the words occur as whole words in a page's headings and text.
@@ -491,7 +493,11 @@
     link.setAttribute("href", "#" + link.dataset.step);
   }
   const unfold = (hash) => {
-    const target = hash.length > 1 && document.getElementById(decodeURIComponent(hash.slice(1)));
+    let target = null;
+    // A fragment that is not valid percent-encoding names nothing.
+    try {
+      target = hash.length > 1 && document.getElementById(decodeURIComponent(hash.slice(1)));
+    } catch { return null; }
     let opened = false;
     for (let fold = target && target.parentElement.closest("details"); fold;
       fold = fold.parentElement.closest("details")) {

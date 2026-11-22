@@ -268,10 +268,10 @@ def assess_flows(
         }
 
         def text(statement_id: str, shown: Mapping[str, str] = shown) -> str:
-            if statement_id in shown:
-                return shown[statement_id]
             statement = reader.statement(statement_id)
-            return "" if statement is None else statement.text
+            if statement is None:
+                return ""
+            return shown.get(statement_id, statement.text)
 
         for link in sorted(before.keys() | after.keys()):
             if before.get(link) == after.get(link):

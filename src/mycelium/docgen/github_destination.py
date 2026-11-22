@@ -419,7 +419,9 @@ def _deliver(
         if current is None:
             raise _deleted_in_review(config, path, branch)
         intended_revision = _git_blob_id(document.body)
-        if current.content_revision == intended_revision:
+        # Media is written with the document, so only a document without any
+        # can be known to need nothing.
+        if current.content_revision == intended_revision and not media_files:
             reference = _review(config, document, branch, client, token)
             return Delivery(
                 destination=config.destination.name,

@@ -204,6 +204,9 @@ def test_step_limit_cuts_the_drawing_and_says_where_it_continues():
         flows.CutStatement(statement_id="s12", text="Text of s12")
     ]
     assert flows.flow_lines(drawing)[-1] == ("   -> continues: Text of s12 (not drawn)")
+    # Its text is shown, so it is cited; its own links are not followed.
+    assert drawing.statement_ids[-1] == "s12"
+    assert "s12" not in flows.drawn_statements(drawing)
 
 
 def test_a_cut_names_at_most_three_statements_and_counts_the_rest():

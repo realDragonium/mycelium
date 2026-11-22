@@ -104,7 +104,7 @@ def entity_parents(conn: sqlite3.Connection) -> dict[str, str]:
     parents: dict[str, str] = {}
     for row in conn.execute(
         "SELECT from_entity_id, to_entity_id, link_type FROM entity_links "
-        "WHERE link_type IN ('contains', 'sub-type') ORDER BY link_type, from_entity_id"
+        "WHERE link_type IN ('contains', 'sub-type') ORDER BY link_type, from_entity_id, to_entity_id"
     ):
         child, parent = (
             (row["to_entity_id"], row["from_entity_id"])

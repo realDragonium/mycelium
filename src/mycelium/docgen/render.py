@@ -58,6 +58,8 @@ class ImagePlaceholder:
     description: str
     #: The title of the section it is in; None in the lead.
     section: str | None
+    #: That section's anchor; None in the lead.
+    anchor: str | None
 
 
 _CONCEPT_LINK = re.compile(r"\[\[([^\[\]|\n]+)(?:\|([^\[\]\n]+))?\]\]")
@@ -129,6 +131,11 @@ def _code_spans(body: str, start: int, end: int) -> list[tuple[int, int]]:
     return spans
 
 
+def _escaped(body: str, at: int) -> bool:
+    backslashes = len(body[:at]) - len(body[:at].rstrip("\\"))
+    return backslashes % 2 == 1
+
+
 def concept_links(body: str) -> list[ConceptLink]:
     """The concept links a body holds, in order, with where each one is. Code
     spans and code blocks are left alone."""
@@ -138,6 +145,8 @@ def concept_links(body: str) -> list[ConceptLink]:
         for link in _CONCEPT_LINK.finditer(body, start, end):
             name = link.group(1).strip()
             if not name or any(a < link.end() and link.start() < b for a, b in spans):
+                continue
+            if _escaped(body, link.start()):
                 continue
             text = (link.group(2) or "").strip() or name
             found.append(ConceptLink(name, text, link.start(), link.end()))
@@ -207,11 +216,16 @@ def _split_text(token: Token, links: Sequence[ConceptLink]) -> list[Token]:
 
 def _place_links(tokens: Sequence[Token], links: Sequence[ConceptLink]) -> list[Token]:
     out: list[Token] = []
+    in_link = 0
     for token in tokens:
-        if token.type == "text":
+        in_link += token.nesting if token.type in ("link_open", "link_close") else 0
+        if token.type == "text" and not in_link:
             out += _split_text(token, links)
             continue
-        if token.type == "image":
+        if token.type == "text":
+            # An anchor cannot hold another, so here a link is only its text.
+            token.content = _plain(token.content, links)
+        elif token.type == "image":
             # Alt text is an attribute, so a link inside it is only its text.
             for child in token.children or []:
                 child.content = _plain(child.content, links)
@@ -310,13 +324,17 @@ def image_placeholders(body: str) -> list[ImagePlaceholder]:
     """The image placeholders a body holds, in order, each with what it asks
     for and the section it is in."""
     _markdown_it, tokens, _links = _parse(body)
-    titles = {id(token): title for token, title, _anchor in _headings(tokens)}
+    sections = {
+        id(token): (title, anchor) for token, title, anchor in _headings(tokens)
+    }
     found: list[ImagePlaceholder] = []
-    section: str | None = None
+    section: tuple[str, str] | tuple[None, None] = (None, None)
     for token in tokens:
-        section = titles.get(id(token), section)
+        section = sections.get(id(token), section)
         found += [
-            ImagePlaceholder(description=_alt(image), section=section)
+            ImagePlaceholder(
+                description=_alt(image), section=section[0], anchor=section[1]
+            )
             for image in _images_wanted(token.children or [])
         ]
     return found

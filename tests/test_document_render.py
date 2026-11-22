@@ -87,6 +87,24 @@ def test_concept_link_renders_as_a_link_only_with_a_target():
     assert render_markdown(body).count("[[") == 0
 
 
+def test_an_escaped_concept_link_stays_as_written():
+    body = "Write \\[[Invoice]] to link an [[Invoice]]."
+    assert [link.start for link in concept_links(body)] == [body.rindex("[[")]
+    html = render_markdown(body, links={"Invoice": LinkTarget(href="invoice.html")})
+    assert html == (
+        "<p>Write [[Invoice]] to link an "
+        '<a class="concept-link" href="invoice.html">Invoice</a>.</p>\n'
+    )
+
+
+def test_concept_link_inside_a_link_is_its_text():
+    html = render_markdown(
+        "[See [[Invoice|invoices]]](/help)",
+        links={"Invoice": LinkTarget(href="invoice.html")},
+    )
+    assert html == '<p><a href="/help">See invoices</a></p>\n'
+
+
 def test_concept_link_with_a_pipe_does_not_split_a_table_cell():
     body = "| Who | What |\n|---|---|\n| [[Workspace|Owners]] | pay |\n"
     html = render_markdown(body, links={"Workspace": LinkTarget(href="w.html")})
@@ -500,11 +518,15 @@ def test_image_placeholders_are_listed_with_their_section():
     )
 
     assert image_placeholders(body) == [
-        ImagePlaceholder("The workspace settings page", None),
+        ImagePlaceholder("The workspace settings page", None, None),
         ImagePlaceholder(
-            "The export dialog with CSV selected", "How is an export requested?"
+            "The export dialog with CSV selected",
+            "How is an export requested?",
+            "how-is-an-export-requested",
         ),
-        ImagePlaceholder("The failed export banner", "What can go wrong?"),
+        ImagePlaceholder(
+            "The failed export banner", "What can go wrong?", "what-can-go-wrong"
+        ),
     ]
     assert image_placeholders("No picture is wanted here.") == []
 

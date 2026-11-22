@@ -267,14 +267,19 @@ def resolve_concept_links(
 ) -> dict[str, str]:
     """The concept each name or alias belongs to, matched ignoring case. A name
     that matches no concept, or more than one, is left out."""
+    if not names:
+        return {}
+    # SQLite folds only ASCII case, so the names are folded here.
+    concepts: dict[str, set[str]] = {}
+    for row in conn.execute("SELECT text, entity_id FROM names"):
+        concepts.setdefault(str(row["text"]).casefold(), set()).add(
+            str(row["entity_id"])
+        )
     resolved: dict[str, str] = {}
     for name in dict.fromkeys(names):
-        rows = conn.execute(
-            "SELECT DISTINCT entity_id FROM names WHERE text = ? COLLATE NOCASE",
-            (name,),
-        ).fetchall()
-        if len(rows) == 1:
-            resolved[name] = str(rows[0]["entity_id"])
+        found = concepts.get(name.casefold(), set())
+        if len(found) == 1:
+            resolved[name] = next(iter(found))
     return resolved
 
 

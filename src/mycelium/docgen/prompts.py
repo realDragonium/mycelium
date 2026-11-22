@@ -239,7 +239,9 @@ Leaving an image slot empty conforms.
 `[[Name]]` and `[[Name|text]]` link a concept, and a fenced block with the \
 info string `flow` holding one name places a flow the server draws. Both are \
 permitted body syntax, not placeholders left in. PLACED FLOWS says what each \
-placed flow shows. Fail CONFORMANCE for a flow that does not show what the \
+placed flow shows: the reader sees its caption, steps, conditions, outcomes \
+and what it says continues, so the exposure check covers them as it covers \
+the body. Fail CONFORMANCE for a flow that does not show what the \
 surrounding text describes.
 `![what the picture should show](image-wanted)` marks where a picture would \
 help. It is permitted body syntax: not media, and not a placeholder left in. \
@@ -827,6 +829,7 @@ def review_retry_message(
     exposure_findings: list[ReviewFinding],
     conformance_findings: list[ReviewFinding],
     flows: Sequence[StoredFlow] = (),
+    statement_ids: Sequence[str] = (),
 ) -> str:
     """The rejected document and findings for the fresh writer context."""
     groups = []
@@ -855,7 +858,8 @@ def review_retry_message(
         f"{prompt}\n"
         "-----\n\n"
         f"{document_payload(title=title, body=body)}"
-        f"{submitted_flows(flows)}\n\n"
+        f"{submitted_flows(flows)}"
+        f"{cited_statements(statement_ids)}\n\n"
         f"REVIEW FINDINGS:\n{findings}\n\n"
         "This is the ONE further attempt. A second rejection ends the run "
         "with nothing recorded. Revise the document above instead of starting "

@@ -221,7 +221,7 @@ The system SHALL, in the exported site, link the names and aliases of concepts n
 - **THEN** "invoice" in the lead links to the Invoice page
 
 ### Requirement: Generated pages for concepts without a written page
-A linked concept with no written page in the export SHALL get a generated page at `concept/<slug>.html` that says it is not written yet and shows the concept's name, other names, description, relations, up to 100 statements naming it with the first 10 unfolded, and the written pages that link to it. A link to a generated page SHALL be marked as not written yet.
+A linked concept with no written page in the export SHALL get a generated page at `concept/<slug>.html` that says it is not written yet and shows the concept's name, other names, up to 100 statements naming it with the first 10 unfolded, and the written pages that link to it, with the concept's description and relations where the audience may see them. A link to a generated page SHALL be marked as not written yet.
 
 #### Scenario: A concept without a written page
 - **WHEN** two pages link to the concept Ledger sync and the profile holds no document about it

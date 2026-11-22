@@ -550,3 +550,31 @@ def test_the_http_routes_track_the_pull_request(conn, github, monkeypatch):
     github.merge(17)
     monkeypatch.setattr(publication, "REFRESH_INTERVAL", timedelta(0))
     assert client.get(url).json()["pull_request"]["state"] == "merged"
+
+
+def test_an_identical_body_with_other_flows_or_links_is_refused(conn):
+    link = {"name": "SSO", "entity_id": "ent_sso"}
+    docs_store.upsert_document(
+        conn,
+        slug="sso",
+        title="SSO",
+        body="# SSO\n",
+        guideline_set="kb",
+        document_type="how-to",
+        concept_links=[link],
+    )
+
+    def again(entity_id: str) -> str:
+        return docs_store.upsert_document(
+            conn,
+            slug="sso",
+            title="SSO",
+            body="# SSO\n",
+            guideline_set="kb",
+            document_type="how-to",
+            concept_links=[{**link, "entity_id": entity_id}],
+        )
+
+    with pytest.raises(ValueError, match="would replace the concept links or flows"):
+        again("ent_other")
+    assert docs_store.get_document(conn, again("ent_sso"))["current_revision"] == 2

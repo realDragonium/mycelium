@@ -1035,6 +1035,7 @@ def _handle_emit(
                         title=title,
                         body=body,
                         flows=drawn,
+                        statement_ids=ids,
                         exposure_findings=review.exposure.findings,
                         conformance_findings=review.conformance.findings,
                     ),
@@ -1264,10 +1265,12 @@ def _submission_problem(
     definitions: Sequence[FlowDefinition],
 ) -> tuple[str | None, list[StoredFlow]]:
     """Why this submission may not be recorded, or None, with the flows its
-    body places. Flows are drawn first: a drawing's statements count as read."""
+    body places. Flows are drawn first: the statements of a flow this
+    submission places count as read, for this submission only."""
     drawn, flow_problem = _draw_flows(ctx, body, definitions)
+    read = ctx.retrieved_ids.union(*(flow.drawing.statement_ids for flow in drawn))
     problem = (
-        _emit_problem(title, body, ids, ctx.retrieved_ids, ctx.visible_ids)
+        _emit_problem(title, body, ids, read, ctx.visible_ids)
         or _media_problem(ctx, body)
         # One refusal for everything about flows and image placeholders, so
         # together they cost one attempt.
@@ -1308,6 +1311,11 @@ def _draw_flows(
         if name not in names
     ]
     problems += [
+        f"the body places flow {name!r} {placed.count(name)} times; place it once"
+        for name in dict.fromkeys(placed)
+        if placed.count(name) > 1
+    ]
+    problems += [
         f"flow {name!r} is submitted {names.count(name)} times; give each flow "
         "its own name"
         for name in dict.fromkeys(names)
@@ -1341,7 +1349,6 @@ def _draw_flows(
             )
         if found.drawing is None:
             continue
-        ctx.retrieved_ids.update(found.drawing.statement_ids)
         if len(found.drawing.statement_ids) < _MIN_FLOW_STATEMENTS:
             refuse(
                 f"draws fewer than {_MIN_FLOW_STATEMENTS} statements "

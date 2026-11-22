@@ -344,7 +344,7 @@ export function DocumentationProfiles() {
               {data.can_write && <button type="button" className="btn ghost xs" disabled={busy} onClick={() => create(form)}>Duplicate profile</button>}
               {data.can_retire && !creating && !form.retired && <button type="button" className="btn ghost xs" disabled={busy || form.name === data.default_profile} onClick={retire}>Retire profile</button>}
             </div>
-            {data.can_retire && !creating && !form.retired && <SiteDownload key={form.name} profile={form.name} />}
+            {data.can_retire && !creating && !form.retired && <SiteDownload key={form.name} profile={form.name} unsaved={dirty} />}
             {form.name === data.default_profile && <p className="hint">This is the default profile. Choose another default under Documentation delivery before retiring it or its last template.</p>}
             {!data.can_write && <p className="hint">Writers can edit profiles; administrators can retire them.</p>}
             {!creating && original && (
@@ -367,7 +367,7 @@ export function DocumentationProfiles() {
   );
 }
 
-function SiteDownload({ profile }: { profile: string }) {
+function SiteDownload({ profile, unsaved }: { profile: string; unsaved: boolean }) {
   const [title, setTitle] = useState('');
   const [feedback, setFeedback] = useState('');
   const [busy, setBusy] = useState(false);
@@ -399,7 +399,8 @@ function SiteDownload({ profile }: { profile: string }) {
       <label className="field"><span>Site name</span><input className="input" value={title} maxLength={200} placeholder="Defaults to the profile name" onChange={e => setTitle(e.target.value)} /></label>
       <label className="field"><span>Address for "Report a problem with this page"</span><input className="input" value={feedback} maxLength={2000} placeholder="Optional. For example mailto:docs@example.com?subject={title}" onChange={e => setFeedback(e.target.value)} /><span className="hint">An http, https or mailto address. {'{title}'} and {'{page}'} are replaced by the page's title and its path.</span></label>
       {error && <Notice tone="error">{error}</Notice>}
-      <div><button type="submit" className="btn sm" disabled={busy}>{busy ? 'Building…' : 'Download site'}</button></div>
+      {unsaved && <p className="hint">Save the profile first: the site is built from the saved profile and its saved audience.</p>}
+      <div><button type="submit" className="btn sm" disabled={busy || unsaved}>{busy ? 'Building…' : 'Download site'}</button></div>
     </form>
   );
 }

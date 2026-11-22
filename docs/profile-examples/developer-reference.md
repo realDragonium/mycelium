@@ -8,7 +8,7 @@ This is an example to copy, not a profile the server loads. Create a profile in 
 - **Audience:** Internal technical.
 - **Templates:** `entity-page`
 - **When AI work fails:** retry automatically. A revision the review refuses is then tried again with the review's notes instead of leaving the page out of date until someone notices.
-- **Destinations:** none. Pages with concept links and flows are read as a website: an administrator downloads it as a zip under **Download as a website** on the profile in **Settings → Documentation**, or from `GET /api/documentation/sites/<profile>` with an admin token. On the machine that holds the data directory, `mycelium docs-site` writes the same files.
+- **Destinations:** none. Pages with concept links and flows are read as a website: an administrator downloads it as a zip under **Download as a website** on the profile in **Settings → Documentation**, or from `GET /api/documentation/sites/<profile>` with an admin token. On the machine that holds the data directory, `mycelium docs-site --profile <profile> --out <directory>` writes the same files.
 
 Request a page with the concept as its anchor. Start with the higher-level concepts, so that more specific pages have a parent to link back to.
 
