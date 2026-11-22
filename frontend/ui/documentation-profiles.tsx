@@ -204,6 +204,9 @@ interface Profile {
   retired?: boolean; ready?: boolean; issues?: string[]; retired_templates?: string[];
 }
 interface Profiles { profiles: Profile[]; default_profile: string | null; can_write: boolean; can_retire: boolean }
+// What a profile's audience holds when it writes from every statement.
+const ALL_STATEMENTS = '*';
+const ALL_STATEMENTS_NAME = 'All statements';
 interface ProfilesView extends Profiles { audiences: AudienceView[]; destinations: string[] }
 interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null; maintenance: Maintenance; planning: Planning; plan_review: PlanReview; recovery: Recovery; delivery: Delivery; delivery_destination: string; destinations: string[] }
 
@@ -237,7 +240,7 @@ export function DocumentationProfiles() {
   const choose = (p: Profile) => { if (discardOk()) open(p, false); };
   const create = (source: Profile | null) => {
     if (!discardOk()) return;
-    const audience = source?.audience && data?.audiences.some(item => !item.retired && item.id === source.audience) ? source.audience : null;
+    const audience = source?.audience && (source.audience === ALL_STATEMENTS || data?.audiences.some(item => !item.retired && item.id === source.audience)) ? source.audience : null;
     open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null, maintenance: source?.maintenance ?? 'manual', planning: source?.planning ?? 'off', plan_review: source?.plan_review ?? 'person', recovery: source?.recovery ?? 'person', delivery: source?.delivery ?? 'people', delivery_destination: source?.delivery_destination ?? '', destinations: source?.destinations ?? [] }, true);
   };
   const toggleDestination = (name: string, on: boolean) => form && change({ destinations: on ? [...form.destinations, name] : form.destinations.filter(item => item !== name) });
@@ -273,7 +276,7 @@ export function DocumentationProfiles() {
         <div className="row gap-sm wrap">
           {data.profiles.filter(p => showRetired || !p.retired).map(p => (
             <button key={p.name} type="button" className={`fchip${form?.name === p.name && !creating ? ' on' : ''}`} disabled={busy} onClick={() => choose(p)}>
-              {p.name}{p.name === data.default_profile && ' · default'}{p.effective_audience ? ` · ${data.audiences.find(a => a.id === p.effective_audience)?.name || p.effective_audience}` : ' · audience unavailable'}{p.retired ? ' · retired' : p.ready === false ? ' · incomplete' : ''}
+              {p.name}{p.name === data.default_profile && ' · default'}{p.effective_audience ? ` · ${p.effective_audience === ALL_STATEMENTS ? ALL_STATEMENTS_NAME : data.audiences.find(a => a.id === p.effective_audience)?.name || p.effective_audience}` : ' · audience unavailable'}{p.retired ? ' · retired' : p.ready === false ? ' · incomplete' : ''}
             </button>
           ))}
           <label className="check small"><input type="checkbox" checked={showRetired} onChange={e => setShowRetired(e.target.checked)} />Show retired</label>
@@ -287,10 +290,11 @@ export function DocumentationProfiles() {
               {creating && <label className="field"><span>Profile name</span><input className="input" value={form.name} required maxLength={200} pattern="[^/]+" placeholder="For example internal-doc" onChange={e => change({ name: e.target.value })} /></label>}
               <label className="field"><span>Audience</span><select className="input" value={form.audience || ''} disabled={!creating && !data.can_retire} onChange={e => change({ audience: e.target.value || null })}>
                 <option value="">Default ({defaultAudience?.name || 'unavailable'})</option>
-                {form.audience && !data.audiences.some(a => !a.retired && a.id === form.audience) && <option value={form.audience}>{data.audiences.find(a => a.id === form.audience)?.name || form.audience} (retired)</option>}
+                {form.audience && form.audience !== ALL_STATEMENTS && !data.audiences.some(a => !a.retired && a.id === form.audience) && <option value={form.audience}>{data.audiences.find(a => a.id === form.audience)?.name || form.audience} (retired)</option>}
                 {data.audiences.filter(a => !a.retired).map(a => <option key={a.id} value={a.id}>{a.name} · {a.scope}</option>)}
+                <option value={ALL_STATEMENTS}>{ALL_STATEMENTS_NAME} · no audience</option>
               </select>{!creating && !data.can_retire && <span className="hint">Only administrators can change an existing profile's audience.</span>}</label>
-              <p className="hint">Effective audience: {effectiveAudienceId ? (() => { const audience = data.audiences.find(a => a.id === effectiveAudienceId); return audience ? <AudienceIdentity audience={audience} /> : effectiveAudienceId; })() : 'Unavailable'}</p>
+              <p className="hint">Effective audience: {effectiveAudienceId === ALL_STATEMENTS ? 'none. Documents are written from every statement, whatever its audience label, so keep them and the downloaded website internal.' : effectiveAudienceId ? (() => { const audience = data.audiences.find(a => a.id === effectiveAudienceId); return audience ? <AudienceIdentity audience={audience} /> : effectiveAudienceId; })() : 'Unavailable'}</p>
               <label className="field"><span>When a cited statement changes</span><select className="input" value={form.maintenance} onChange={e => change({ maintenance: e.target.value as Maintenance })}>
                 {(Object.keys(MAINTENANCE) as Maintenance[]).map(policy => <option key={policy} value={policy}>{MAINTENANCE[policy]}</option>)}
               </select><span className="hint">Auto-revise waits for the quiet period and daily limit under Settings → Limits. A published document gets its pull request updated, or a new one; a person still merges it.</span></label>

@@ -495,16 +495,20 @@ def audience_brief(audience: Audience | None) -> AudienceBrief | None:
     )
 
 
+def effective_audience(profile: Profile, conn: sqlite3.Connection) -> Audience | None:
+    """The audience runs of `profile` write for; None when it was retired."""
+    if profile.effective_audience is None:
+        return None
+    return audiences.resolve(profile.effective_audience, audiences.live(conn))
+
+
 def brief(
     name: str, document_type: str | None = None, conn: sqlite3.Connection | None = None
 ) -> ProfileBrief:
     """The profile, with only `document_type`'s template when one is named."""
     db = conn if conn is not None else prompt_store.connection()
     profile = read(name, db)
-    audience = next(
-        (item for item in audiences.live(db) if item.id == profile.effective_audience),
-        None,
-    )
+    audience = effective_audience(profile, db)
     return ProfileBrief(
         name=profile.name,
         revision=profile.revision,
@@ -630,9 +634,10 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
             for row in rows
             if not row["deleted"]
         }
-        if request.audience is not None and request.audience not in {
-            item.id for item in audiences.live(conn)
-        }:
+        if (
+            request.audience is not None
+            and audiences.resolve(request.audience, audiences.live(conn)) is None
+        ):
             raise ValueError(f"Audience {request.audience!r} is not live.")
         if live and any(
             live.get(slot) != desired.get(slot)
@@ -792,7 +797,7 @@ def save_text(
     if _is_admin_slot(type, name):
         _authorize(principal, "admin")
     if _is_audience_slot(type, name):
-        if text.strip() not in {item.id for item in audiences.live()}:
+        if audiences.resolve(text.strip(), audiences.live()) is None:
             raise ValueError(f"Audience {text.strip()!r} is not live.")
     policy = _POLICIES.get(name.partition("/")[2]) if type == guidelines.TYPE else None
     if policy is not None and text.strip() not in get_args(policy[1]):

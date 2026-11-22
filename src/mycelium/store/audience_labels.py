@@ -91,12 +91,20 @@ MAX_ATTEMPTS = 5
 _BACKOFF = timedelta(minutes=1)
 
 
+#: What a profile writes for when it writes from every statement, whatever its
+#: label. Not an audience, and no audience id can spell it, so no audience,
+#: include or label can reach what it sees.
+EVERYTHING = "*"
+
+
 def visibility_clause(
     sees: frozenset[str], internal: bool
 ) -> tuple[str, tuple[str, ...]]:
     """SQL over `statements s LEFT JOIN statement_audience_labels l`: whether
     `s` is visible to an audience that sees the grants of the audience ids
     `sees` (itself and every audience it includes)."""
+    if EVERYTHING in sees:
+        return "1", ()
     ids = tuple(sorted(sees))
     placeholders = ", ".join("?" for _ in ids)
     granted = (
@@ -112,8 +120,8 @@ def grants(label: Sequence[str] | None, sees: frozenset[str], internal: bool) ->
     whether a label, None while unlabelled, lets an audience that sees the
     grants of `sees` see its item. Keep the two in step."""
     if label is None:
-        return internal
-    return bool(sees & set(label))
+        return internal or EVERYTHING in sees
+    return EVERYTHING in sees or bool(sees & set(label))
 
 
 def label_visible(

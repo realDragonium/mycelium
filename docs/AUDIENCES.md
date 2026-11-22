@@ -42,6 +42,15 @@ while it exists, otherwise the first internal audience. Only an administrator
 can change the audience of an existing profile. If a profile's chosen audience
 is retired, the profile is not ready and its runs refuse rather than widen.
 
+A profile can also write from **all statements**, with no audience: choose
+**All statements · no audience** in the profile, or pass
+`audience: "*"` to `save_writing_profile`. Its runs, reviews,
+plans and downloaded website read every statement and media item, whatever
+its label, including statements labelled only for an audience that was since
+retired. It is not an audience: it is not listed here and nothing is labelled
+for it. Use it for an internal reference that should rest on the whole
+knowledge base, and keep its documents and website internal.
+
 ## Labels
 
 Every statement carries a label: the audiences it grants, who decided (the AI

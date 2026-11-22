@@ -30,6 +30,10 @@ Scope = Literal["internal", "external"]
 DEFAULT_ID = "internal-technical"
 
 
+#: What a profile's audience slot holds when it writes from every statement.
+ALL_STATEMENTS_ID = store.audience_labels.EVERYTHING
+
+
 class Conflict(errors.Conflict):
     pass
 
@@ -63,6 +67,22 @@ class Audience:
     def sees(self) -> frozenset[str]:
         """The audience ids whose grants this audience may see."""
         return frozenset((self.id, *self.reach))
+
+
+#: The reader of a profile that writes from every statement. It is never
+#: among the live audiences: it cannot be edited, retired, labelled for or
+#: included.
+ALL_STATEMENTS = Audience(
+    id=ALL_STATEMENTS_ID,
+    name="All statements",
+    scope="internal",
+    description=(
+        "People inside the company who build and run the product. Nothing is "
+        "withheld from them: every statement may be shown, whatever its "
+        "audience label."
+    ),
+    version=0,
+)
 
 
 SEEDS: tuple[tuple[str, AudienceBody], ...] = (
@@ -221,6 +241,8 @@ def resolve(chosen: str | None, audiences: tuple[Audience, ...]) -> Audience | N
     resolves to nothing, so the run refuses instead of widening silently."""
     if chosen is None:
         return default(audiences)
+    if chosen == ALL_STATEMENTS_ID:
+        return ALL_STATEMENTS
     return next((item for item in audiences if item.id == chosen), None)
 
 

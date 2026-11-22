@@ -251,6 +251,30 @@ def test_an_audience_sees_what_the_audiences_it_includes_see(db, prompts):
     assert visible("internal-technical") == {general, technical}
 
 
+def test_all_statements_sees_every_statement_whatever_its_label(db, prompts):
+    unlabelled = store.create_statement(db, "state", "the invoice is paid")
+    retired = store.create_statement(db, "capability", "the export api pages")
+    store.audience_labels.set_label(
+        db, retired, ["an-audience-since-retired"], source="curator", reason="r"
+    )
+    everything = audiences.ALL_STATEMENTS
+
+    assert audiences.sees_of("internal-technical") != everything.sees
+    assert store.visible_statement_ids(
+        db, audiences.sees_of("internal-technical"), True
+    ) == {unlabelled}
+    assert store.visible_statement_ids(
+        db, audiences.sees_of(everything.id), everything.internal
+    ) == {unlabelled, retired}
+    assert store.audience_labels.grants(["anyone"], everything.sees, True)
+    assert everything not in audiences.live()
+    # No audience can take its id, so none can be given what it sees.
+    with pytest.raises(ValueError, match="lowercase letters"):
+        audiences.CreateAudience(
+            id=everything.id, name="Everyone", scope="internal", description="All."
+        )
+
+
 def test_a_text_change_drops_the_ai_label_and_flags_a_curator_decision(db):
     ai_id = store.create_statement(db, "state", "exports run nightly")
     curated = store.create_statement(db, "state", "workspaces have owners")
