@@ -1,6 +1,5 @@
 """The documentation workspace over every transport: its lists, a document's
-history, a person's edits, retries and the decisions on a writing profile's
-plan.
+history, retries and the decisions on a writing profile's plan.
 
 Reads are open to any caller; anything that writes or starts a run needs a real
 writer, as in the web app, whose documentation routes call these same
@@ -20,10 +19,9 @@ from .. import (
     documentation_planning,
     product_settings,
 )
-from ..docgen.schema import ManualDocument
+from ..docgen import site
 from .documentation import (
     get_document_revision,
-    get_documentation_run,
     list_document_revisions,
     list_documentation_destinations,
     list_documentation_models,
@@ -32,7 +30,7 @@ from .documentation import (
     retry_documentation_run,
 )
 from .registry import tool
-from .runtime import _caller, _drafts_db
+from .runtime import _caller, _db, _drafts_db
 
 
 def _profile_audiences() -> dict[str, dict[str, str] | None]:
@@ -157,87 +155,6 @@ def get_document_history(
     if diff:
         return revision_diff(document_id, revision).model_dump(mode="json")
     return get_document_revision(document_id, revision)
-
-
-class EditSaved(ManualDocument):
-    action: Literal["saved"]
-    document_id: str
-    #: The document's current revision; a stale one is refused.
-    expected_revision: int = Field(ge=1, strict=True)
-    provider: Literal["claude", "openai"] | None = None
-
-
-class EditDraft(ManualDocument):
-    action: Literal["draft"]
-    run_id: str
-    provider: Literal["claude", "openai"] | None = None
-
-
-DocumentEdit = Annotated[EditSaved | EditDraft, Field(discriminator="action")]
-#: The HTTP mirror and in-process callers pass `request` as a dict.
-_document_edit: TypeAdapter[DocumentEdit] = TypeAdapter(DocumentEdit)
-
-
-def edit_saved(
-    document_id: str,
-    expected_revision: int,
-    document: ManualDocument,
-    provider: Literal["claude", "openai"] | None,
-    created_by: str,
-) -> dict[str, object]:
-    from .. import document_edits
-
-    run_id = document_edits.start_document_edit(
-        _drafts_db(),
-        document_id,
-        expected_revision,
-        document,
-        created_by=created_by,
-        provider=provider,
-    )
-    return get_documentation_run(run_id)
-
-
-def edit_draft(
-    run_id: str,
-    document: ManualDocument,
-    provider: Literal["claude", "openai"] | None,
-    created_by: str,
-) -> dict[str, object]:
-    from .. import document_edits
-
-    new_run_id = document_edits.start_draft_edit(
-        _drafts_db(),
-        run_id,
-        document,
-        created_by=created_by,
-        provider=provider,
-    )
-    return get_documentation_run(new_run_id)
-
-
-@tool(role="writer", real_role=True)
-def edit_document(request: DocumentEdit) -> dict[str, object]:
-    """Save a person's own edit of a document's title and body, as the
-    document editor does. The edit goes through the same review a written
-    revision does, as a run. Real writers and admins only.
-
-    `saved` edits a saved document (`document_id`) at its
-    `expected_revision`; `draft` edits the result of a run (`run_id`) that
-    has not been saved.
-    `provider` picks the reviewing model, or the saved choice when omitted.
-    Returns the run; follow it with `get_documentation_run`."""
-    request = _document_edit.validate_python(request)
-    document = ManualDocument(title=request.title, body=request.body)
-    if isinstance(request, EditSaved):
-        return edit_saved(
-            request.document_id,
-            request.expected_revision,
-            document,
-            request.provider,
-            _caller().id,
-        )
-    return edit_draft(request.run_id, document, request.provider, _caller().id)
 
 
 @tool(role="writer", real_role=True)
@@ -367,3 +284,20 @@ def _decide(request: PlanDecision) -> PlanDecided:
             request.guideline_set, request.statement_id
         )
     return PlanDecided()
+
+
+def site_archive(
+    guideline_set: str, *, title: str | None, feedback_url: str | None
+) -> bytes:
+    """A writing profile's current documents as a zipped static site, read
+    through the audience the profile writes for (`docgen.site`). Raises
+    `site.SiteRefused` when the profile or an address in it cannot be used."""
+    files, _ = site.build_site(
+        _db(),
+        _drafts_db(),
+        profile=guideline_set,
+        audience=site.profile_audience(guideline_set),
+        feedback_url=feedback_url,
+        title=title,
+    )
+    return site.archive(files)

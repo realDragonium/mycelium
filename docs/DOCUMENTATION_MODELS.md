@@ -63,21 +63,14 @@ exact internal version on screen, preserving its identity and earlier revisions.
 If another run changes the document first, reload its current revision before
 retrying. Old revisions remain readable and downloadable as Markdown.
 
-A published document can be edited on GitHub, on its pull request branch or on
-the base branch after merge. A revision therefore reads the published copy
-first. Mycelium recognises every text it published itself. Any other text there
-is someone's edit, and the revision starts from it, telling the writer to keep
-it. The run records this as `revision_base: destination`. If the document also
-has a revision here that was never published, Mycelium refuses rather than
-merging the two. To keep the GitHub edits, choose **Start from the published
-copy on GitHub** (`start_from_destination` over MCP): the revision starts from
-the GitHub text and the unpublished revision stays in the history. To continue
-from the revision here instead, undo the GitHub edits or close the pull request
-without merging. A deleted file in an open pull request
-is refused the same way. If the published copy cannot be read, the revision is
-refused until the connection or credential binding is restored. A manual edit
-does not read GitHub, so publishing it is refused over GitHub edits it did not
-see.
+Publishing to GitHub is one-way. Mycelium's text is the only source: a revision
+always starts from the revision here, and nothing is read back from GitHub into
+a document. A publish overwrites the file, on the open pull request branch or
+in a new pull request from the base branch, including changes someone made to
+it on GitHub by hand. To change a published document, change the statements or
+ask for a revision, then publish again. The one refusal: a file someone deleted
+in the open pull request is not put back; restore it there or close the pull
+request.
 
 Generation records the model and a consistent snapshot of the available writing
 profiles at admission. The selected guidance, exposure rules, template, and their
@@ -178,9 +171,9 @@ refuses a document placing media that was deleted or that its audience may no
 longer see.
 
 The document shows which revision was published and whether a newer internal
-revision awaits publication. A publication completing during a concurrent local
-edit still records the exact revision sent. Existing remote-change checks remain
-in place. Merging and deployment happen in GitHub; Mycelium does not perform them.
+revision awaits publication. A publication completing during a concurrent
+revision still records the exact revision sent. Merging and deployment happen
+in GitHub; Mycelium does not perform them.
 
 ### Storage and automation
 

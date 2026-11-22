@@ -261,7 +261,6 @@ MCP_TOOLS = frozenset(
         "deliver_document",
         "list_documentation",
         "get_document_history",
-        "edit_document",
         "retry_documentation",
         "decide_documentation_plan",
         # Writing profiles

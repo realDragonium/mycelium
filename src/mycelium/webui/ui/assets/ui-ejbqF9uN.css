@@ -1140,7 +1140,6 @@ main.page.home { padding-top: 56px; }
 .docw label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; font-size: var(--fs-xs); font-weight: 500; color: var(--ink-2); }
 .docw input, .docw select, .docw textarea { width: 100%; min-width: 0; padding: 8px 11px; border-radius: var(--r-md); border: 1px solid var(--line-strong); background: var(--bg-inset); color: var(--ink); font-size: var(--fs-sm); }
 .docw textarea { min-height: 150px; resize: vertical; }
-.docw textarea.docw-editor { min-height: 360px; font-family: var(--mono); font-size: var(--fs-xs); line-height: 1.6; }
 .docw .docw-panel button, .docw-actions button, .docw [role="alert"] button {
   display: inline-flex; align-items: center; gap: 6px; padding: 7px 13px; border-radius: var(--r-md); border: 1px solid var(--line-strong);
   background: var(--bg-2); color: var(--ink-2); font-size: var(--fs-xs); font-weight: 500;

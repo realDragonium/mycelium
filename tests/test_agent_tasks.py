@@ -42,10 +42,8 @@ def drafts(tmp_path):
     conn.close()
 
 
-def _queue(conn, excluded: str | None = None) -> str:
-    return agent_tasks.create(
-        conn, "documentation", subject_id=None, state={}, excluded_claimant=excluded
-    )
+def _queue(conn) -> str:
+    return agent_tasks.create(conn, "documentation", subject_id=None, state={})
 
 
 def _claim(conn, claimant: str, limit: int, now, retries: int = 2):
@@ -101,13 +99,6 @@ def test_giving_a_task_back_counts_toward_the_same_limit(drafts):
 
     assert (failed.status, failed.finished_at is not None) == ("failed", True)
     assert _claim(drafts, "c", 1, NOW, retries=1).tasks == []
-
-
-def test_a_task_is_never_offered_to_the_claimant_it_excludes(drafts):
-    task = _queue(drafts, excluded="writer")
-
-    assert _claim(drafts, "writer", 1, NOW).tasks == []
-    assert [t.id for t in _claim(drafts, "other", 1, NOW).tasks] == [task]
 
 
 # --- documentation over HTTP ---------------------------------------------------
@@ -223,6 +214,19 @@ def test_an_external_agent_writes_inside_the_audience_and_its_gates(
     )
     assert public in read["content"] and SECRET not in read["content"]
 
+    assert "preview_flow" in {t["name"] for t in task["brief"]["read_tools"]}
+    flow = _call(
+        client,
+        writer,
+        "read_for_agent_task",
+        task_id=task["id"],
+        tool="preview_flow",
+        arguments={"start": public, "stop": [hidden]},
+    )
+    assert flow["error"] is False
+    assert public in flow["content"] and SECRET not in flow["content"]
+    assert f'"missing": ["{hidden}"]' in flow["content"]
+
     leaked = _call(
         client,
         writer,
@@ -247,7 +251,7 @@ def test_an_external_agent_writes_inside_the_audience_and_its_gates(
     assert done["agent_task"]["status"] == "done"
 
 
-def test_an_agent_review_is_never_the_writer_and_its_refusal_returns_findings(
+def test_an_agent_reviews_a_document_and_its_refusal_returns_findings(
     client,  # noqa: F811
     monkeypatch,
 ):
@@ -274,9 +278,6 @@ def test_an_agent_review_is_never_the_writer_and_its_refusal_returns_findings(
     )
     assert held["status"] == "in_review"
 
-    assert (
-        _call(client, writer, "claim_agent_task", kind="document_review")["tasks"] == []
-    )
     [review] = _call(client, reviewer, "claim_agent_task", kind="document_review")[
         "tasks"
     ]
@@ -300,6 +301,314 @@ def test_an_agent_review_is_never_the_writer_and_its_refusal_returns_findings(
     assert again["findings"][0]["problem"] == "No numbered steps."
     current = _call(client, writer, "get_documentation_run", run_id=run["id"])
     assert current["status"] == "waiting_for_agent"
+
+
+def _export_steps(http, admin) -> list[str]:
+    """Three public statements in a chain, the first also failing into an
+    internal one."""
+    ids: list[str] = []
+    following: list[dict[str, str]] = []
+    for text in (
+        "The workspace export is ready to download.",
+        "The workspace export is queued.",
+        "A member requests a workspace export.",
+    ):
+        r = http.post(
+            "/upsert-statement",
+            headers=admin,
+            json={
+                "kind": "event",
+                "text": text,
+                "links": following,
+                "allow_phrasing_violations": True,
+            },
+        )
+        assert r.status_code == 200, r.text
+        ids.append(str(r.json()["statement_id"]))
+        r = http.put(
+            f"/api/statements/{ids[-1]}/audiences",
+            headers=admin,
+            json={"audiences": ["external-technical"], "reason": "public"},
+        )
+        assert r.status_code == 200, r.text
+        following = [{"to_id": ids[-1], "link_type": "proceeds"}]
+    return ids[::-1]
+
+
+_PASSING_REVIEW = {
+    "exposure": {"status": "pass", "findings": []},
+    "conformance": {"status": "pass", "findings": []},
+}
+
+
+def test_an_agents_flows_and_links_are_held_for_review_stored_and_replaced(
+    client,  # noqa: F811
+    monkeypatch,
+):
+    admin = _bearer("admin")
+    public, hidden, entity = _corpus(client, admin)
+    requested, queued, ready = _export_steps(client, admin)
+    _external_documentation(client, admin, monkeypatch, review="agent")
+    writer, reviewer = _bearer("writer"), _bearer("writer")
+    run = _request(client, writer)
+    [task] = _call(client, writer, "claim_agent_task", kind="documentation")["tasks"]
+    assert "flows" in task["brief"]["result_schema"]["properties"]
+    flow = {
+        "name": "request-to-download",
+        "title": "From request to download",
+        "start": requested,
+        "stop": [],
+    }
+    body = (
+        "# Export a workspace\n\nA [[Workspace Export]] downloads as a CSV file, "
+        "unlike a [[Ledgr]].\n\n```flow\nrequest-to-download\n```\n"
+    )
+    document = {"title": "Export a workspace", "body": body, "statement_ids": [queued]}
+
+    refused = _call(
+        client,
+        writer,
+        "submit_agent_task",
+        task_id=task["id"],
+        result={
+            **document,
+            "flows": [
+                {**flow, "stop": [hidden]},
+                {**flow, "name": "unplaced", "start": hidden},
+            ],
+        },
+    )
+    assert (refused["status"], refused["retries_left"]) == ("refused", 3)
+    [finding] = refused["findings"]
+    assert f"has a stop, {hidden}, that does not exist" in finding["problem"]
+    assert f"flow 'unplaced' has a start, {hidden}," in finding["problem"]
+    assert "flow 'unplaced' is never placed" in finding["problem"]
+    assert SECRET not in str(refused)
+
+    held = _call(
+        client,
+        writer,
+        "submit_agent_task",
+        task_id=task["id"],
+        result={**document, "flows": [flow]},
+    )
+    assert held["status"] == "in_review"
+    assert "[[Ledgr]]" in held["message"]
+    [review] = _call(client, reviewer, "claim_agent_task", kind="document_review")[
+        "tasks"
+    ]
+    shown = review["brief"]["input"]
+    assert '- `request-to-download`: "From request to download"' in shown
+    assert "  2. The workspace export is queued. (event)" in shown
+    assert "permitted body syntax" in review["brief"]["instructions"]
+    _call(
+        client,
+        reviewer,
+        "submit_agent_task",
+        task_id=review["id"],
+        result=_PASSING_REVIEW,
+    )
+
+    done = _call(client, writer, "get_documentation_run", run_id=run["id"])
+    assert done["outcome"] == "document_written"
+    assert done["summary"]["unmatched_concept_links"] == ["Ledgr"]
+    saved = _call(
+        client, writer, "get_generated_document", document_id=done["document_id"]
+    )
+    assert saved["concept_links"] == [{"name": "Workspace Export", "entity_id": entity}]
+    [stored] = saved["flows"]
+    assert {key: stored[key] for key in flow} == flow
+    assert stored["drawing"]["statement_ids"] == [requested, queued, ready]
+    # The writer cited one statement; the drawing's are cited with it.
+    assert saved["statement_ids"] == [queued, requested, ready]
+
+    _call(
+        client,
+        writer,
+        "revise_document",
+        document_id=saved["id"],
+        expected_revision=1,
+        prompt="Say it in one paragraph, without the flow.",
+    )
+    [revision] = _call(client, writer, "claim_agent_task", kind="documentation")[
+        "tasks"
+    ]
+    brief = revision["brief"]["input"]
+    assert "CURRENT FLOWS" in brief and '"name": "request-to-download"' in brief
+    assert f"  1. [{requested}] A member requests a workspace export." in brief
+    _call(
+        client,
+        writer,
+        "read_for_agent_task",
+        task_id=revision["id"],
+        tool="get_statements",
+        arguments={"ids": [public]},
+    )
+    _call(
+        client,
+        writer,
+        "submit_agent_task",
+        task_id=revision["id"],
+        result={
+            "title": "Export a workspace",
+            "body": "# Export a workspace\n\nIt downloads as a CSV file.",
+            "statement_ids": [public],
+        },
+    )
+    [second] = _call(client, reviewer, "claim_agent_task", kind="document_review")[
+        "tasks"
+    ]
+    assert "PLACED FLOWS" not in second["brief"]["input"]
+    _call(
+        client,
+        reviewer,
+        "submit_agent_task",
+        task_id=second["id"],
+        result=_PASSING_REVIEW,
+    )
+    revised = _call(client, writer, "get_generated_document", document_id=saved["id"])
+    assert (revised["current_revision"], revised["flows"]) == (2, [])
+    assert revised["concept_links"] == []
+    first = _call(
+        client, writer, "get_document_revision", document_id=saved["id"], revision=1
+    )
+    assert [kept["name"] for kept in first["flows"]] == ["request-to-download"]
+
+
+def test_the_account_that_wrote_a_document_may_review_it(
+    client,  # noqa: F811
+    monkeypatch,
+):
+    admin = _bearer("admin")
+    public, _hidden, _entity = _corpus(client, admin)
+    _external_documentation(client, admin, monkeypatch, review="agent")
+    agent = _bearer("writer")
+    run = _request(client, agent)
+    [task] = _call(client, agent, "claim_agent_task", kind="documentation")["tasks"]
+    _call(
+        client,
+        agent,
+        "read_for_agent_task",
+        task_id=task["id"],
+        tool="get_statements",
+        arguments={"ids": [public]},
+    )
+    _call(
+        client, agent, "submit_agent_task", task_id=task["id"], result=_document(public)
+    )
+
+    [review] = _call(client, agent, "claim_agent_task", kind="document_review")["tasks"]
+    _call(
+        client, agent, "submit_agent_task", task_id=review["id"], result=_PASSING_REVIEW
+    )
+
+    done = _call(client, agent, "get_documentation_run", run_id=run["id"])
+    assert done["outcome"] == "document_written"
+
+
+_FAILING_REVIEW = {
+    "exposure": {"status": "pass", "findings": []},
+    "conformance": {
+        "status": "fail",
+        "findings": [{"where": "Steps", "problem": "No numbered steps."}],
+    },
+}
+
+
+def test_a_writer_sent_back_receives_its_last_document_and_flows_to_revise(
+    client,  # noqa: F811
+    monkeypatch,
+):
+    admin = _bearer("admin")
+    _public, hidden, entity = _corpus(client, admin)
+    requested, queued, _ready = _export_steps(client, admin)
+    _external_documentation(client, admin, monkeypatch, review="agent")
+    writer, reviewer = _bearer("writer"), _bearer("writer")
+    run = _request(client, writer)
+    [task] = _call(client, writer, "claim_agent_task", kind="documentation")["tasks"]
+    opening = task["brief"]["input"]
+    assert "YOUR LAST SUBMISSION CAME BACK" not in opening
+    flow = {
+        "name": "request-to-download",
+        "title": "From request to download",
+        "start": requested,
+        "stop": [],
+    }
+    body = (
+        "# Export a workspace\n\nA [[Workspace Export]] downloads as a CSV file."
+        "\n\n```flow\nrequest-to-download\n```\n"
+    )
+    document = {"title": "Export a workspace", "body": body, "statement_ids": [queued]}
+
+    # Refused before review: the flow could not be drawn, so only its
+    # definition comes back.
+    _call(
+        client,
+        writer,
+        "submit_agent_task",
+        task_id=task["id"],
+        result={**document, "flows": [{**flow, "stop": [hidden]}]},
+    )
+    # Whoever takes the task up next reads the refused document in its brief.
+    _call(
+        client, writer, "release_agent_task", task_id=task["id"], reason="Handing over."
+    )
+    [refused] = _call(client, writer, "claim_agent_task", kind="documentation")["tasks"]
+    returned = refused["brief"]["input"]
+    assert returned.startswith(opening)
+    assert "YOUR LAST SUBMISSION CAME BACK. Revise the text below" in returned
+    assert f"- grounding: its flows cannot be stored: flow '{flow['name']}'" in returned
+    assert "A [[Workspace Export]] downloads as a CSV file." in returned
+    assert f'"start": "{requested}", "stop": ["{hidden}"]' in returned
+    assert f"  1. [{requested}]" not in returned
+    assert SECRET not in returned
+
+    _call(
+        client,
+        writer,
+        "submit_agent_task",
+        task_id=task["id"],
+        result={**document, "flows": [flow]},
+    )
+
+    def review() -> None:
+        [held] = _call(client, reviewer, "claim_agent_task", kind="document_review")[
+            "tasks"
+        ]
+        _call(
+            client,
+            reviewer,
+            "submit_agent_task",
+            task_id=held["id"],
+            result=_FAILING_REVIEW,
+        )
+
+    review()
+    [again] = _call(client, writer, "claim_agent_task", kind="documentation")["tasks"]
+    returned = again["brief"]["input"]
+    # The earlier refusal is replaced, not stacked.
+    assert returned.count("YOUR LAST SUBMISSION CAME BACK") == 1
+    assert "- conformance: Steps — No numbered steps." in returned
+    assert "its flows cannot be stored" not in returned
+    assert f"  1. [{requested}] A member requests a workspace export." in returned
+    assert "submit the whole document again with its flows" in returned
+
+    # A second refused review ends the run; its draft keeps what the body
+    # links and places.
+    _call(
+        client,
+        writer,
+        "submit_agent_task",
+        task_id=task["id"],
+        result={**document, "flows": [flow]},
+    )
+    review()
+    done = _call(client, writer, "get_documentation_run", run_id=run["id"])
+    assert done["outcome"] == "nothing_written" and done["draft_body"] == body
+    assert done["draft_concept_links"] == [
+        {"name": "Workspace Export", "entity_id": entity}
+    ]
+    assert [kept["name"] for kept in done["draft_flows"]] == ["request-to-download"]
 
 
 def test_a_run_whose_task_is_given_back_past_the_limit_fails(

@@ -409,8 +409,8 @@ def test_jwt_is_signed_and_short_lived(app_config: github_app.AppConfig):
     )
 
 
-def test_app_token_flows_through_document_read_and_pr_delivery(web: TestClient):
-    from test_document_destinations import _blob_id, _document, _responses
+def test_app_token_flows_through_pr_delivery(web: TestClient):
+    from test_document_destinations import _document, _responses
 
     name = connect(web)
     config = destinations.DestinationConfig(
@@ -433,26 +433,6 @@ def test_app_token_flows_through_document_read_and_pr_delivery(web: TestClient):
         request.headers["authorization"] == "Bearer " + APP_TOKEN
         for request in requests
     )
-    body = "# Saved GitHub document\n"
-
-    def read_response(request: httpx.Request) -> httpx.Response:
-        assert request.headers["authorization"] == "Bearer " + APP_TOKEN
-        if request.url.path.endswith("/pulls"):
-            return httpx.Response(200, json=[])
-        return httpx.Response(
-            200,
-            json={
-                "encoding": "base64",
-                "content": base64.b64encode(body.encode()).decode(),
-                "sha": _blob_id(body),
-            },
-        )
-
-    with httpx.Client(transport=httpx.MockTransport(read_response)) as transport:
-        current = github_destination.read(
-            config, "docs/saved.md", "gdc_123", "configuring-sso", client=transport
-        )
-    assert current.body == body
 
 
 def test_pending_installation_permissions_do_not_hide_other_repositories(
@@ -538,5 +518,5 @@ def test_published_document_keeps_connection_branch_and_path_after_settings_chan
     assert github_destination.GitHubConfig.parse(restored).base_branch == "main"
     github_connections.disconnect(name)
     with pytest.raises(destinations.DestinationError, match="disconnected"):
-        github_destination.read(restored, "docs/policy.md", document_id, "policy")
+        github_destination.pull_request_state(restored, 1)
     docs.close()

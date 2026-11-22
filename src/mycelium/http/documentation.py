@@ -1,30 +1,31 @@
-"""Generated documentation: requesting runs, editing and revising documents, and
-delivering them to a destination.
+"""Generated documentation: requesting runs, revising documents, and delivering
+them to a destination.
 
 Reads are open to any authenticated caller; anything that starts a run or
 delivers needs a real writer. The shared conflict handler answers 409 for a stale
-`expected_revision` or edits on both sides, preserving the latter's response code.
+`expected_revision`.
 Each route calls the function the matching MCP tool calls (`server.documentation`
 and `server.documentation_work`).
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Literal
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
 from .. import (
+    docs_store,
     document_maintenance,
     documentation_planning,
-    media,
     server,
 )
-from ..docgen import publication
-from ..docgen.schema import ManualDocument
+from ..docgen import publication, site
+from ..docgen.render import LinkTarget, render_markdown
+from ..docgen.schema import STORED_FLOWS, STORED_LINKS
 from ..request_timing import TimedRoute
 from ..server import documentation_work as work
 from .access import _enforce_role, _require_principal
@@ -85,52 +86,10 @@ def retry_documentation_run_http(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-class DocumentEditBody(ManualDocument):
-    provider: Literal["claude", "openai"] | None = None
-
-
-class SavedDocumentEditBody(DocumentEditBody):
-    expected_revision: int = PydField(ge=1, strict=True)
-
-
-@router.post("/api/documentation/preview")
-def preview_document_edit(body: ManualDocument, request: Request) -> dict[str, object]:
-    _enforce_role(request, "writer", real_role=True)
-    return _document_preview({"body": body.body})
-
-
-@router.post("/api/documentation/documents/{document_id}/edits")
-def edit_saved_document_http(
-    document_id: str, body: SavedDocumentEditBody, request: Request
-) -> dict[str, object]:
-    _enforce_role(request, "writer", real_role=True)
-    return work.edit_saved(
-        document_id,
-        body.expected_revision,
-        ManualDocument(title=body.title, body=body.body),
-        body.provider,
-        _require_principal(request).id,
-    )
-
-
-@router.post("/api/documentation/runs/{run_id}/edits")
-def edit_document_draft_http(
-    run_id: str, body: DocumentEditBody, request: Request
-) -> dict[str, object]:
-    _enforce_role(request, "writer", real_role=True)
-    return work.edit_draft(
-        run_id,
-        ManualDocument(title=body.title, body=body.body),
-        body.provider,
-        _require_principal(request).id,
-    )
-
-
 class DocumentRevisionBody(BaseModel):
     prompt: str = ""
     expected_revision: int = PydField(ge=1, strict=True)
     provider: Literal["claude", "openai", "agent"] | None = None
-    start_from_destination: bool = False
     update_sources: bool = False
 
 
@@ -139,45 +98,47 @@ class DocumentDeliveryBody(BaseModel):
     expected_revision: int = PydField(ge=1, strict=True)
 
 
-def _render_markdown(body: str) -> str:
-    """Safe HTML for a document body. The only images are media references,
-    served by Mycelium under the reader's own audience check; any other
-    image becomes its alt text, so a document cannot load outside content."""
-    from markdown_it import MarkdownIt
-    from markdown_it.common.utils import escapeHtml
-    from markdown_it.renderer import RendererHTML
-    from markdown_it.token import Token
-    from markdown_it.utils import EnvType, OptionsDict
-
-    renderer = MarkdownIt("js-default")
-
-    def image(
-        self: RendererHTML,
-        tokens: Sequence[Token],
-        idx: int,
-        options: OptionsDict,
-        env: EnvType,
-    ) -> str:
-        token = tokens[idx]
-        alt = escapeHtml(self.renderInlineAsText(token.children or [], options, env))
-        found = media.REFERENCE.fullmatch(str(token.attrGet("src") or ""))
-        if found is None:
-            return alt
-        return (
-            f'<img src="{escapeHtml(media.content_url(found.group(1)))}" '
-            f'alt="{alt}" loading="lazy">'
-        )
-
-    renderer.add_render_rule("image", image)
-    html: str = renderer.render(body)
-    return html
-
-
 def _document_preview(document: dict[str, object]) -> dict[str, object]:
+    """The document with its body as HTML, drawn from the links and flows
+    stored with the shown revision."""
     body = document.get("body")
+    if not isinstance(body, str):
+        return {**document, "body_html": ""}
+    flows = STORED_FLOWS.validate_python(document.get("flows") or [])
     return {
         **document,
-        "body_html": _render_markdown(body) if isinstance(body, str) else "",
+        "body_html": render_markdown(
+            body,
+            links=_link_targets(document),
+            flows={flow.name: flow for flow in flows},
+        ),
+    }
+
+
+def _link_targets(document: dict[str, object]) -> dict[str, LinkTarget]:
+    """Where each concept link of a stored document leads in the web app: the
+    view of the document anchored on that concept in the same profile. A link
+    to the document's own concept, or to a concept without one, has none."""
+    links = STORED_LINKS.validate_python(document.get("concept_links") or [])
+    if not links or not document.get("guideline_set"):
+        return {}
+    conn = server._drafts_db()
+    row = docs_store.get_document(
+        conn, str(document.get("document_id") or document.get("id"))
+    )
+    own = None if row is None else row["anchor_entity_id"]
+    pages = docs_store.linked_documents(
+        conn,
+        str(document["guideline_set"]),
+        str(document["document_type"]),
+        [link.entity_id for link in links if link.entity_id != own],
+    )
+    return {
+        link.name: LinkTarget(
+            href=f"#/documentation?document={quote(pages[link.entity_id])}"
+        )
+        for link in links
+        if link.entity_id in pages
     }
 
 
@@ -255,6 +216,30 @@ def deliver_document_http(
 
 
 # --- documentation planning ------------------------------------------------------
+
+
+@router.get("/api/documentation/sites/{guideline_set}")
+def documentation_site_http(
+    guideline_set: str,
+    request: Request,
+    title: str | None = None,
+    feedback_url: str | None = None,
+) -> Response:
+    """The profile's documents as a static site in one zip. For admins only:
+    the site holds everything the profile's audience may see, whoever asks."""
+    _enforce_role(request, "admin", real_role=True)
+    try:
+        data = work.site_archive(guideline_set, title=title, feedback_url=feedback_url)
+    except site.SiteRefused as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(guideline_set)}-site.zip",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/api/documentation/plans/{guideline_set}")

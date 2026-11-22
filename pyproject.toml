@@ -104,7 +104,6 @@ module = [
     "mycelium.docgen.config",
     "mycelium.docgen.github_destination",
     "mycelium.docgen.publication",
-    "mycelium.document_edits",
     "mycelium.documentation_archive",
     "mycelium.documentation_profiles",
     "mycelium.draft_review_model",

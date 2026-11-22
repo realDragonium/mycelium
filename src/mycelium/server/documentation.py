@@ -150,22 +150,14 @@ def revise_document(
     expected_revision: int,
     prompt: str = "",
     provider: Literal["claude", "openai", "agent"] | None = None,
-    start_from_destination: bool = False,
     update_sources: bool = False,
 ) -> dict[str, object]:
     """Iterate on exactly the selected internal document version.
 
-    A delivered document's revision starts from its published copy when
-    people edited it there and nothing here is unpublished. When both sides
-    changed, the request is refused before a run exists; pass
-    `start_from_destination` to start from the published text anyway, keeping
-    the unpublished revision in history.
-
     `update_sources` brings an out-of-date document (see `stale` on
     get_generated_document) up to date: the run is briefed with the cited
     statements that changed, after any `prompt`, which may then be blank.
-    Returns the serialized run row, whose `revision_base` says which text the
-    run started from."""
+    Returns the serialized run row."""
     from .. import auth, doc_runs, docs_store, document_freshness
     from ..docgen.config import DocgenConfig
 
@@ -185,7 +177,7 @@ def revise_document(
         if freshness.status != "out_of_date":
             raise ValueError("Nothing this document cites or shows changed.")
         brief = document_freshness.revision_brief(
-            freshness.changes, freshness.media_changes
+            freshness.changes, freshness.media_changes, freshness.flow_changes
         )
         text = f"{text}\n\n{brief}" if text else brief
     principal = auth.current_principal.get()
@@ -198,7 +190,6 @@ def revise_document(
         provider=provider,
         target_document_id=document_id,
         expected_revision=expected_revision,
-        start_from_destination=start_from_destination,
     )
     return docs_store.serialize_run(
         require(docs_store.get_run(_drafts_db(), run_id), "new documentation run")
@@ -206,12 +197,8 @@ def revise_document(
 
 
 def _retry_refusal(row: sqlite3.Row) -> str | None:
-    from .. import document_edits
-
     if row["outcome"] not in ("nothing_written", "failed"):
         return "Only a run that wrote nothing can be retried."
-    if row["prompt"] == document_edits.MANUAL_EDIT_PROMPT:
-        return "Edit the document again to retry a manual edit."
     return None
 
 
@@ -253,7 +240,6 @@ def retry_documentation_run(
         target_document_id=None if anchored else row["target_document_id"],
         expected_revision=None if anchored else row["target_revision"],
         anchor_entity_id=row["anchor_entity_id"],
-        start_from_destination=not anchored and row["revision_base"] == "destination",
         review_notes=notes,
         retry_of=run_id,
         attempt=int(row["attempt"]) + 1 if automatic else 0,
@@ -281,7 +267,8 @@ def list_document_revisions(document_id: str) -> dict[str, object]:
 
 @tool
 def get_document_revision(document_id: str, revision: int) -> dict[str, object]:
-    """Read an immutable version with grounding, review and generation backlink."""
+    """Read an immutable version with grounding, review and generation
+    backlink, and the `concept_links` and `flows` stored for its body."""
     from .. import docs_store
 
     row = docs_store.get_revision(_drafts_db(), document_id, revision)
@@ -357,6 +344,8 @@ def get_documentation_run(run_id: str) -> dict[str, Any]:
     A run the review gate turned down carries the draft it refused, as
     `draft_title` and `draft_body`, so the findings can be read against the
     text they quote. Both are null when no document was written.
+    `draft_concept_links` and `draft_flows` are what that draft's body links
+    and places, shaped as a document's `concept_links` and `flows`.
 
     `retryable` says whether the run can be started again as it was.
 
@@ -383,6 +372,10 @@ def list_generated_documents() -> dict[str, Any]:
     before citations were recorded. Each change gives `statement_id`, `change`
     (edited/deleted/merged/no_longer_visible), `old_text`, `new_text` and
     `merged_into`; revise_document(update_sources=True) addresses them.
+    A document is also out of date once the steps of a flow it places
+    changed: `stale.flow_changes` gives, per changed link, `flow`, `title`,
+    `change` (step_added/step_removed/condition_changed), `link_type`,
+    `source_text` and `target_text`.
 
     Returns {"documents": [document summaries]}; get_generated_document returns
     the body."""
@@ -410,8 +403,9 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
     A document with a pull request first asks GitHub what became of it, at
     most once a minute; `pull_request.refreshed_at` says when the state shown
     was read. `stale` is as in list_generated_documents. Returns the
-    serialized document row. Raises for an unknown
-    document_id."""
+    serialized document row, with the `concept_links` its body's `[[Name]]`
+    links matched and the `flows` it places, each with its drawing. Raises
+    for an unknown document_id."""
     from .. import docs_store
     from ..docgen import publication
 
@@ -419,8 +413,12 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
     row = docs_store.get_document(_drafts_db(), document_id)
     if row is None:
         raise ValueError(f"generated document not found: {document_id}")
+    revision = docs_store.get_revision(
+        _drafts_db(), document_id, int(row["current_revision"])
+    )
     return {
         **docs_store.serialize_document(row),
+        **({} if revision is None else docs_store.links_and_flows(revision)),
         "stale": _freshness([document_id])[document_id],
         "audience": _document_audiences([row])[document_id],
     }

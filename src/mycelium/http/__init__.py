@@ -249,10 +249,7 @@ async def _value_error_handler(request: Request, exc: ValueError) -> JSONRespons
 
 
 async def _conflict_handler(request: Request, exc: errors.Conflict) -> JSONResponse:
-    content = {"detail": str(exc)}
-    if exc.code is not None:
-        content["code"] = exc.code
-    return JSONResponse(status_code=409, content=content)
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 async def _role_required_handler(

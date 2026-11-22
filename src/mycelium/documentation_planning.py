@@ -213,17 +213,7 @@ def _overview(
         by_statement.setdefault(str(row["statement_id"]), set()).add(
             str(row["entity_id"])
         )
-    parents: dict[str, str] = {}
-    for row in conn.execute(
-        "SELECT from_entity_id, to_entity_id, link_type FROM entity_links "
-        "WHERE link_type IN ('contains', 'sub-type') ORDER BY link_type, from_entity_id"
-    ):
-        child, parent = (
-            (row["to_entity_id"], row["from_entity_id"])
-            if row["link_type"] == "contains"
-            else (row["from_entity_id"], row["to_entity_id"])
-        )
-        parents.setdefault(str(child), str(parent))
+    parents = store.entity_parents(conn)
     names = {
         str(row["id"]): (str(row["name"]), row["description"])
         for row in conn.execute(

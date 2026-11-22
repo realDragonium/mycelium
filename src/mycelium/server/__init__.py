@@ -45,7 +45,6 @@ from .documentation import (
 )
 from .documentation_work import (
     decide_documentation_plan,
-    edit_document,
     get_document_history,
     list_documentation,
     retry_documentation,
@@ -196,7 +195,6 @@ __all__ = [
     "list_documentation_destinations",
     "list_documentation",
     "get_document_history",
-    "edit_document",
     "retry_documentation",
     "decide_documentation_plan",
     "upsert_entity",

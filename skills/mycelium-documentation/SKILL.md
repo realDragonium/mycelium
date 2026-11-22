@@ -88,7 +88,7 @@ the run. Name them so the operator can fill them in the knowledge base (the
 ## Retry
 
 `retryable` on the run says whether it can start again as it was: it wrote
-nothing and was not a manual edit.
+nothing.
 
 - **Retry**: `retry_documentation(run_id=…)` starts the same request again. Use it after a
   failure that has gone away (a provider error, a limit since raised).
@@ -121,12 +121,10 @@ its audience; `stale.changes` shows old and new text. Revise with
 `update_sources=true` (no prompt needed) to brief the run with exactly those
 changes.
 
-**Edited on GitHub.** A published document can be edited on its pull
-request branch or after merge. A revision then starts from the published
-text and keeps those edits (`revision_base: destination`). If the document
-also has a revision here that was never published, the call is refused.
-Relay the choice to the operator: keep the GitHub edits with
-`start_from_destination=true`, or undo them on GitHub. Do not choose for them.
+**Edited on GitHub.** Publishing is one-way: a revision always starts from
+Mycelium's text, and a publish overwrites the file on GitHub, including
+changes made there by hand. Tell the operator to change the statements or ask
+for a revision instead of editing the file.
 
 ## Plan which documents an audience needs
 

@@ -8,6 +8,7 @@ Subcommands:
     databases          print the database files a deployment must restore
     snapshot-indexes   copy the vector indexes consistently, for a restore
                        beside the database they match
+    docs-site          write a writing profile's documents as a static site
     users list         show all users + their roles
     users set-role     change a user's role by email
 """
@@ -67,6 +68,24 @@ def _cmd_snapshot_indexes(args: argparse.Namespace) -> None:
         print(f"no snapshot taken: {exc}", file=sys.stderr)
         sys.exit(1)
     print(f"wrote {args.out_dir}", file=sys.stderr)
+
+
+def _cmd_docs_site(args: argparse.Namespace) -> None:
+    from .docgen import site
+
+    try:
+        written = site.export_data_dir(
+            args.data_dir, args.profile, args.out, args.feedback_url, args.title
+        )
+    except site.SiteRefused as exc:
+        print(f"no site written: {exc}", file=sys.stderr)
+        sys.exit(1)
+    for line in site.summary(written):
+        print(line, file=sys.stderr)
+    print(
+        f"wrote {len(written.files)} files to {args.out}; see {site.REPORT}",
+        file=sys.stderr,
+    )
 
 
 def _auth_db_path(data_dir: Path) -> Path:
@@ -227,6 +246,32 @@ def main() -> None:
     )
     p_snapshot.add_argument("out_dir", type=Path, help="directory to write into")
     p_snapshot.set_defaults(func=_cmd_snapshot_indexes)
+
+    p_site = sub.add_parser(
+        "docs-site",
+        help="write a writing profile's documents as a static site, read "
+        "through the profile's audience",
+    )
+    p_site.add_argument("--profile", required=True, help="writing profile name")
+    p_site.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help="directory to write into; must be missing or empty",
+    )
+    p_site.add_argument(
+        "--feedback-url",
+        metavar="TEMPLATE",
+        help='an http, https or mailto address for a "Report a problem with '
+        'this page" link on every page; {title} and {page} are replaced, '
+        "URL-encoded, by the page's title and its path within the site",
+    )
+    p_site.add_argument(
+        "--title",
+        help="the site's name in its header, on its home page and in each "
+        "page's title; defaults to the profile name made readable",
+    )
+    p_site.set_defaults(func=_cmd_docs_site)
 
     p_users = sub.add_parser("users", help="manage user roles in the auth DB")
     users_sub = p_users.add_subparsers(dest="users_cmd")

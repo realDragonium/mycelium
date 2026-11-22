@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 85 of its 118 registered tools over MCP. Every
+question. Mycelium therefore advertises 84 of its 117 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -16,14 +16,14 @@ because their writes are queued on a draft, but they do not see the tools that
 land live and so need a real writer: `list_drafts`, `review_draft`,
 `reopen_draft`, `request_draft_review`,
 `answer_draft_review`, the
-documentation tools that start runs, edit, retry, plan, decide or deliver,
+documentation tools that start runs, retry, plan, decide or deliver,
 `save_writing_profile`, `edit_prompt_text`, `edit_names`, `edit_media`,
 `curate_audiences`, `update_knowledge_gap`, the admin tools below, or the tools
-that claim and do agent tasks. A writer sees 77 and does not see the admin-only
+that claim and do agent tasks. A writer sees 76 and does not see the admin-only
 `delete_statement`, `merge_statements`, `merge_entities`,
 `retire_writing_profile`, `restore_writing_profile`, `manage_audiences`,
 `manage_draft_review_backlog` or `unblock_automation`. An admin sees all
-85. While Ask is set to External agent, `ask` is listed to no one, so each
+84. While Ask is set to External agent, `ask` is listed to no one, so each
 count is one lower.
 
 A grouped tool can hold an action a stricter role takes: `edit_names` merges
@@ -114,7 +114,7 @@ records stay off MCP: they run in-process.
 | `discard_draft_op` | Lets the author correct their open draft. |
 | `list_my_drafts` | Lists the caller's own drafts. |
 | `list_drafts` | Lists the review queue across creators, with each draft's latest review summary, filtered by status, creator, review label or what the review did (for example the drafts the automatic reviewer rejected, or the corrections it held for a curator). An agent finds the drafts it will check against the code here. Only real writers and admins see it. |
-| `review_draft` | Decides a submitted draft another principal created, as a curator does in the UI: approve, approve with corrections in the reviewer's precise shape, reject with a reason, or ask a person a question. An agent with the product's code can check each operation, which the server's reviewer cannot, so it needs to decide on what it found under any review setting. Real writers and admins only; see [Deciding drafts](DRAFT_REVIEW.md#deciding-drafts). |
+| `review_draft` | Decides a submitted draft, as a curator does in the UI: approve, approve with corrections in the reviewer's precise shape, reject with a reason, or ask a person a question. An agent with the product's code can check each operation, which the server's reviewer cannot, so it needs to decide on what it found under any review setting. Real writers and admins only; see [Deciding drafts](DRAFT_REVIEW.md#deciding-drafts). |
 | `reopen_draft` | Returns a rejected draft, the automatic reviewer's rejections included, to submitted so it can be decided again. Without it a wrong rejection is final. Real writers and admins only. |
 | `set_draft_review_evidence` | Lets the draft creator give the reviewer evidence that only the creator has. |
 | `withdraw_draft` | Withdraws an open or submitted draft, as its creator or a real writer may on the Drafts screen. |
@@ -137,20 +137,19 @@ records stay off MCP: they run in-process.
 | `release_curation_work` | Records what came of claimed items (`proposed` with the draft, `no_link` with a reason, or `skipped`) in the memory the connect pass shares, so they are not offered again until they change; a skipped item is offered again until it was skipped, or its claim ran out, more often than its limit. Closes a gap as `resolved` by an applied draft or `not_applicable` with a reason, and answers a reviewer's question as `answered` with evidence, which starts the draft's fresh review. |
 | `report_knowledge_gap` | Lets an agent report knowledge it could not find, optionally naming the statement, draft or generated document it is about. A report about a draft is resolved when that draft is applied. |
 | `request_documentation` | Starts a documentation run. `anchor_entity_id`, with a guideline set and document type, names the entity the document is about, so a repeat request revises that document; without one, the run creates a document. |
-| `get_documentation_run` | Polls a run that `request_documentation` or `revise_document` returns. A run the review refused lists the failed findings in `summary.review_findings`; a retry briefed with them lists them in `review_notes`. `retryable` says whether the run can be started again as it was (it wrote nothing and was not a manual edit). |
+| `get_documentation_run` | Polls a run that `request_documentation` or `revise_document` returns. A run the review refused lists the failed findings in `summary.review_findings`; a retry briefed with them lists them in `review_notes`. `retryable` says whether the run can be started again as it was (it wrote nothing). |
 | `get_generated_document` | Reads the written document and the revision that `revise_document` needs, the state of its pull request (open, merged or closed), refreshed from GitHub at most once a minute, and `stale`: whether a statement it cites was edited, deleted or merged away since, or is no longer visible to the document's audience, with old and new text. |
-| `claim_agent_task` | Leases work an action set to External agent would otherwise give a server model (writing, reviewing or planning documentation, reviewing a plan's items, labelling audiences or reviewing waiting external grants, ingest, the connect pass, alias discovery, draft review) for 30 minutes, with a brief holding the model's instructions, input and result schema; a documentation task's brief also carries the whole writing profile it is for (`profile`). Writers and admins only; a draft's creator is never given its review, nor a labeller the review of its grants, and `note` says when such tasks were withheld. See [Agent tasks](AGENT_TASKS.md). |
+| `claim_agent_task` | Leases work an action set to External agent would otherwise give a server model (writing, reviewing or planning documentation, reviewing a plan's items, labelling audiences or reviewing waiting external grants, ingest, the connect pass, alias discovery, draft review) for 30 minutes, with a brief holding the model's instructions, input and result schema; a documentation task's brief also carries the whole writing profile it is for (`profile`). Writers and admins only. See [Agent tasks](AGENT_TASKS.md). |
 | `read_for_agent_task` | Runs one of a task's read tools for it and records the read; a documentation task's reads run inside the audience boundary it writes for. |
 | `submit_agent_task` | Hands in a claimed task's result, which passes the checks a server model's output would; a refusal returns findings and the retries left. |
 | `release_agent_task` | Gives a claimed task back to the queue with a reason, which the next claimant sees. Give-backs and leases that ran out count toward the task's limit; past it the task fails with the reason. |
 | `get_agent_task` | Follows work the caller queued for an outside agent, such as an `ingest` that returned `waiting_for_agent`: status, findings and the draft it made. |
-| `revise_document` | Revises a generated document. `update_sources` briefs the run with the cited statements that changed. A delivered document's revision starts from GitHub edits; when both sides changed it is refused unless `start_from_destination` is passed. |
+| `revise_document` | Revises a generated document. `update_sources` briefs the run with the cited statements that changed. |
 | `request_documentation_plan` | Starts the same plan as **Documents → Plan** for a writing profile, on the server's model or as a `documentation_planning` agent task. An agent keeping documentation current needs to ask which documents are missing, not only write the ones it already knows. Writers and admins only. See [Documentation planning](DOCUMENTATION_PLANNING.md). |
 | `get_documentation_plan` | Reads a writing profile's plan as **Documents → Plan** shows it: the items with their state, the AI reviewer's decisions and reasons, the runs approved items started and why one could not start, out-of-date documents, coverage gaps and the uncovered and dismissed statements. An agent keeping documentation current needs to see what was proposed and decided before it plans again or follows the runs. |
 | `deliver_document` | Opens or updates the document's GitHub pull request, as **Create / update GitHub PR** does. Refused unless the document's writing profile lets agents deliver (`agents`, or `auto`, where the server also publishes each reviewed revision itself; off by default), so publishing outside the instance stays a person's decision until a writer hands it to agents for that profile, and refused for a destination the profile does not publish to. Merging stays with the destination repository. Writers and admins only. |
 | `list_documentation` | Lists what the Documents workspace shows: documents, runs, destinations, the options a run may use, and the maintenance feed. |
 | `get_document_history` | Reads a document's revisions, one revision, or its diff against the one before. |
-| `edit_document` | Saves a person's own edit of a saved document or an unsaved run's result, reviewed as a run. Real writers and admins only. |
 | `retry_documentation` | Starts a run or a plan item's run that wrote nothing again, optionally briefed with the review's findings. Real writers and admins only. |
 | `decide_documentation_plan` | Approves or dismisses plan items, dismisses or restores an uncovered statement, and dismisses an out-of-date document, as Documents → Plan does. Real writers and admins only. |
 | `list_writing_profiles` | Lists the writing profiles with their audience, policies, destinations, template names, readiness and `revision`. A writer or admin agent managing documentation needs to see what profiles exist before it plans or writes. |

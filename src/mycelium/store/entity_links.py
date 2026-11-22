@@ -98,6 +98,23 @@ def get_entity_links_incoming(
     return [(r["from_entity_id"], r["link_type"]) for r in rows]
 
 
+def entity_parents(conn: sqlite3.Connection) -> dict[str, str]:
+    """Each concept's parent: the concept that contains it, else the one it is
+    a kind of. Among several of the same type, the first by id."""
+    parents: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT from_entity_id, to_entity_id, link_type FROM entity_links "
+        "WHERE link_type IN ('contains', 'sub-type') ORDER BY link_type, from_entity_id"
+    ):
+        child, parent = (
+            (row["to_entity_id"], row["from_entity_id"])
+            if row["link_type"] == "contains"
+            else (row["from_entity_id"], row["to_entity_id"])
+        )
+        parents.setdefault(str(child), str(parent))
+    return parents
+
+
 def list_entity_link_types(conn: sqlite3.Connection) -> list[str]:
     rows = conn.execute(
         "SELECT DISTINCT link_type FROM entity_links ORDER BY link_type"

@@ -256,6 +256,10 @@ def connection() -> sqlite3.Connection:
     return _provider.connection()
 
 
+def is_configured() -> bool:
+    return _provider.is_configured()
+
+
 def use_connection(conn: sqlite3.Connection) -> None:
     """Pin `conn` as this thread's drafts connection (for :memory: / unit tests)."""
     _provider.use(conn)

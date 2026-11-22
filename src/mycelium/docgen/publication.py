@@ -1,28 +1,14 @@
-"""A generated document at its destination: publishing it, following its pull
-request, and deciding which text a revision starts from.
+"""A generated document at its destination: publishing it and following its
+pull request.
+
+Publishing is one-way. Mycelium's text is the only source: a publish writes
+the selected revision over whatever the file holds at the destination, and
+nothing is read back from there into a document.
 
 Mycelium learns what became of a pull request by asking GitHub when the
 document is read, not through a webhook. This is a single-instance deployment
 with no public endpoint to receive one, and a reader opening the document is
 when the answer matters.
-
-Once a PR is open, two parties can edit the document: Mycelium, through new
-internal revisions, and people, by committing to the PR branch or to the base
-branch after merge. Mycelium recognises the texts it has already accounted
-for: every blob it published, and the sync point
-(`revision_source_content_revision`), the destination text the internal head
-was last derived from. Any other destination text holds edits made by people.
-A revision starts from that text when the internal head adds nothing since its
-publication. When both sides changed, the revision is refused rather than
-merged, because a model asked to reconcile two edits can drop either one
-without anyone noticing.
-
-Recognising all of them is what lets a closed PR fall back to the base branch,
-which holds an earlier published version or the text the closed revision was
-built from. The cost is that a person reverting to an earlier Mycelium text is
-not seen as an edit, so a later revision proposes the reverted changes again.
-That happens in a new pull request the person can close, so nothing they wrote
-is lost.
 """
 
 from __future__ import annotations
@@ -30,13 +16,11 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .. import docs_store, document_freshness, errors, media, media_formats
-from . import destinations
+from .. import docs_store, document_freshness, media, media_formats
+from . import destinations, render
 from .destinations import DestinationError
-from .schema import CurrentDocument, RevisionBase
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +52,13 @@ def publish(
         )
         row = docs_store.require_revision(conn, document_id, revision)
         _check_profile_destination(str(row["guideline_set"]), destination)
+        _check_deliverable(str(row["body"]))
         files = _media_files(conn, row)
         try:
             configured, binding = destinations.publishing_destination(row, destination)
             delivery = destinations.deliver_document(
                 configured,
-                _delivery_document(
-                    row, docs_store.published_blobs(conn, document_id), files
-                ),
+                _delivery_document(row, files),
             )
         except DestinationError as exc:
             raise ValueError(str(exc)) from None
@@ -113,6 +96,25 @@ def _check_profile_destination(guideline_set: str, destination: str) -> None:
         )
 
 
+def _check_deliverable(body: str) -> None:
+    """Concept links and flows have no form at a destination yet: delivered as
+    written, a reader there would see `[[Name]]` and a flow's bare name."""
+    held = [
+        what
+        for what, found in (
+            ("concept links ([[Name]])", render.concept_links(body)),
+            ("flow placements", render.flow_placements(body)),
+        )
+        if found
+    ]
+    if held:
+        raise ValueError(
+            f"This document cannot be delivered to GitHub: its body holds "
+            f"{' and '.join(held)}, which only Mycelium renders. Read it in "
+            "Mycelium, or revise it without them to deliver it."
+        )
+
+
 def _media_files(
     conn: sqlite3.Connection, row: sqlite3.Row
 ) -> tuple[destinations.MediaFile, ...]:
@@ -136,9 +138,7 @@ def _media_files(
 
 
 def _delivery_document(
-    row: sqlite3.Row,
-    published: frozenset[str],
-    files: tuple[destinations.MediaFile, ...] = (),
+    row: sqlite3.Row, files: tuple[destinations.MediaFile, ...] = ()
 ) -> destinations.DeliveryDocument:
     def optional(column: str) -> str | None:
         value = row[column]
@@ -153,9 +153,6 @@ def _delivery_document(
         document_type=str(row["document_type"]),
         statement_ids=tuple(json.loads(row["statement_ids"])),
         delivered_path=optional("delivery_path"),
-        delivered_content_revision=optional("delivery_content_revision"),
-        revision_source_content_revision=optional("revision_source_content_revision"),
-        published_content_revisions=published,
         media=files,
     )
 
@@ -187,95 +184,3 @@ def refresh_pull_request(
         logger.warning("pull request state for %s is unavailable: %s", document_id, exc)
         return
     docs_store.record_pull_request_state(conn, document_id, number, state)
-
-
-def destination_text(row: sqlite3.Row) -> CurrentDocument | None:
-    """The document's file as it stands for review at its recorded destination.
-
-    None when the file is absent there. Raises a `ValueError` saying what to
-    restore when the destination cannot be read: without that text, Mycelium
-    cannot tell whether a revision would discard someone's edits.
-    """
-    try:
-        configured, _ = destinations.publishing_destination(
-            row, str(row["delivery_destination"])
-        )
-        return destinations.read_document(
-            configured, str(row["delivery_path"]), str(row["id"]), str(row["slug"])
-        )
-    except DestinationError as exc:
-        raise ValueError(
-            "This document cannot be revised until Mycelium can read its published "
-            f"copy, to check for edits made there: {exc} Restore the document's "
-            "GitHub connection or credential binding, then retry."
-        ) from None
-
-
-class BothSidesEdited(errors.Conflict):
-    """A revision refused because the published copy and the internal head
-    both changed since publication; `start_from_destination` is the way past."""
-
-    code = "both_sides_edited"
-
-
-@dataclass(frozen=True)
-class RevisionStart:
-    current: CurrentDocument
-    base: RevisionBase
-
-
-def revision_start(
-    row: sqlite3.Row,
-    remote: CurrentDocument | None,
-    published: frozenset[str],
-    *,
-    start_from_destination: bool = False,
-) -> RevisionStart:
-    """Choose the text a revision of a delivered document starts from.
-
-    `remote` is `destination_text(row)` and `published` the document's
-    `docs_store.published_blobs`. The result's `content_revision` is the sync
-    point the revision records; None keeps the stored one.
-    """
-    internal = CurrentDocument(body=str(row["body"]))
-    if remote is None:
-        if start_from_destination:
-            raise ValueError(
-                "There is no published copy of this document to start from: the "
-                "file is absent from its destination. Revise it without "
-                "start_from_destination."
-            )
-        return RevisionStart(internal, "internal")
-    from_destination = RevisionStart(remote, "destination")
-    if start_from_destination:
-        return from_destination
-    accounted_for = published | {
-        row["revision_source_content_revision"],
-        row["delivery_content_revision"],
-    }
-    if remote.content_revision in accounted_for or remote.body == internal.body:
-        return RevisionStart(
-            CurrentDocument(internal.body, remote.content_revision), "internal"
-        )
-    if row["published_revision"] == row["current_revision"]:
-        return from_destination
-    raise BothSidesEdited(_both_edited(row))
-
-
-def _both_edited(row: sqlite3.Row) -> str:
-    published = row["published_revision"]
-    current = row["current_revision"]
-    since = f"revision {published} was published" if published else "it was published"
-    pull_request = (
-        f"pull request #{row['pull_request_number']}"
-        if row["pull_request_number"] is not None
-        else "the pull request"
-    )
-    return (
-        f"This document was edited on GitHub after {since}, and revision "
-        f"{current} here has not been published. Mycelium will not merge the "
-        "two. To keep the GitHub edits, revise again with start_from_destination: "
-        f"the revision starts from the GitHub text and revision {current} stays "
-        f"in the history. To keep revision {current}, undo the edits on GitHub or "
-        f"close {pull_request} without merging, then revise again."
-    )

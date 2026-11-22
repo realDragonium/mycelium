@@ -17,24 +17,64 @@ made that choice, and the row should show it.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+from .flows import Drawing
 
 
-class ManualDocument(BaseModel):
+class FlowDefinition(BaseModel):
+    """A flow as a writer submits it beside the body, which places it by name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    title: str
+    start: str
+    stop: list[str] = []
+
+
+class StoredFlow(FlowDefinition):
+    """A submitted flow with the drawing made of it inside the audience."""
+
+    drawing: Drawing
+
+
+class StoredLink(BaseModel):
+    """A concept link of a body: the name as written and the concept it matched."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    entity_id: str
+
+
+class RefusedDraft(BaseModel):
+    """What an earlier attempt at a request submitted and had refused."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    title: str = Field(min_length=1, max_length=300)
-    body: str = Field(min_length=1, max_length=200_000)
+    title: str
+    body: str
+    flows: tuple[StoredFlow, ...] = ()
 
-    @field_validator("title", "body")
-    @classmethod
-    def nonblank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("Text must not be blank")
-        return value
+
+FLOW_DEFINITIONS: TypeAdapter[list[FlowDefinition]] = TypeAdapter(list[FlowDefinition])
+STORED_FLOWS: TypeAdapter[list[StoredFlow]] = TypeAdapter(list[StoredFlow])
+STORED_LINKS: TypeAdapter[list[StoredLink]] = TypeAdapter(list[StoredLink])
+
+
+def revision_flows(row: sqlite3.Row) -> list[StoredFlow]:
+    """The flows stored with a `generated_document_revisions` row."""
+    return STORED_FLOWS.validate_json(row["flows"] or "[]")
+
+
+def revision_links(row: sqlite3.Row) -> list[StoredLink]:
+    """The resolved concept links stored with a `generated_document_revisions` row."""
+    return STORED_LINKS.validate_json(row["concept_links"] or "[]")
 
 
 @dataclass(frozen=True)
@@ -51,25 +91,20 @@ class ExistingDocument:
 class CurrentDocument:
     body: str
     content_revision: str | None = None
+    #: The flows stored with the revision being revised.
+    flows: tuple[StoredFlow, ...] = ()
 
 
 #: Where a pull request stands at its destination.
 PullRequestState = Literal["open", "merged", "closed"]
-
-#: Which text a revision starts from: the internal head, or the destination's
-#: copy when people edited it there.
-RevisionBase = Literal["internal", "destination"]
 
 
 @dataclass(frozen=True)
 class RevisionTarget:
     document: ExistingDocument
     revision: int
-    #: The text the revision starts from. `content_revision` is the destination
-    #: blob it reflects, recorded as the document's new sync point; None keeps
-    #: the stored one.
+    #: The text the revision starts from.
     current: CurrentDocument
-    base: RevisionBase = "internal"
 
 
 class ReviewFinding(BaseModel):
@@ -117,6 +152,10 @@ class DocumentWritten(BaseModel):
     #: baseline a later edit to one of them makes this document out of date
     #: against. None when the review could not read them.
     cited_statements: dict[str, str] | None = None
+    #: The body's concept links that matched one concept its audience may see.
+    concept_links: list[StoredLink] = Field(default_factory=list)
+    #: The flows the body places, drawn inside the audience at submission.
+    flows: list[StoredFlow] = Field(default_factory=list)
     guideline_set: str
     document_type: str
     #: The independent gate that accepted this exact document.
@@ -147,6 +186,10 @@ class NothingWritten(BaseModel):
     #: instead of paying for another run to see a different document.
     title: str | None = None
     body: str | None = None
+    #: What the refused draft's body refers to, kept beside it as a stored
+    #: revision keeps them.
+    concept_links: list[StoredLink] = Field(default_factory=list)
+    flows: list[StoredFlow] = Field(default_factory=list)
     gaps: list[str] = Field(default_factory=list)
     trace: dict = Field(default_factory=dict)
 

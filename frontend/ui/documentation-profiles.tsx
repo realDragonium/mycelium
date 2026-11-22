@@ -299,7 +299,7 @@ export function DocumentationProfiles() {
               </select><span className="hint">Plans once the re-plan threshold under Settings → Limits is reached by statements no plan was offered. Write starts runs within the batch and active-run limits; each passes the usual document review.</span></label>
               <label className="field"><span>Who decides proposed plan items</span><select className="input" value={form.plan_review} onChange={e => change({ plan_review: e.target.value as PlanReview })}>
                 {(Object.keys(PLAN_REVIEW) as PlanReview[]).map(policy => <option key={policy} value={policy}>{PLAN_REVIEW[policy]}</option>)}
-              </select><span className="hint">The AI reviewer is never the planner: a model call separate from the planner's, or another agent while documentation planning is set to External agent. It also decides out-of-date documents. Approved items start within the batch and active-run limits; dismissals are remembered.</span></label>
+              </select><span className="hint">The AI reviewer is a model call separate from the planner's, or an agent while documentation planning is set to External agent. It also decides out-of-date documents. Approved items start within the batch and active-run limits; dismissals are remembered.</span></label>
               <label className="field"><span>When AI work fails</span><select className="input" value={form.recovery} onChange={e => change({ recovery: e.target.value as Recovery })}>
                 <option value="person">Leave it for a person</option><option value="ai">Retry automatically, then give up with a reason</option>
               </select><span className="hint">Retries failed plans, plan reviews, items that could not start, runs the review refused (briefed with its notes) and publications, up to each kind's retries under Settings → Limits.</span></label>
@@ -344,6 +344,7 @@ export function DocumentationProfiles() {
               {data.can_write && <button type="button" className="btn ghost xs" disabled={busy} onClick={() => create(form)}>Duplicate profile</button>}
               {data.can_retire && !creating && !form.retired && <button type="button" className="btn ghost xs" disabled={busy || form.name === data.default_profile} onClick={retire}>Retire profile</button>}
             </div>
+            {data.can_retire && !creating && !form.retired && <SiteDownload key={form.name} profile={form.name} />}
             {form.name === data.default_profile && <p className="hint">This is the default profile. Choose another default under Documentation delivery before retiring it or its last template.</p>}
             {!data.can_write && <p className="hint">Writers can edit profiles; administrators can retire them.</p>}
             {!creating && original && (
@@ -363,6 +364,43 @@ export function DocumentationProfiles() {
         )}
       </>}
     </Card>
+  );
+}
+
+function SiteDownload({ profile }: { profile: string }) {
+  const [title, setTitle] = useState('');
+  const [feedback, setFeedback] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const download = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError(null);
+    try {
+      const query = new URLSearchParams();
+      if (title.trim()) query.set('title', title.trim());
+      if (feedback.trim()) query.set('feedback_url', feedback.trim());
+      const response = await fetch(`/api/documentation/sites/${encodeURIComponent(profile)}?${query}`);
+      if (!response.ok) {
+        const body: unknown = await response.json().catch(() => null);
+        const detail = body && typeof body === 'object' && 'detail' in body ? body.detail : null;
+        throw new Error(typeof detail === 'string' ? detail : `The site could not be built (${response.status}).`);
+      }
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(await response.blob());
+      link.download = `${profile}-site.zip`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (e) { setError(errorMessage(e, 'The site could not be built.')); } finally { setBusy(false); }
+  };
+  return (
+    <form className="col gap-sm" onSubmit={event => void download(event)}>
+      <h3>Download as a website</h3>
+      <p className="hint">A zip of static pages built from this profile's current documents: a home page, one page per document, links between concepts, flows and search. It holds everything this profile's audience may see, so host it only where that audience can reach it.</p>
+      <label className="field"><span>Site name</span><input className="input" value={title} maxLength={200} placeholder="Defaults to the profile name" onChange={e => setTitle(e.target.value)} /></label>
+      <label className="field"><span>Address for "Report a problem with this page"</span><input className="input" value={feedback} maxLength={2000} placeholder="Optional. For example mailto:docs@example.com?subject={title}" onChange={e => setFeedback(e.target.value)} /><span className="hint">An http, https or mailto address. {'{title}'} and {'{page}'} are replaced by the page's title and its path.</span></label>
+      {error && <Notice tone="error">{error}</Notice>}
+      <div><button type="submit" className="btn sm" disabled={busy}>{busy ? 'Building…' : 'Download site'}</button></div>
+    </form>
   );
 }
 
