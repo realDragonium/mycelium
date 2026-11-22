@@ -10,7 +10,8 @@ See [AI model configuration](docs/AI_MODELS.md) to select Claude or GPT independ
 See [AI prompts](docs/AI_PROMPTS.md) to edit per-action instructions in the UI without redeploying.
 
 See [the documentation workflow](docs/DOCUMENTATION_MODELS.md) to configure writing profiles,
-generate and revise documents, and publish GitHub pull requests from the web app.
+generate and revise documents, publish GitHub pull requests from the web app, and
+download a profile's pages as a static website (`mycelium docs-site`).
 
 See [internal draft review](docs/DRAFT_REVIEW.md) for configurable Claude/GPT assessment and
 automatic application configuration.

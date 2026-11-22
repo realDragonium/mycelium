@@ -77,6 +77,16 @@ not see, any internal vocabulary or media the document may not carry, and
 every problem with the flows at once. An accepted or held result's `message`
 names concept links that matched no concept.
 
+In the body, link a concept as `[[Name]]` or `[[Name|text shown]]`. For
+something that happens in steps, read `preview_flow` with
+`read_for_agent_task` to see what the server would draw from a start
+statement, then place the flow with a fenced block whose info string is
+`flow` and whose only content is the flow's name. Where a picture would help
+and no media was offered, write `![what the picture should show](image-wanted)`
+with at least three words. When you revise a document, or a submission came
+back, `brief.input` holds the earlier text, its flows and the statement ids
+it cited: revise that text, and read a statement again before citing it.
+
 **`document_review`.** The task may be for a document your own account wrote.
 Review it in a session that did not write it (a fresh conversation or a
 subagent), from the brief alone, so what you remember of writing it does not

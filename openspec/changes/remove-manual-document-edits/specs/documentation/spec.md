@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Publication is one-way
-The system SHALL treat its own revision as the only source of a document's text: a revision always starts from the revision stored in Mycelium, and nothing is read back from GitHub into a document. Publication SHALL write the selected revision over whatever the file holds, on the open pull request branch or, when no pull request is open, in a new pull request from the base branch, including text someone changed on GitHub by hand. Publication MUST be refused when the file was deleted in the open pull request, and SHALL make no commit when the file on the open pull request branch already holds the revision's text.
+The system SHALL treat its own revision as the only source of a document's text: a revision always starts from the revision stored in Mycelium, and nothing is read back from GitHub into a document. Publication SHALL write the selected revision over whatever the file holds, on the open pull request branch or, when no pull request is open, in a new pull request from the base branch, including text someone changed on GitHub by hand.
 
 #### Scenario: Reviewer edited the PR branch
 - **WHEN** someone commits a change to `docs/exporting-invoices.md` on the document's open pull request branch and a writer publishes the next revision
@@ -10,6 +10,9 @@ The system SHALL treat its own revision as the only source of a document's text:
 #### Scenario: File edited on the base branch after merge
 - **WHEN** the pull request was merged, someone edits the file on the base branch, and a writer revises and publishes the document
 - **THEN** the revision starts from the text in Mycelium, and a new pull request replaces the file with it
+
+### Requirement: Publication keeps a deleted file deleted and makes no empty commit
+Publication MUST be refused when the file was deleted in the open pull request, and SHALL make no commit when the file on the open pull request branch already holds the revision's text.
 
 #### Scenario: File deleted in the open pull request
 - **WHEN** someone deletes the file on the open pull request branch and a writer publishes

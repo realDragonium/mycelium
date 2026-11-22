@@ -119,7 +119,12 @@ gave up, and only on the operator's word.
 document cites were edited, deleted, merged away or are no longer visible to
 its audience; `stale.changes` shows old and new text. Revise with
 `update_sources=true` (no prompt needed) to brief the run with exactly those
-changes.
+changes. `stale.flow_changes` lists the steps of a placed flow that changed
+(a step added or removed, a condition changed); the same revision redraws it.
+
+**Concept links and flows.** A document's `concept_links` and `flows` are
+what its body's `[[Name]]` links matched and what each placed flow draws.
+The server's writer adds them; you do not write them.
 
 **Edited on GitHub.** Publishing is one-way: a revision always starts from
 Mycelium's text, and a publish overwrites the file on GitHub, including
@@ -200,7 +205,13 @@ or dismissed item again. Report what gave up.
   publishes every reviewed revision itself; do not deliver it again. A profile
   that names its destinations (`destinations` in the profile listing)
   publishes only there; pick one of those. Merging the pull request is
-  the destination repository's decision, never yours.
+  the destination repository's decision, never yours. A document whose body
+  holds a concept link or a flow is not delivered to GitHub.
+- **A website of a profile's pages.** An administrator downloads it under
+  **Download as a website** on the profile in **Settings → Documentation**,
+  from `GET /api/documentation/sites/{guideline_set}` with an admin token, or with
+  `mycelium docs-site --profile <name> --out <dir>` on the server. There is
+  no MCP tool for it.
 - **Missing facts.** Fill them in the knowledge base, then run the request
   again.
 - **Server unavailable.** Report it. Do not write the document by hand.

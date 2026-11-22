@@ -145,9 +145,18 @@ refused submission and, once done, its `result`, such as the draft it made.
   not exist or the audience may not see, a drawing of fewer than three
   statements, a placement naming no submitted flow, a flow never placed, and a
   malformed or repeated name. A `[[Name]]` link that matches no concept the
-  audience may see is not refused; the result's `message` names it. On a
-  revision the brief's `input` lists the document's current flows, and the
-  `flows` submitted replace them.
+  audience may see is not refused; the result's `message` names it. An agent
+  sees what a flow will draw with the `preview_flow` read, and a
+  `document_review` brief lists what each placed flow shows.
+- **Image placeholders.** `![what the picture should show](image-wanted)`
+  marks where a picture would help. A description of fewer than three words
+  is refused with the flow problems.
+- **Revisions and returned submissions.** On a revision the brief's `input`
+  holds the document's current text, its flows with what they draw, and the
+  ids of the statements it cites; the `flows` submitted replace the stored
+  ones. A submission that is refused, or sent back by its review, is added to
+  the brief the same way with its findings, so whoever takes the task up
+  revises that text instead of starting over.
 - **Template conformance and exposure.** A grounded document is reviewed
   against the template and the audience's exposure rules, by the server's
   reviewer or by a second agent (see [Review](#review)).

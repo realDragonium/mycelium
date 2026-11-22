@@ -41,18 +41,18 @@ Step 0 costs no product code. Steps 1 to 3 are the smallest build that lets an e
 
 - [x] 5.1 A document is out of date when the step links of a stored flow's statements changed; the revision brief says what changed
 - [x] 5.2 Carry links and flows through refused drafts, the archive and the web app's preview
-- [ ] 5.3 Leave out of the export any document citing a statement or placing media its audience can no longer see
+- [x] 5.3 Leave out of the export any document citing a statement or placing media its audience can no longer see
 
 ## 6. Make it a site
 
 - [ ] 6.1 "Often appears with" in the context block
-- [ ] 6.2 Grouped index with a title filter; media copied
+- [x] 6.2 Grouped index with a title filter; media copied
 - [ ] 6.3 Theme: mock, agreement, stylesheet
 
 ## 7. Specs and docs
 
-- [ ] 7.1 `documentation` spec delta
-- [ ] 7.2 `docs/DOCUMENTATION_MODELS.md`, `docs/MCP_TOOLS.md`, `docs/GUIDELINE_SETS.md`, `docs/AGENT_TASKS.md`
+- [x] 7.1 `documentation` spec delta
+- [x] 7.2 `docs/DOCUMENTATION_MODELS.md`, `docs/MCP_TOOLS.md`, `docs/GUIDELINE_SETS.md`, `docs/AGENT_TASKS.md`
 
 ## 8. After the trial: the basis
 
