@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol, TypeVar, overload
@@ -479,20 +478,6 @@ def _row_key(subject: Subject, row: sqlite3.Row) -> DecisionKey:
     )
 
 
-def _excluded(subject: Subject, value: str) -> str | None:
-    if subject == "curator_labels":
-        return value or None
-    return value.removeprefix("agent:") if value.startswith("agent:") else None
-
-
-def _grouped(subject: Subject, rows: list[sqlite3.Row]) -> dict[str, list[sqlite3.Row]]:
-    grouped: dict[str, list[sqlite3.Row]] = defaultdict(list)
-    field = "labelled_by" if subject == "curator_labels" else "model"
-    for row in rows:
-        grouped[str(row[field] or "")].append(row)
-    return grouped
-
-
 def _queue_agent_tasks(limit: int) -> int:
     """Queue review batches for outside reviewers when labelling is external."""
     from . import drafts_store
@@ -534,41 +519,38 @@ def _queue_agent_tasks(limit: int) -> int:
             and stopped.get(_stop_key(_key(subject, row))[0])
             != _stop_key(_key(subject, row))[1]
         ]
-        for labelled_by, grouped in _grouped(subject, rows).items():
-            for start in range(0, len(grouped), settings.batch_size):
-                if queued >= limit:
-                    return queued
-                chunk = grouped[start : start + settings.batch_size]
-                batch = _batch(subject, chunk)
-                if subject == "grants":
-                    grant_task = _grant_task(conn, chunk, live)
-                    brief = agent_tasks.structured_brief(
-                        instructions=grant_task.system,
-                        input=grant_task.prompt,
-                        result=(
-                            "One decision per supplied statement_id and "
-                            "audience_id pair."
-                        ),
-                        schema=Review,
-                    )
-                else:
-                    statement_task = _statement_task(conn, subject, chunk, live)
-                    brief = agent_tasks.structured_brief(
-                        instructions=statement_task.system,
-                        input=statement_task.prompt,
-                        result="One decision per supplied statement_id.",
-                        schema=StatementReview,
-                    )
-                agent_tasks.create(
-                    drafts,
-                    "audience_review",
-                    subject_id=None,
-                    brief=brief,
-                    state=_json.validate_python(batch.model_dump()),
-                    excluded_claimant=_excluded(subject, labelled_by),
+        for start in range(0, len(rows), settings.batch_size):
+            if queued >= limit:
+                return queued
+            chunk = rows[start : start + settings.batch_size]
+            batch = _batch(subject, chunk)
+            if subject == "grants":
+                grant_task = _grant_task(conn, chunk, live)
+                brief = agent_tasks.structured_brief(
+                    instructions=grant_task.system,
+                    input=grant_task.prompt,
+                    result=(
+                        "One decision per supplied statement_id and audience_id pair."
+                    ),
+                    schema=Review,
                 )
-                held.update(_batch_keys(batch))
-                queued += 1
+            else:
+                statement_task = _statement_task(conn, subject, chunk, live)
+                brief = agent_tasks.structured_brief(
+                    instructions=statement_task.system,
+                    input=statement_task.prompt,
+                    result="One decision per supplied statement_id.",
+                    schema=StatementReview,
+                )
+            agent_tasks.create(
+                drafts,
+                "audience_review",
+                subject_id=None,
+                brief=brief,
+                state=_json.validate_python(batch.model_dump()),
+            )
+            held.update(_batch_keys(batch))
+            queued += 1
     return queued
 
 
@@ -650,8 +632,6 @@ def _narrow_reason(reviewer: str, reason: str) -> str:
 def _still_current(
     conn: sqlite3.Connection,
     item: GrantState | CuratorLabelState | KeptGrantState,
-    *,
-    reviewer: str | None,
 ) -> sqlite3.Row | None:
     statement = store.get_statement(conn, item.statement_id)
     label = store.audience_labels.get_label(conn, item.statement_id)
@@ -661,10 +641,6 @@ def _still_current(
         if (
             str(label["labelled_at"]) != item.labelled_at
             or item.audience_id not in store.audience_labels.label_pending(label)
-            or (
-                reviewer is not None
-                and str(label["model"] or "") == f"agent:{reviewer}"
-            )
         ):
             return None
     elif isinstance(item, CuratorLabelState):
@@ -672,19 +648,11 @@ def _still_current(
             label["source"] != "curator"
             or label["text_changed_at"] is None
             or str(label["labelled_at"]) != item.labelled_at
-            or (reviewer is not None and label["labelled_by"] == reviewer)
         ):
             return None
     else:
         checking = store.audience_labels.label_spot_check(label)
-        if (
-            checking is None
-            or checking["at"] != item.kept_at
-            or (
-                reviewer is not None
-                and str(label["model"] or "") == f"agent:{reviewer}"
-            )
-        ):
+        if checking is None or checking["at"] != item.kept_at:
             return None
     return label
 
@@ -725,7 +693,6 @@ def _apply(
     reviewer: str,
     reviewer_name: str,
     live: tuple[Audience, ...],
-    check_claimant: bool,
 ) -> _Applied:
     by_id = {item.id: item for item in live}
     graph = audiences.graph(live)
@@ -739,9 +706,7 @@ def _apply(
     with store.transaction(conn):
         current: dict[DecisionKey, sqlite3.Row] = {}
         for item in items:
-            label = _still_current(
-                conn, item, reviewer=reviewer if check_claimant else None
-            )
+            label = _still_current(conn, item)
             if label is not None:
                 current[_item_key(item)] = label
         for item in items:
@@ -890,7 +855,6 @@ def _submit_agent_task(
         reviewer=claimant,
         reviewer_name=reviewer_name,
         live=audiences.live(),
-        check_claimant=True,
     )
     conn = store.substrate_connection()
     with store.transaction(conn):
@@ -1026,7 +990,6 @@ def _run_subject(
         reviewer=f"model:{selected.model}",
         reviewer_name=f"model:{selected.model}",
         live=live,
-        check_claimant=False,
     )
     with store.transaction(conn):
         automation_stops.clear(

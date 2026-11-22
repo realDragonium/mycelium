@@ -53,7 +53,7 @@ AGENT_ACTIONS: frozenset[Action] = frozenset(
     }
 )
 #: Who reviews a document an outside agent wrote: the server's reviewer on
-#: the action's provider, or an agent other than the writer.
+#: the action's provider, or an agent that claims the review as a task.
 AgentReview = Literal["server", "agent"]
 PROVIDERS: tuple[Provider, ...] = ("claude", "openai")
 ACTION_NAMES: dict[Action, str] = {

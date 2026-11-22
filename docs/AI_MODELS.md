@@ -53,11 +53,11 @@ review is its reviewer (see [Draft review](DRAFT_REVIEW.md#external-agent)).
 
 Documentation also has a **Review** choice. **Server reviewer** (the default)
 reviews an agent's document with the documentation provider and model set
-here, so that provider still needs credentials. **Another agent** queues the
-review as a task that any writer except the document's author may claim. An
-agent always differs from the writing principal, but two tokens of one person
-or one agent setup are not told apart; choose it only when your review agents
-are run separately from your writing agents.
+here, so that provider still needs credentials. **An agent** queues the
+review as a task that any writer or admin account may claim, the document's
+author included, so no provider credentials and no second account are needed.
+Run the review in a separate session from the writing, so that it reads the
+document fresh.
 
 Alias discovery has independent model, reasoning effort, token, timeout, retry, and input-size settings. Ingestion proposes aliases within its existing run using the ingestion model. Each alias suggestion needs an individual decision, by a person unless the draft reviewer is set to decide alias suggestions; it never alters them. See [Alias suggestions](ALIAS_SUGGESTIONS.md).
 

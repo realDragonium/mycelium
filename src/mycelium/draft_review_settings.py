@@ -168,7 +168,7 @@ def configuration_issues(settings: Settings) -> list[str]:
         issues.append(availability.reason)
     principal = auth.resolve_session_user(runtime._auth_db(), settings.reviewer_id)
     if principal is None or not auth.principal_has_real_role(principal, "writer"):
-        issues.append("Select an active writer or admin as the independent reviewer.")
+        issues.append("Select an active writer or admin as the reviewer.")
     return issues
 
 

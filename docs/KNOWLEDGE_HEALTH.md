@@ -259,8 +259,7 @@ since their draft is still undecided.
    A `question` item is released as `answered` (one item per call) with
    `answer` (at most 6,000 characters) and `evidence`: one to five items in
    the shape `set_operation_evidence` takes (code, UI, doc or media). An
-   answer without evidence is refused, and so is an answer from the draft's
-   creator. The answer is recorded on the review as a curator's answer is,
+   answer without evidence is refused. The answer is recorded on the review as a curator's answer is,
    with the agent as `answered_by` and its evidence, and the draft is
    reviewed again with it exactly as after a person's answer
    ([Draft review](DRAFT_REVIEW.md#evidence-and-scope)). The question's gap

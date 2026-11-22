@@ -674,7 +674,7 @@ def _as(principal_id: str):
     )
 
 
-def test_an_agent_reviews_another_agents_plan_over_the_task_queue(client):
+def test_an_agent_reviews_the_plan_it_made_over_the_task_queue(client):
     from mycelium import auth, server
 
     _profile()
@@ -696,13 +696,6 @@ def test_an_agent_reviews_another_agents_plan_over_the_task_queue(client):
         assert server.submit_agent_task(task.id, {"items": proposal}).status == (
             "accepted"
         )
-        own = server.claim_agent_task("plan_review")
-        assert own.tasks == [] and own.note and "a plan you made" in own.note
-    finally:
-        auth.current_principal.reset(planner)
-
-    reviewer = _as("reviewer")
-    try:
         [review] = server.claim_agent_task("plan_review").tasks
         assert review.brief["profile"]["name"] == "public"
         first, second = (
@@ -725,14 +718,14 @@ def test_an_agent_reviews_another_agents_plan_over_the_task_queue(client):
             },
         )
     finally:
-        auth.current_principal.reset(reviewer)
+        auth.current_principal.reset(planner)
     doc_runs.wait_all()
 
     assert done.status == "accepted", done.message
     items = client.get("/api/documentation/plans/public").json()["items"]
     assert [(item["state"], item["review"]["reviewer"]) for item in items] == [
-        ("approved", "reviewer"),
-        ("dismissed", "reviewer"),
+        ("approved", "planner"),
+        ("dismissed", "planner"),
     ]
     assert items[0]["run"]["status"] == "document_written"
 

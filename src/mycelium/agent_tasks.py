@@ -120,8 +120,6 @@ class Task(BaseModel):
     failures: int
     #: How often a claim ran out or an agent gave the task back.
     releases: int
-    #: A principal that may not claim the task: a review's writer.
-    excluded_claimant: str | None
     #: Who asked for the work, when someone did; they may follow it.
     requested_by: str | None
     claimed_by: str | None
@@ -164,7 +162,6 @@ def _task(row: sqlite3.Row) -> Task:
         findings=_findings.validate_json(row["findings"]),
         failures=row["failures"],
         releases=row["releases"],
-        excluded_claimant=row["excluded_claimant"],
         requested_by=row["requested_by"],
         claimed_by=row["claimed_by"],
         expires_at=row["expires_at"],
@@ -217,7 +214,6 @@ def create(
     subject_id: str | None,
     state: dict[str, JsonValue],
     brief: dict[str, JsonValue] | None = None,
-    excluded_claimant: str | None = None,
     requested_by: str | None = None,
 ) -> str:
     """Queue a task."""
@@ -225,15 +221,14 @@ def create(
     now = timestamps.now()
     conn.execute(
         "INSERT INTO agent_tasks (id, kind, subject_id, status, brief, state, "
-        "excluded_claimant, requested_by, created_at, updated_at) "
-        "VALUES (?, ?, ?, 'waiting', ?, ?, ?, ?, ?, ?)",
+        "requested_by, created_at, updated_at) "
+        "VALUES (?, ?, ?, 'waiting', ?, ?, ?, ?, ?)",
         (
             task_id,
             kind,
             subject_id,
             None if brief is None else json.dumps(brief),
             json.dumps(state),
-            excluded_claimant,
             requested_by,
             now,
             now,
@@ -345,8 +340,8 @@ def claim(
             str(row[0])
             for row in conn.execute(
                 "SELECT id FROM agent_tasks WHERE status = 'waiting' AND kind = ? "
-                "AND excluded_claimant IS NOT ? ORDER BY created_at, rowid LIMIT ?",
-                (kind, claimant, limit),
+                "ORDER BY created_at, rowid LIMIT ?",
+                (kind, limit),
             )
         ]
         conn.executemany(
@@ -410,16 +405,6 @@ def give_back(
     released = get(conn, task.id)
     assert released is not None
     return released
-
-
-def withheld(conn: sqlite3.Connection, kind: Kind, claimant: str) -> int:
-    """Waiting tasks of `kind` that may not go to `claimant`: its own work."""
-    row = conn.execute(
-        "SELECT COUNT(*) FROM agent_tasks WHERE status = 'waiting' AND kind = ? "
-        "AND excluded_claimant = ?",
-        (kind, claimant),
-    ).fetchone()
-    return int(row[0])
 
 
 class NotHeld(PermissionError):
@@ -539,7 +524,7 @@ class Submitted(BaseModel):
 
     task_id: str
     #: `accepted`: done. `refused`: fix the findings and submit again while
-    #: `retries_left` lasts. `in_review`: another agent reviews it next.
+    #: `retries_left` lasts. `in_review`: an agent reviews it next.
     #: `failed`: the task is closed and nothing was kept.
     status: Literal["accepted", "refused", "in_review", "failed"]
     findings: list[Finding] = []

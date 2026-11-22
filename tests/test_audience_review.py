@@ -189,7 +189,7 @@ def test_setting_off_queues_no_review_task(db, prompts, tasks, monkeypatch):
     assert agent_tasks.open_tasks(tasks, "audience_review") == []
 
 
-def test_an_agent_cannot_review_its_grants_and_another_agent_decides_them(
+def test_the_agent_that_labelled_grants_may_review_them(
     db, prompts, tasks, monkeypatch
 ):
     set_product(product_settings.AudienceLabellingSettings(ai_grant_review=True))
@@ -197,16 +197,12 @@ def test_an_agent_cannot_review_its_grants_and_another_agent_decides_them(
     rejected = _pending(db, "The invoice worker runs on an internal queue.")
     monkeypatch.setattr(audience_review, "_external", lambda: True)
 
-    withheld = _claim("labeller")
-    assert withheld.tasks == []
-    assert withheld.note is not None and "grants you labelled" in withheld.note
-
-    [task] = _claim("reviewer").tasks
+    [task] = _claim("labeller").tasks
     status = audience_labelling.status(db)
     assert status.ai_grant_review
     assert [item.id for item in status.review_tasks] == [task.id]
     outcome = _submit(
-        "reviewer",
+        "labeller",
         task.id,
         [
             _decision(confirmed, EXTERNAL, "confirm", "This describes an export."),
@@ -223,17 +219,17 @@ def test_an_agent_cannot_review_its_grants_and_another_agent_decides_them(
     refused_decision = store.audience_labels.label_decisions(refused)[EXTERNAL]
     assert kept_decision == {
         "decision": "confirmed",
-        "by": "reviewer",
+        "by": "labeller",
         "at": kept_decision["at"],
         "reason": "This describes an export.",
     }
-    assert refused_decision["by"] == "reviewer"
+    assert refused_decision["by"] == "labeller"
     assert refused_decision["reason"] == "This exposes internals."
     assert store.audience_labels.label_pending(kept) == []
     assert store.audience_labels.label_pending(refused) == []
     assert refused["source"] == "curator"
     assert refused["reason"] == (
-        "Reviewer rejected the AI's grant to External technical: "
+        "Labeller rejected the AI's grant to External technical: "
         "This exposes internals. The labeller said: "
         "The first labeller considered this customer-facing."
     )
@@ -631,10 +627,6 @@ def test_external_tasks_cover_both_label_decision_subjects(
     )
     monkeypatch.setattr(audience_review, "_external", lambda: True)
 
-    withheld_curator = _claim("curator")
-    assert withheld_curator.tasks == []
-    assert withheld_curator.note is not None
-
     [curator_task] = _claim("reviewer").tasks
     stored_curator_task = agent_tasks.get(tasks, curator_task.id)
     assert stored_curator_task is not None
@@ -658,10 +650,6 @@ def test_external_tasks_cover_both_label_decision_subjects(
     assert curator_row is not None
     assert curator_row["text_changed_at"] is None
     assert curator_row["labelled_by"] == "reviewer"
-
-    withheld_labeller = _claim("labeller")
-    assert withheld_labeller.tasks == []
-    assert withheld_labeller.note is not None
 
     [kept_task] = _claim("reviewer").tasks
     stored_kept_task = agent_tasks.get(tasks, kept_task.id)
