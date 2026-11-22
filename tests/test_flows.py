@@ -244,12 +244,12 @@ def test_a_drawing_stored_before_cuts_were_recorded_keeps_the_old_words():
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("A job profile is assigned", "a job profile is assigned"),
+        ("A seat is assigned", "a seat is assigned"),
         ("An invoice is overdue", "an invoice is overdue"),
         ("The export is ready", "the export is ready"),
         ("Payment fails", "payment fails"),
         ("SSO is enforced", "SSO is enforced"),
-        ("MagicToken expired", "MagicToken expired"),
+        ("ApiToken expired", "ApiToken expired"),
         ("HBO-backed plan is active", "HBO-backed plan is active"),
         ("Workspace Owner approves", "Workspace Owner approves"),
         ("Workspaces are archived", "Workspaces are archived"),
