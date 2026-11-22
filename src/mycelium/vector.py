@@ -31,6 +31,9 @@ class Index:
         global top-k survives a filter."""
         return Index(self._index, allowed)
 
+    def allows(self, vector_id: int) -> bool:
+        return self._allowed is None or vector_id in self._allowed
+
     @classmethod
     def empty(cls) -> Index:
         idx = hnswlib.Index(space="cosine", dim=DIM)

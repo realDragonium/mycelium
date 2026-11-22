@@ -10,7 +10,9 @@ import { getJSON, postJSON } from './api';
 
 export interface Entity { id: string; name: string; description: string }
 export interface Name { id: string; text: string; entity: string }
-export interface Statement { id: string; kind: string; text: string; mentions: string[]; title: string }
+// `system` is the entity of the app or platform the statement belongs to;
+// null for the knowledge base's own product.
+export interface Statement { id: string; kind: string; text: string; system: string | null; mentions: string[]; title: string }
 // A when-clause tree. Leaves are {statement_id}, composites {op, of}; the
 // legacy flat-string shape is still tolerated.
 export type When = string | { statement_id: string } | { op: string; of: When[] };
@@ -133,7 +135,7 @@ interface RawStatementKind { kind: string; description?: string | null; when_to_
 type RawDump = Omit<SubstrateData, 'statements'> & { statements: Omit<Statement, 'title'>[] };
 
 function fromWire(raw: RawDump): SubstrateData {
-  const statements = raw.statements.map((s): Statement => ({ ...s, mentions: s.mentions || [], title: titleOf(s.text) }));
+  const statements = raw.statements.map((s): Statement => ({ ...s, system: s.system ?? null, mentions: s.mentions || [], title: titleOf(s.text) }));
   return { ...raw, statements, entity_links: raw.entity_links || [] };
 }
 
@@ -175,6 +177,14 @@ let first: Promise<SubstrateData> | null = null;
 
 export const substrateLoaded = () => loaded;
 
+// Entities any of whose names contains the query, case-insensitively.
+export function matchEntities(query: string, limit = 8): Entity[] {
+  const q = query.trim().toLowerCase();
+  const idx = substrate.index;
+  return !q ? [] : substrate.data.entities.filter(e =>
+    e.name.toLowerCase().includes(q) || (idx.namesByEntity[e.id] || []).some(n => n.text.toLowerCase().includes(q))).slice(0, limit);
+}
+
 // The first load, shared by every screen that needs the dump. A failed load
 // is forgotten so the next caller retries it.
 export function ensureSubstrate(): Promise<SubstrateData> {
@@ -184,13 +194,13 @@ export function ensureSubstrate(): Promise<SubstrateData> {
 
 // After a live edit, patch the cached statement so open views reflect it
 // without reloading the whole dump.
-interface RawHydratedStatement { id: string; kind: string; text: string; mentions?: { entity_id?: string }[] }
+interface RawHydratedStatement { id: string; kind: string; text: string; system?: { entity_id: string }; mentions?: { entity_id?: string }[] }
 export async function refreshStatement(id: string): Promise<Statement | null> {
   const res = await postJSON<{ statements?: RawHydratedStatement[] }>('/get-statements', { ids: [id] });
   const rec = (res.statements || []).find(s => s.id === id);
   if (!rec) return null;
   const mentions = [...new Set((rec.mentions || []).map(m => m.entity_id).filter((x): x is string => !!x))];
-  const next: Statement = { id, kind: rec.kind, text: rec.text, title: titleOf(rec.text), mentions };
+  const next: Statement = { id, kind: rec.kind, text: rec.text, system: rec.system?.entity_id ?? null, title: titleOf(rec.text), mentions };
   substrate.data = { ...substrate.data, statements: substrate.data.statements.map(s => s.id === id ? next : s) };
   substrate.index = buildIndex(substrate.data);
   return next;

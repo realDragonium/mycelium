@@ -99,9 +99,10 @@ def _stub_ingest_model(monkeypatch, entity_id):
     )
     run_ingest = ingest_loop.run_ingest
 
-    def stub(text, *, config):
+    def stub(text, *, config, system=None):
         return run_ingest(
             text,
+            system=system,
             client=FakeAnthropic(
                 _reconcile_then_adjacency()
                 + [_message([_tool_use(EMIT_TOOL, emission)])]
@@ -567,8 +568,9 @@ def _ingest_aliases_only(client, monkeypatch, entity_id):
     monkeypatch.setattr(
         ingest,
         "run_ingest",
-        lambda text, *, config: run_ingest(
+        lambda text, *, config, system=None: run_ingest(
             text,
+            system=system,
             client=FakeAnthropic(
                 _reconcile_then_adjacency()
                 + [_message([_tool_use(EMIT_TOOL, emission)])]

@@ -25,10 +25,11 @@ from .. import (
     product_settings,
     store,
 )
+from . import systems
 from .names import find_entity_duplicates
 from .registry import tool
 from .runtime import _db, _drafts_db
-from .search import find_duplicates, search_statements
+from .search import duplicate_pairs, search_statements
 from .vocabulary import list_link_types
 
 #: Statements offered with each item as its nearest neighbours.
@@ -191,9 +192,14 @@ STATEMENT_AUDIT_PAIRS = 2_000
 
 
 def duplicate_candidates(
-    *, limit: int = 200, exclude_skipped_by: str | None = None
+    *,
+    limit: int = 200,
+    exclude_skipped_by: str | None = None,
+    system: str | None = None,
 ) -> tuple[list[curation.DuplicateCandidate], dict[str, dict[str, JsonValue]]]:
-    """Bounded index-backed duplicate candidates and their agent context."""
+    """Bounded index-backed duplicate candidates and their agent context.
+    With `system` (an entity id or `store.MAIN_SYSTEM`), only statement pairs
+    of that system, chosen before the bound applies."""
     candidates: list[curation.DuplicateCandidate] = []
     contexts: dict[str, dict[str, JsonValue]] = {}
     scores: dict[str, float] = {}
@@ -203,7 +209,7 @@ def duplicate_candidates(
     # rather than once per page.
     parsed: dict[str, _StatementDuplicate] = {}
     statement_candidates: list[curation.DuplicateCandidate] = []
-    for raw_statement in find_duplicates(limit=STATEMENT_AUDIT_PAIRS):
+    for raw_statement in duplicate_pairs(limit=STATEMENT_AUDIT_PAIRS, system=system):
         statement_pair = _StatementDuplicate.model_validate(raw_statement)
         a_id, b_id = sorted((statement_pair.a_id, statement_pair.b_id))
         item_id = f"{a_id}~{b_id}"
@@ -226,11 +232,18 @@ def duplicate_candidates(
         for statement_id in (a_id, b_id):
             row = store.get_statement(_db(), statement_id)
             if row is not None:
-                sides[statement_id] = {
+                side: dict[str, JsonValue] = {
                     "id": statement_id,
                     "kind": str(row["kind"]),
                     "text": str(row["text"]),
                 }
+                if row["system_entity_id"] is not None:
+                    ref = systems.ref(str(row["system_entity_id"]))
+                    side["system"] = {
+                        "entity_id": ref["entity_id"],
+                        "name": ref["name"],
+                    }
+                sides[statement_id] = side
         if len(sides) != 2:
             continue
         candidates.append(candidate)
@@ -246,7 +259,7 @@ def duplicate_candidates(
 
     concept_candidates: list[curation.DuplicateCandidate] = []
     offset = 0
-    while len(concept_candidates) < limit:
+    while system is None and len(concept_candidates) < limit:
         page = find_entity_duplicates(limit=page_size, offset=offset)
         parsed_concepts: dict[str, _ConceptDuplicate] = {}
         page_candidates = []
@@ -355,6 +368,7 @@ def describe_work_item(
 def claim_curation_work(
     kind: curation.Kind,
     limit: Annotated[int, Field(ge=0, le=curation.MAX_BATCH)] = 5,
+    system: str | None = None,
 ) -> WorkBatch:
     """Claim a batch of curation work for 30 minutes, to check in the
     product's code what the knowledge base alone cannot settle.
@@ -370,16 +384,23 @@ def claim_curation_work(
     it names, and its nearest statements; `link_types` is the vocabulary
     with each type's direction.
 
+    `system` (an entity id or exact name, or `"main"` for statements without
+    one) narrows `isolated`, `unnamed`, `rephrase` and `duplicate` work to
+    the statements of one app or platform: pass it when you work from that
+    integration's code. A duplicate pair qualifies only when both statements
+    have it. It fails with any other kind, or when it names no entity.
+
     Each call also extends your lease on every item of `kind` you still hold
     (`limit=0` only renews). Propose what you find through your draft, attach
     `set_operation_evidence` to each operation, submit the draft, then
     `release_curation_work`. An item whose lease runs out is offered again.
     """
     claimant = _claimant()
+    system_id = None if system is None else _system(kind, system)
     pairs: list[curation.DuplicateCandidate] = []
     pair_context: dict[str, dict[str, JsonValue]] = {}
     if kind == "duplicate" and limit:
-        pairs, pair_context = duplicate_candidates()
+        pairs, pair_context = duplicate_candidates(system=system_id)
     with store.transaction(_db()):
         chosen, renewed, expires = curation.claim(
             _db(),
@@ -398,6 +419,7 @@ def claim_curation_work(
             skip_retries=product_settings.get(
                 product_settings.ConnectSettings
             ).skip_retries,
+            system=system_id,
         )
     items: list[WorkItem] = []
     for candidate in chosen:
@@ -411,6 +433,18 @@ def claim_curation_work(
         "expires_at": expires,
         "link_types": _json_rows.validate_python(list_link_types()),
     }
+
+
+def _system(kind: curation.Kind, system: str) -> str:
+    if kind not in curation.SYSTEM_KINDS:
+        raise ValueError(
+            "system applies only to statement work: "
+            + ", ".join(sorted(curation.SYSTEM_KINDS))
+        )
+    resolved = systems.resolve_filter(system)
+    if resolved is None:
+        raise ValueError(f"system {system!r} is not an entity id or name")
+    return resolved
 
 
 @tool(role="drafter")

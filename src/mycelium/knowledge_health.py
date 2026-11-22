@@ -14,7 +14,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel
 
-from . import document_freshness, media, media_store
+from . import document_freshness, media, media_store, store
 from .ingest.connect import Target
 from .store import kernel
 
@@ -42,7 +42,9 @@ ENTITY_WHERE: dict[EntityFilter, str] = {
     "undescribed": "TRIM(COALESCE(e.description, '')) = ''",
     "unused": (
         "NOT EXISTS (SELECT 1 FROM names n JOIN statement_mentions m "
-        "ON m.name_id = n.id WHERE n.entity_id = e.id)"
+        "ON m.name_id = n.id WHERE n.entity_id = e.id) "
+        "AND NOT EXISTS (SELECT 1 FROM statements s "
+        "WHERE s.system_entity_id = e.id)"
     ),
 }
 
@@ -107,6 +109,43 @@ def counts(
             1 for f in freshness.values() if f.status == "out_of_date"
         ),
         old_media=media.counts().old if media_store.is_configured() else 0,
+    )
+
+
+class SystemCount(BaseModel):
+    entity_id: str
+    name: str
+    statements: int
+
+
+class Systems(BaseModel):
+    #: Each entity that is a statement's system, most statements first.
+    systems: list[SystemCount]
+    #: Statements without a system: the knowledge base's own product.
+    main_statements: int
+
+
+def systems(conn: sqlite3.Connection) -> Systems:
+    """How many statements belong to each system, and to none."""
+    rows = conn.execute(
+        "SELECT system_entity_id, COUNT(*) AS n FROM statements "
+        "GROUP BY system_entity_id"
+    ).fetchall()
+    counts = {
+        str(r["system_entity_id"]): int(r["n"])
+        for r in rows
+        if r["system_entity_id"] is not None
+    }
+    names = store.entity_names(conn, list(counts))
+    return Systems(
+        systems=sorted(
+            (
+                SystemCount(entity_id=e, name=names.get(e, e), statements=n)
+                for e, n in counts.items()
+            ),
+            key=lambda c: (-c.statements, c.name.casefold()),
+        ),
+        main_statements=sum(int(r["n"]) for r in rows if r["system_entity_id"] is None),
     )
 
 

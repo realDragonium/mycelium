@@ -17,6 +17,9 @@ What an audience sees:
   unlabelled statement: internal audiences see them, external ones do not;
 * for external audiences, only the names visible statements were matched
   through, so an internal alias or codename of a visible entity stays out.
+
+Statements come without their system, and the read tools are offered without
+their `system` filter.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from . import store
@@ -66,7 +69,10 @@ _VIEWS: tuple[tuple[str, str], ...] = (
     (
         "statements",
         # A view has no rowid of its own; reads page and order by the table's.
-        "SELECT rowid AS rowid, * FROM main.statements "
+        # Systems stay out of scoped reads until documentation decides how
+        # to present them.
+        "SELECT rowid AS rowid, id, kind, text, NULL AS system_entity_id, "
+        "created_at, updated_at, created_by, updated_by FROM main.statements "
         "WHERE id IN (SELECT id FROM temp.audience_visible)",
     ),
     (
@@ -178,7 +184,7 @@ class ScopedSubstrate:
         self.scope = scope
 
     def tool_specs(self) -> list[ToolSpec]:
-        return self._inner.tool_specs()
+        return [_without_system(spec) for spec in self._inner.tool_specs()]
 
     def has(self, name: str) -> bool:
         return substrate_has(self._inner, name)
@@ -186,6 +192,27 @@ class ScopedSubstrate:
     def call(self, name: str, arguments: dict[str, Any]) -> Any:
         with applied(store.substrate_connection(), self.scope):
             return self._inner.call(name, arguments)
+
+
+SCOPED_SYSTEM_NOTE = (
+    "\n\nThis read is audience-scoped: the `system` filter and the `system` "
+    "field described above are not available."
+)
+
+
+def _without_system(spec: ToolSpec) -> ToolSpec:
+    properties = spec.input_schema.get("properties", {})
+    if "system" not in properties:
+        return spec
+    schema = {
+        **spec.input_schema,
+        "properties": {k: v for k, v in properties.items() if k != "system"},
+    }
+    return replace(
+        spec,
+        description=spec.description + SCOPED_SYSTEM_NOTE,
+        input_schema=schema,
+    )
 
 
 def scoped(inner: SubstrateReader, audience: Audience) -> ScopedSubstrate:

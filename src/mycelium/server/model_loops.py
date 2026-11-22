@@ -101,7 +101,7 @@ def ask(
 
 
 @tool
-def ingest(text: str) -> dict[str, Any]:
+def ingest(text: str, system: str | None = None) -> dict[str, Any]:
     """Extract knowledge from free text and emit a reviewable DRAFT of proposed
     substrate changes. Never writes to the substrate live.
 
@@ -113,6 +113,11 @@ def ingest(text: str) -> dict[str, Any]:
     the result as a DRAFT for review before anything is applied. The inner model is
     given only read tools plus one terminal emit tool; it has no write path. The
     draft is created in deterministic code, so nothing is ever written live.
+
+    `system` (an entity id or exact name) is the app or platform the text
+    is about when it is not the knowledge base's own product, such as a
+    payment platform's setup guide; every statement the draft creates gets
+    it. A `system` that names no entity fails the call.
 
     While internal draft review is on, the draft is submitted to the
     reviewer at once; otherwise it stays open for curation. Alias
@@ -134,16 +139,20 @@ def ingest(text: str) -> dict[str, Any]:
     """
     from .. import model_settings
     from ..ingest import IngestConfig, external, run_ingest
+    from . import systems
 
+    system_id = systems.resolve(system)
     if external.external("ingest"):
-        return external.queue("ingest", external.LoopState(text=text), _requester())
+        return external.queue(
+            "ingest", external.LoopState(text=text, system=system_id), _requester()
+        )
     model_settings.require("ingest")
     config = IngestConfig.from_env()
     if config.trace_log_path is None:
         config = replace(
             config, trace_log_path=str(_context().data_dir / "ingest_trace.jsonl")
         )
-    result = run_ingest(text, config=config)
+    result = run_ingest(text, config=config, system=system_id)
     response = result.model_dump()
     if result.outcome == "draft_created":
         response["submitted_for_review"] = _auto_submit(result.draft_id)

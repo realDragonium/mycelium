@@ -2,8 +2,8 @@
 import { Fragment, useCallback, useState, type FormEvent, type MouseEvent } from 'react';
 import { EditableStatementText, EmptyState, EntityChip, I, KindTag, LoadError, Loading, Notice, PageHeader, formatDate, useAskExternal, useDataCtx } from './lib';
 import { Link, useRouter } from './router';
-import { deleteJSON, enc, errorMessage, getJSON, putJSON, upsertEntity, upsertName } from './api';
-import { substrate, type Entity, type EntityLink, type Link as SubstrateLink, type Statement, type SubstrateIndex, type When } from './data';
+import { deleteJSON, enc, errorMessage, getJSON, isAuthError, putJSON, setStatementSystem, upsertEntity, upsertName } from './api';
+import { matchEntities, refreshStatement, substrate, type Entity, type EntityLink, type Link as SubstrateLink, type Statement, type SubstrateIndex, type When } from './data';
 import { AudienceIdentity, PendingGrantActions, TextChangedActions, type AudienceLabel, type AudienceRef } from './audiences';
 import { useAsync } from './use-async';
 import { MediaPanel } from './media';
@@ -265,10 +265,8 @@ function AddMention() {
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<{ label: string; draftId: string | null } | null>(null);
 
-  const idx = substrate.index;
-  const q = query.trim().toLowerCase();
-  const matches = !q ? [] : substrate.data.entities.filter(e =>
-    e.name.toLowerCase().includes(q) || (idx.namesByEntity[e.id] || []).some(n => n.text.toLowerCase().includes(q))).slice(0, 8);
+  const q = query.trim();
+  const matches = matchEntities(query);
   const canSubmit = mode === 'existing' ? !!(entity && alias.trim()) : !!name.trim();
   const reset = () => { setQuery(''); setEntity(null); setAlias(''); setName(''); setDesc(''); setErr(null); };
 
@@ -334,6 +332,62 @@ function AddMention() {
       )}
       {err && <p className="form-error" role="alert">{err}</p>}
     </div>
+  );
+}
+
+/* ============================ system ============================ */
+const SYSTEM_HELP = 'The app or platform this behaviour or step belongs to, such as our app or a payment platform.';
+
+// The statement's system: an entity, or none for our own product.
+function SystemField({ statement, onSaved }: { statement: Statement; onSaved: () => void }) {
+  const [system, setSystem] = useState(statement.system);
+  const [picking, setPicking] = useState(false);
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [staged, setStaged] = useState<string | null>(null);
+  const entity = system ? substrate.index.entities[system] : undefined;
+
+  const save = async (next: string | null) => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await setStatementSystem(statement.id, next);
+      setPicking(false); setQuery('');
+      if (res.status === 'staged') { setStaged(res.draftId); return; }
+      const fresh = await refreshStatement(statement.id);
+      setSystem(fresh ? fresh.system : next); setStaged(null); onSaved();
+    } catch (e) {
+      setErr(isAuthError(e) ? 'You need write access to change the system.' : errorMessage(e, 'Could not change the system.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const matches = matchEntities(query);
+  return (
+    <section className="sec stmt-system" aria-label="System">
+      <div className="sec-head"><span className="sh-title">System</span></div>
+      <p className="muted small">{SYSTEM_HELP}</p>
+      <div className="row gap-sm wrap">
+        {entity ? <EntityChip entity={entity} /> : system ? <span className="mono small">{system}</span> : <span className="muted small">Our product</span>}
+        {!picking && <button className="btn ghost sm" disabled={busy} onClick={() => { setPicking(true); setErr(null); }}>change</button>}
+        {!picking && system && <button className="btn ghost sm" disabled={busy} onClick={() => void save(null)}>clear</button>}
+      </div>
+      {picking && <div className="add-mention">
+        <div className="row gap-sm">
+          <input className="input grow" autoFocus value={query} placeholder="Search entities by name or alias…" aria-label="Search systems" spellCheck={false} onChange={e => setQuery(e.target.value)} />
+          <button className="btn ghost sm" onClick={() => { setPicking(false); setQuery(''); }}>Cancel</button>
+        </div>
+        {query.trim() && <div className="pick-list">
+          {matches.length === 0
+            ? <p className="muted mono small">No entity matches. Create the app or platform as an entity first.</p>
+            : matches.map(e => <button key={e.id} className="pick-item" disabled={busy} onClick={() => void save(e.id)}><b>{e.name}</b><span className="muted">{e.description}</span></button>)}
+        </div>}
+      </div>}
+      {staged && <Notice tone="success"><span>Proposed in <Link to={{ view: 'draft', id: staged }}>your draft</Link>. It applies once the draft is approved.</span></Notice>}
+      {err && <p className="form-error" role="alert">{err}</p>}
+    </section>
   );
 }
 
@@ -429,6 +483,8 @@ export function StatementDetail({ id }: { id: string }) {
             )}
           </header>
 
+          <SystemField key={`${s.id}:${s.system ?? ''}`} statement={s} onSaved={() => setEdits(n => n + 1)} />
+
           <section className="sec">
             <div className="sec-head"><span className="sh-title">Mentions · entities</span><span className="sh-count">{mentions.length}</span></div>
             {mentions.length > 0 && <div className="chip-row">{mentions.map(e => <EntityChip key={e.id} entity={e} />)}</div>}
@@ -446,6 +502,7 @@ export function StatementDetail({ id }: { id: string }) {
           <div className="rail-sec">
             <div className="rs-label">record</div>
             <div className="rail-kv"><span className="k">kind</span><span className="v">{s.kind}</span></div>
+            <div className="rail-kv"><span className="k">system</span><span className="v">{s.system ? idx.entities[s.system]?.name || s.system : 'our product'}</span></div>
             <div className="rail-kv"><span className="k">layer</span><span className="v">{def?.layer || '—'}</span></div>
             <div className="rail-kv"><span className="k">id</span><span className="v">{s.id}</span></div>
           </div>
@@ -498,6 +555,7 @@ export function EntityDetail({ id }: { id: string }) {
   const mentionedBy = idx.mentionsByEntity[id] || [];
   const outLinks = idx.entityOutgoing[id] || [];
   const inLinks = idx.entityIncoming[id] || [];
+  const inSystem = substrate.data.statements.filter(s => s.system === id);
 
   return (
     <main className="page">
@@ -522,6 +580,15 @@ export function EntityDetail({ id }: { id: string }) {
                 </Link>
               ))}
           </section>
+          {inSystem.length > 0 && <section className="sec">
+            <div className="sec-head"><span className="sh-title">statements in this system</span><span className="sh-count">{inSystem.length}</span></div>
+            <p className="muted small">These statements belong to {e.name}: their behaviour happens there, or their step is done there.</p>
+            {inSystem.map(s => (
+              <Link key={s.id} to={{ view: 'statement', id: s.id }} className="linkline">
+                <span className="ll-dir">·</span><KindTag kind={s.kind} /><span className="ll-target">{s.title || s.text}</span><span className="ll-tid">{s.id}</span>
+              </Link>
+            ))}
+          </section>}
           <section className="sec">
             <div className="sec-head"><span className="sh-title">entity ↔ entity links</span><span className="sh-count">{outLinks.length + inLinks.length}</span></div>
             <div className="two-col">

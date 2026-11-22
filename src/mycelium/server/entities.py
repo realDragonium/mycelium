@@ -67,7 +67,8 @@ class EntityDeletion(TypedDict):
 def merge_entities(from_entity_id: str, into_entity_id: str) -> EntityMerge:
     """Move every name from `from_entity_id` to `into_entity_id` and delete
     the source entity. Statements that mentioned the moved names continue
-    to point at the same names (now under the new entity). Generated
+    to point at the same names (now under the new entity), and statements
+    whose system was the source now have the target as their system. Generated
     documents anchored to the source become anchored to the target; where
     the target already anchors a document of the same guideline set and
     type, the source's document keeps its body but loses its anchor;
@@ -96,6 +97,7 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> EntityMerge:
         # Required before deleting the source: FK enforcement otherwise
         # blocks the delete.
         store.rewrite_entity_link_endpoints(_db(), from_entity_id, into_entity_id)
+        store.reassign_statement_systems(_db(), from_entity_id, into_entity_id)
         store.delete_entity(_db(), from_entity_id)
         affected: list[str] = []
         for nid in moved_name_ids:
@@ -123,7 +125,10 @@ def delete_entity(id: str) -> EntityDeletion:
     Use case: the entity no longer exists in the product (component
     removed, concept retired) and there's no successor to merge into.
     For "this entity is the same as that one", use `merge_entities`
-    instead so statements migrate.
+    instead so statements migrate. An entity that is still any statement's
+    system cannot be deleted: the call fails saying how many statements use
+    it, and nothing is deleted. Move or clear those statements' `system`
+    first, or merge the entity.
 
     Cascade statement:
     - Every `name` attached to this entity is deleted.
@@ -140,6 +145,20 @@ def delete_entity(id: str) -> EntityDeletion:
     if store.get_entity_by_id(_db(), id) is None:
         raise ValueError(f"entity {id!r} does not exist")
 
+    # Checked under the lock the delete takes, so no write sets this
+    # entity as a system in between.
+    with store.write_lock():
+        uses = store.count_system_uses(_db(), id)
+        if uses:
+            raise ValueError(
+                f"entity {id!r} is the system of {uses} "
+                f"statement{'' if uses == 1 else 's'}; change their system or "
+                "merge the entity instead"
+            )
+        return _delete_entity(id)
+
+
+def _delete_entity(id: str) -> EntityDeletion:
     with _persisted_index_write(names=True):
         name_rows = store.get_names_by_entity(_db(), id)
         name_ids = [r["id"] for r in name_rows]

@@ -80,6 +80,10 @@ _FIXED_PROTOCOL = """THE SUBSTRATE
 and prescriptive procedure/action/check/cause). Statements carry typed `links` \
 to other statements (each `{link_type, to_id, when?}`) and `mentions` \
 of named entities.
+- A statement with a `system` belongs to that app or platform, such as a \
+third-party integration partner: its behaviour happens there, or its step is \
+performed there. Say so in the answer ("in <system>, …"). A statement without \
+one is about the product itself.
 - Preserve stored edge direction and full conditions, including AND/OR/NOT.
   Fetch condition leaf statements when their meaning matters. Incoming links
   and condition references do not reverse the original edge.
@@ -127,7 +131,8 @@ def build_system_prompt(instructions: str) -> str:
 
 def _compact_hit(hit: dict[str, Any]) -> dict[str, Any]:
     """Trim a hydrated statement for the recon context — keep the signal
-    (id, kind, text, score, link targets, mentioned entities), drop the bulk."""
+    (id, kind, text, system, score, link targets, mentioned entities), drop
+    the bulk."""
     links = hit.get("links", [])
     mentions = [m.get("name") for m in hit.get("mentions", []) if isinstance(m, dict)]
     out: dict[str, Any] = {
@@ -135,6 +140,9 @@ def _compact_hit(hit: dict[str, Any]) -> dict[str, Any]:
         "kind": hit.get("kind"),
         "text": hit.get("text"),
     }
+    system = hit.get("system")
+    if isinstance(system, dict):
+        out["system"] = system.get("name")
     if "score" in hit:
         out["score"] = (
             round(hit["score"], 4)

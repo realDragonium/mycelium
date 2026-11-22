@@ -249,3 +249,35 @@ def test_targets_refuse_an_unknown_statement(conn):
         ("single sign-on",),
         0,
     )
+
+
+def test_counts_statements_per_system(conn):
+    conn.execute(
+        "INSERT INTO entities (id, description) VALUES ('ent_paylark', 'Payments')"
+    )
+    conn.execute(
+        "INSERT INTO names (id, text, entity_id) VALUES "
+        "('nam_paylark', 'Paylark', 'ent_paylark')"
+    )
+    conn.execute(
+        "UPDATE statements SET system_entity_id = 'ent_paylark' "
+        "WHERE id IN ('stm_c', 'stm_d')"
+    )
+
+    systems = knowledge_health.systems(conn)
+
+    assert systems.main_statements == 3
+    assert [s.model_dump() for s in systems.systems] == [
+        {"entity_id": "ent_paylark", "name": "Paylark", "statements": 2}
+    ]
+
+
+def test_an_entity_used_only_as_a_system_is_not_unused(conn, drafts):
+    assert [i.id for i in knowledge_health.entities(conn, "unused").items] == [
+        "ent_unused"
+    ]
+    conn.execute(
+        "UPDATE statements SET system_entity_id = 'ent_unused' WHERE id = 'stm_c'"
+    )
+
+    assert knowledge_health.entities(conn, "unused").items == []

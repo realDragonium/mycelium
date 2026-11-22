@@ -234,10 +234,15 @@ CREATE TABLE IF NOT EXISTS entities (
 -- seeds and describes the vocabulary, but it stays open: the schema enforces
 -- only that kind is non-null. Phrasing checks and link direction rules are
 -- applied by the write path, not here.
+--
+-- `system_entity_id` names the app or platform the statement belongs to; NULL
+-- is the knowledge base's own product. Its index is `STATEMENT_SYSTEM_INDEX`:
+-- this script also runs on stores that predate the column.
 CREATE TABLE IF NOT EXISTS statements (
     id         TEXT PRIMARY KEY,
     kind       TEXT NOT NULL,
     text       TEXT NOT NULL,
+    system_entity_id TEXT REFERENCES entities(id),
     created_at TEXT,
     updated_at TEXT,
     created_by TEXT,
@@ -697,6 +702,13 @@ CREATE INDEX IF NOT EXISTS history.history_actor
 """
 
 
+#: Created after the migration runner rather than in `SCHEMA`, which runs
+#: before the column exists on an older store.
+STATEMENT_SYSTEM_INDEX = (
+    "CREATE INDEX IF NOT EXISTS statements_system ON statements (system_entity_id)"
+)
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     """Bring the substrate's schema up to the latest version.
 
@@ -741,6 +753,7 @@ def migrate(conn: sqlite3.Connection) -> None:
             raise
     conn.executescript(SCHEMA)
     migrations.apply_migrations(conn)
+    conn.execute(STATEMENT_SYSTEM_INDEX)
     if has_history(conn):
         conn.executescript(HISTORY_SCHEMA)
     link_type_aliases.seed_link_type_aliases(conn)

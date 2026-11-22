@@ -183,15 +183,12 @@ def _queue_draft_op(
     from .. import drafts_store
 
     actor = principal.id if principal is not None else None
-    # Drop None defaults so the stored payload only carries the args the
-    # caller actually supplied — replay re-applies defaults at apply time.
-    clean = {k: v for k, v in payload.items() if v is not None}
     with store.transaction(_drafts_db()):
         seq = drafts_store.add_op(
             _drafts_db(),
             draft_id=draft_id,
             kind=kind,
-            payload=clean,
+            payload=payload,
             created_by=actor,
         )
         revision = drafts_store.current_revision(_drafts_db(), draft_id)

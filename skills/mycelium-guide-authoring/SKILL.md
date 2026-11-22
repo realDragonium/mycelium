@@ -180,6 +180,8 @@ The descriptive layer models *this product's* system — its events, states, and
 
 Leave the anchor absent. Do **not** flag it as a dangling anchor to be closed later — there's nothing to author on the descriptive side. Do **not** invent an event in the modeled product just to give the action a target ("a token is generated in the partner system" is not an event the product observes; if the product observes anything, that's its own event, typically downstream).
 
+Give such an action the third party's `system` (the platform's entity, at app level; see `mycelium-authoring` §3a) so readers can tell *"do this in Paylark"* from a step in the product: `upsert_statement(kind="action", text="Copy the signing secret from the Webhooks page", system="Paylark")`. A guide mixes systems step by step: the `procedure` root belongs to the app whose capability it `teaches`, and each action carries its own system.
+
 Only flag a missing `performs` when the action should trigger an event in the modeled product's own system and that event simply hasn't been authored yet.
 
 ### When a cause has no `violates` anchor
@@ -431,7 +433,7 @@ Create the concepts the batch names first (`upsert_entity`), so the derived ment
 2. **Discovered?** (§2) — searched existing prescriptive content for the same procedure or diagnostic tree. Searched descriptive layer for anchor targets (capability for the procedure's `teaches`; properties the procedure will require/accept; events / states for action / check anchors). Concepts the texts name exist, with descriptions.
 3. **Procedure root present?** (§1, §3) — every how-to guide starts with one `procedure` statement, `teaches` a capability, composes properties via `requires` / `accepts`, and contains/sequences its actions. A guide that is just a chain of actions is missing its root.
 4. **Configurable inputs modeled as properties, not pseudo-actions?** (§3) — no actions of the form *"Identify X"* / *"Decide Y"* / *"Determine Z"* — those are property tells. Properties live in the descriptive layer, name their entity for a derived mention, and use `valued-by` when applicable. Lookups hang off properties via `obtained-by`.
-5. **Anchors exist, flagged, or legitimately absent?** (§4) — every `procedure` has a `teaches` capability; every `action` in the modeled product has (or has a flagged need for) a `performs` event; actions in third-party UIs have no anchor and need no flag; every `check` has (or needs) a `verifies` state; every non-free-standing `cause` has a `violates` state.
+5. **Anchors exist, flagged, or legitimately absent?** (§4) — every `procedure` has a `teaches` capability; every `action` in the modeled product has (or has a flagged need for) a `performs` event; actions in third-party UIs have no anchor and need no flag but carry the third party's `system`; every `check` has (or needs) a `verifies` state; every non-free-standing `cause` has a `violates` state.
 6. **Right `kind` per statement?** (§3) — procedure / action / check / cause picked by the routing test, not by what feels close.
 7. **Phrasing matches the kind?** (§7) — *"How to X"* for procedure, imperative for action, imperative-verification for check, declarative-condition for cause. No conditions in text. No compound steps. One atomic claim per statement.
 8. **Within-layer links wired?** (§6) — checks `confirms` / `refutes` causes; actions `resolves` causes. Diagnostic loops close.

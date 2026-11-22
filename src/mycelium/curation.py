@@ -61,6 +61,11 @@ OUTCOMES: dict[Kind, frozenset[Outcome]] = {
     "undescribed": frozenset({"proposed", "no_link", "skipped"}),
     "unused": frozenset({"proposed", "no_link", "skipped"}),
 }
+#: The kinds whose items are statements, which a claim can narrow to one
+#: system.
+SYSTEM_KINDS: frozenset[Kind] = frozenset(
+    {"isolated", "unnamed", "rephrase", "duplicate"}
+)
 LEASE = timedelta(minutes=30)
 MAX_BATCH = 20
 
@@ -202,10 +207,13 @@ def claim(
     follow_up_retries: int | None = None,
     answer_retries: int | None = None,
     skip_retries: int | None = None,
+    system: str | None = None,
 ) -> tuple[list[Candidate], list[str], str]:
     """Lease up to `limit` free items of `kind` to `claimant` and extend the
     lease on the items of that kind they already hold. With `skip_retries`,
-    a claim that ran out counts toward its item's stop as a skip does.
+    a claim that ran out counts toward its item's stop as a skip does. With
+    `system` (an entity id, or `store.MAIN_SYSTEM`), only items of a
+    `SYSTEM_KINDS` kind whose statements all have that system are leased.
 
     Returns the new items, the ids renewed and when the lease ends. The caller
     owns the transaction."""
@@ -256,6 +264,7 @@ def claim(
         follow_up_retries=follow_up_retries,
         answer_retries=answer_retries,
         at=now,
+        system=system,
     )
     if follow_up_retries is not None and kind in ("rephrase", "gap"):
         automation_stops.clear(
@@ -289,11 +298,14 @@ def _candidates(
     follow_up_retries: int | None,
     answer_retries: int | None,
     at: datetime,
+    system: str | None = None,
 ) -> list[Candidate]:
     """The first `limit` items of `kind`, in id order, that nobody holds, no
     attempt has settled, no undecided draft already covers and that were not
     stopped after too many skips."""
     if kind == "duplicate":
+        if system is not None:
+            pairs = [p for p in pairs if pair_in_system(conn, p.id, system)]
         return _duplicate_candidates(
             conn,
             drafts,
@@ -321,7 +333,8 @@ def _candidates(
         )
         sql = (
             f"SELECT s.id, s.id AS statement_id, s.text FROM statements s "
-            f"WHERE s.id > :after AND {where} ORDER BY s.id LIMIT :chunk"
+            f"WHERE s.id > :after AND {where}{_in_system('s', system)} "
+            "ORDER BY s.id LIMIT :chunk"
         )
     elif kind == "question":
         pending = set()
@@ -337,16 +350,23 @@ def _candidates(
             str(r[0])
             for r in drafts.execute("SELECT id FROM drafts WHERE decided_at IS NULL")
         }
+        in_system = (
+            ""
+            if system is None
+            else "AND EXISTS (SELECT 1 FROM statements st "
+            f"WHERE st.id = g.statement_id{_in_system('st', system)}) "
+        )
         sql = (
             "SELECT g.id, g.statement_id, g.text, g.draft_id FROM knowledge_gaps g "
             f"WHERE g.id > :after AND {_GAP_WHERE[kind]} "
             f"AND NOT {_GAP_SETTLED} AND NOT {_GAP_CLAIMED} "
             + ("AND g.draft_id IS NOT NULL " if draft_gaps_only else "")
+            + in_system
             + "ORDER BY g.id LIMIT :chunk"
         )
     params = _params(
         now, waiting_for_answer(drafts, answer_retries) if kind == "question" else ()
-    )
+    ) | {"system": system}
     chosen: list[sqlite3.Row] = []
     stopped = (
         automation_stops.stopped(conn, "gap_follow_up")
@@ -400,6 +420,29 @@ def _candidates(
         )
         for r in chosen
     ]
+
+
+def _in_system(alias: str, system: str | None) -> str:
+    """The condition, starting with AND, keeping statements (as `alias`) with
+    `system` bound as `:system`."""
+    if system is None:
+        return ""
+    if system == store.MAIN_SYSTEM:
+        return f" AND {alias}.system_entity_id IS NULL"
+    return f" AND {alias}.system_entity_id = :system"
+
+
+def pair_in_system(conn: sqlite3.Connection, pair_id: str, system: str) -> bool:
+    """Whether a duplicate pair is two statements that both have `system`."""
+    ids = pair_id.split("~")
+    if len(ids) != 2 or not all(i.startswith("stm_") for i in ids):
+        return False
+    row = conn.execute(
+        "SELECT COUNT(*) FROM statements s WHERE s.id IN (:a, :b)"
+        + _in_system("s", system),
+        {"a": ids[0], "b": ids[1], "system": system},
+    ).fetchone()
+    return int(row[0]) == 2
 
 
 def _follow_up_hops(conn: sqlite3.Connection, draft_id: str) -> int:
