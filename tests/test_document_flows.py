@@ -224,9 +224,12 @@ def test_a_revision_brief_shows_the_current_flows_and_says_they_are_replaced(db)
         document_type="entity-page",
         current_document=BODY,
         current_flows=[stored],
+        current_statement_ids=[corpus.requested],
     )
 
     assert "CURRENT FLOWS" in message
+    assert "STATEMENTS IT CITED (ids)." in message
+    assert f"where the text changes:\n{corpus.requested}" in message
     assert "The `flows` you submit replace this set" in message
     assert (
         f'- {{"name": "{NAME}", "title": "From request to download", '

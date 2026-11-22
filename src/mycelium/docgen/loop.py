@@ -488,6 +488,9 @@ def _open(
                 current_flows=revision_target.current.flows
                 if revision_target is not None
                 else (),
+                current_statement_ids=revision_target.current.statement_ids
+                if revision_target is not None
+                else (),
                 review_notes=review_notes,
                 refused_draft=refused_draft,
             )

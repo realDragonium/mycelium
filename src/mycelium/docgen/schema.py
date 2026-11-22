@@ -93,6 +93,8 @@ class CurrentDocument:
     content_revision: str | None = None
     #: The flows stored with the revision being revised.
     flows: tuple[StoredFlow, ...] = ()
+    #: The statements that revision cites.
+    statement_ids: tuple[str, ...] = ()
 
 
 #: Where a pull request stands at its destination.

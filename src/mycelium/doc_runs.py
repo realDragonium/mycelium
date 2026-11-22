@@ -536,6 +536,9 @@ def _revision_target(
         current=CurrentDocument(
             body=str(row["body"]),
             flows=() if stored is None else tuple(revision_flows(stored)),
+            statement_ids=()
+            if stored is None
+            else tuple(json.loads(stored["statement_ids"])),
         ),
     )
 

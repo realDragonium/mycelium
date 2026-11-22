@@ -558,6 +558,7 @@ def initial_user_message(
     anchor: Anchor | None = None,
     current_document: str | None = None,
     current_flows: Sequence[StoredFlow] = (),
+    current_statement_ids: Sequence[str] = (),
     review_notes: Sequence[ReviewNote] = (),
     refused_draft: RefusedDraft | None = None,
 ) -> str:
@@ -566,6 +567,7 @@ def initial_user_message(
         "\n=== CURRENT DOCUMENT ===\n"
         f"{current_document}\n=== END CURRENT DOCUMENT ==="
         + submitted_flows(current_flows)
+        + cited_statements(current_statement_ids)
         if current_document is not None
         else ""
     )
@@ -614,6 +616,18 @@ def initial_user_message(
 def _flow_block(flow: StoredFlow, *, with_ids: bool) -> str:
     lines = flow_drawing.flow_lines(flow.drawing, with_ids=with_ids)
     return "\n".join(f"  {line}" for line in lines)
+
+
+def cited_statements(statement_ids: Sequence[str]) -> str:
+    """The statements a document cited, for a writer about to submit it
+    again, who would otherwise have to find them a second time."""
+    if not statement_ids:
+        return ""
+    return (
+        "\n\nSTATEMENTS IT CITED (ids). Read the ones you still rest on with "
+        "get_statements before citing them again, and cite others where the "
+        "text changes:\n" + ", ".join(statement_ids)
+    )
 
 
 def submitted_flows(flows: Sequence[StoredFlow]) -> str:
@@ -674,6 +688,7 @@ def returned_submission(
     body: str,
     definitions: Sequence[FlowDefinition],
     drawn: Sequence[StoredFlow],
+    statement_ids: Sequence[str],
     findings: Sequence[str],
 ) -> str:
     """What a writer whose submission was refused, or sent back by review,
@@ -688,6 +703,7 @@ def returned_submission(
         + "\n\n"
         + document_payload(title=title, body=body)
         + _flows_text("THE FLOWS IT SUBMITTED", definitions, drawn)
+        + cited_statements(statement_ids)
     )
 
 

@@ -368,7 +368,7 @@ def submit(task: Task, claimant: str, result: dict[str, JsonValue]) -> Submitted
             state,
             [Finding(check="grounding", problem=problem)],
             loop._MAX_EMIT_BLOCKS - state.emit_blocks + 1,
-            returned=_Returned(title, body, definitions, flows),
+            returned=_Returned(title, body, definitions, flows, ids),
         )
     links, unmatched = loop._resolve_links(ctx, body)
     pending = Pending(
@@ -456,7 +456,11 @@ def _reviewed(
             _review_findings(record),
             loop._MAX_REVIEW_RETRIES - state.reviews + 1,
             returned=_Returned(
-                pending.title, pending.body, pending.flows, pending.flows
+                pending.title,
+                pending.body,
+                pending.flows,
+                pending.flows,
+                pending.statement_ids,
             ),
         )
     refused = loop._nothing(
@@ -494,6 +498,7 @@ class _Returned:
     definitions: Sequence[FlowDefinition]
     #: Those of `definitions` the server drew.
     drawn: Sequence[StoredFlow]
+    statement_ids: Sequence[str]
 
 
 def _refused(
@@ -524,6 +529,7 @@ def _refused(
                     body=returned.body,
                     definitions=returned.definitions,
                     drawn=returned.drawn,
+                    statement_ids=returned.statement_ids,
                     findings=[
                         f"{finding.check}: "
                         + (f"{finding.where} — " if finding.where else "")

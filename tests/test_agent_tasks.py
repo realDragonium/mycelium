@@ -561,6 +561,7 @@ def test_a_writer_sent_back_receives_its_last_document_and_flows_to_revise(
     assert "A [[Workspace Export]] downloads as a CSV file." in returned
     assert f'"start": "{requested}", "stop": ["{hidden}"]' in returned
     assert f"  1. [{requested}]" not in returned
+    assert returned.rstrip().endswith(f"cite others where the text changes:\n{queued}")
     assert SECRET not in returned
 
     _call(
