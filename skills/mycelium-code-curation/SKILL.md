@@ -172,8 +172,8 @@ release_curation_work([item_id], "answered",
   decides what the draft should become.
 - Evidence takes the operation-evidence shape below, one to five items. An
   answer without evidence is refused.
-- You cannot answer a draft you created; its questions are for someone
-  else.
+- The draft may be one your own account created: answer from the code, not
+  from what you remember of writing it.
 - If the code does not settle it, release the item as `skipped` and say so
   in your report; do not guess.
 

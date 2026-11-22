@@ -21,7 +21,7 @@ from mycelium.docgen.destinations import (
     DestinationError,
     load_destinations,
 )
-from mycelium.docgen.github_destination import deliver, pull_request_state, read
+from mycelium.docgen.github_destination import deliver, pull_request_state
 from product_settings_helpers import import_product_environment
 
 TOKEN = "credential-sentinel-8d76"
@@ -324,38 +324,7 @@ def test_blob_id_uses_utf8_byte_length():
     assert delivery.content_revision == expected_sha
 
 
-def test_read_fetches_the_recorded_path_from_the_base_after_review_closes():
-    requests: list[httpx.Request] = []
-    body = "# Edited during review\n"
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if request.url.path.endswith("/pulls"):
-            return httpx.Response(200, json=[])
-        return httpx.Response(
-            200,
-            json={
-                "encoding": "base64",
-                "content": base64.b64encode(body.encode()).decode(),
-                "sha": _blob_id(body),
-            },
-        )
-
-    current = read(
-        _config(),
-        "docs/recorded.md",
-        "gdc_123",
-        "configuring-sso",
-        {"DOCS_GITHUB_TOKEN": TOKEN},
-        client=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
-
-    assert current.body == body
-    assert requests[1].url.path.endswith("/contents/docs/recorded.md")
-    assert dict(requests[1].url.params) == {"ref": "docs-main"}
-
-
-def test_placed_images_are_committed_beside_the_document_and_read_back():
+def test_placed_images_are_committed_beside_the_document():
     image = b"\x89PNG fake bytes"
     image_sha = hashlib.sha1(
         f"blob {len(image)}\0".encode() + image, usedforsecurity=False
@@ -400,83 +369,6 @@ def test_placed_images_are_committed_beside_the_document_and_read_back():
     ]
     assert delivery.content_revision == _blob_id(committed)
 
-    def file(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/pulls"):
-            return httpx.Response(200, json=[])
-        return httpx.Response(
-            200,
-            json={
-                "encoding": "base64",
-                "content": base64.b64encode(committed.encode()).decode(),
-                "sha": _blob_id(committed),
-            },
-        )
-
-    current = read(
-        _config(),
-        delivery.path,
-        "gdc_123",
-        "configuring-sso",
-        {"DOCS_GITHUB_TOKEN": TOKEN},
-        client=httpx.Client(transport=httpx.MockTransport(file)),
-    )
-    assert current.body == document.body
-    assert current.content_revision == _blob_id(committed)
-
-
-def test_read_fetches_reviewer_edits_from_the_open_document_branch():
-    requests: list[httpx.Request] = []
-    body = "# Reviewer edit\n"
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if request.url.path.endswith("/pulls"):
-            return httpx.Response(
-                200,
-                json=[_pull("https://github.com/acme/handbook/pull/17")],
-            )
-        return httpx.Response(
-            200,
-            json={
-                "encoding": "base64",
-                "content": base64.b64encode(body.encode()).decode(),
-                "sha": _blob_id(body),
-            },
-        )
-
-    current = read(
-        _config(),
-        "docs/recorded.md",
-        "gdc_123",
-        "configuring-sso",
-        {"DOCS_GITHUB_TOKEN": TOKEN},
-        client=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
-
-    assert current.body == body
-    assert current.content_revision == _blob_id(body)
-    assert dict(requests[1].url.params) == {
-        "ref": "mycelium/docs/configuring-sso-gdc_123"
-    }
-
-
-def test_read_reports_a_file_absent_from_the_base_as_no_document():
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/pulls"):
-            return httpx.Response(200, json=[])
-        return httpx.Response(404, json={"message": "Not Found"})
-
-    current = read(
-        _config(),
-        "docs/recorded.md",
-        "gdc_123",
-        "configuring-sso",
-        {"DOCS_GITHUB_TOKEN": TOKEN},
-        client=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
-
-    assert current is None
-
 
 def test_redelivery_after_an_unmerged_close_recreates_the_absent_file():
     requests, base_handler = _responses()
@@ -489,11 +381,7 @@ def test_redelivery_after_an_unmerged_close_recreates_the_absent_file():
 
     delivery = deliver(
         _config(),
-        replace(
-            _document(),
-            delivered_path="docs/configuring-sso.md",
-            delivered_content_revision=_blob_id("closed without merging"),
-        ),
+        replace(_document(), delivered_path="docs/configuring-sso.md"),
         {"DOCS_GITHUB_TOKEN": TOKEN},
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
@@ -501,45 +389,6 @@ def test_redelivery_after_an_unmerged_close_recreates_the_absent_file():
     assert delivery.content_revision == CONTENT_SHA
     assert delivery.pull_request_number == 17
     assert any(request.url.path.endswith("/git/blobs") for request in requests)
-
-
-def test_redelivery_after_an_unmerged_close_accepts_an_earlier_published_base():
-    """The closed PR's blob never reached the base, which holds an older one."""
-    _, base_handler = _responses()
-    earlier = "# Configuring SSO, as merged before\n"
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if "/contents/" in request.url.path:
-            return httpx.Response(
-                200,
-                json={
-                    "encoding": "base64",
-                    "content": base64.b64encode(earlier.encode()).decode(),
-                    "sha": _blob_id(earlier),
-                },
-            )
-        return base_handler(request)
-
-    document = replace(
-        _document(),
-        delivered_path="docs/configuring-sso.md",
-        delivered_content_revision=_blob_id("closed without merging"),
-    )
-    with pytest.raises(DestinationError, match="made after this revision"):
-        deliver(
-            _config(),
-            document,
-            {"DOCS_GITHUB_TOKEN": TOKEN},
-            client=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
-
-    delivery = deliver(
-        _config(),
-        replace(document, published_content_revisions=frozenset({_blob_id(earlier)})),
-        {"DOCS_GITHUB_TOKEN": TOKEN},
-        client=httpx.Client(transport=httpx.MockTransport(handler)),
-    )
-    assert delivery.content_revision == CONTENT_SHA
 
 
 def _deleted_on_open_branch(request: httpx.Request) -> httpx.Response | None:
@@ -552,23 +401,6 @@ def _deleted_on_open_branch(request: httpx.Request) -> httpx.Response | None:
     return None
 
 
-def test_a_file_deleted_in_the_open_pull_request_is_not_read_as_absent():
-    def handler(request: httpx.Request) -> httpx.Response:
-        response = _deleted_on_open_branch(request)
-        assert response is not None
-        return response
-
-    with pytest.raises(DestinationError, match="deleted it in the open pull request"):
-        read(
-            _config(),
-            "docs/recorded.md",
-            "gdc_123",
-            "configuring-sso",
-            {"DOCS_GITHUB_TOKEN": TOKEN},
-            client=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
-
-
 def test_delivery_does_not_restore_a_file_deleted_in_the_open_pull_request():
     requests, base_handler = _responses()
 
@@ -579,11 +411,7 @@ def test_delivery_does_not_restore_a_file_deleted_in_the_open_pull_request():
     with pytest.raises(DestinationError, match="deleted it in the open pull request"):
         deliver(
             _config(),
-            replace(
-                _document(),
-                delivered_path="docs/configuring-sso.md",
-                delivered_content_revision=_blob_id("delivered"),
-            ),
+            replace(_document(), delivered_path="docs/configuring-sso.md"),
             {"DOCS_GITHUB_TOKEN": TOKEN},
             client=httpx.Client(transport=httpx.MockTransport(handler)),
         )
@@ -717,12 +545,7 @@ def test_redelivery_aligns_a_closed_review_branch_when_base_already_has_the_body
 
     delivery = deliver(
         _config(),
-        replace(
-            _document(),
-            delivered_path="docs/recorded.md",
-            delivered_content_revision=_blob_id("previous body"),
-            revision_source_content_revision=_blob_id("source body"),
-        ),
+        replace(_document(), delivered_path="docs/recorded.md"),
         {"DOCS_GITHUB_TOKEN": TOKEN},
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
@@ -760,7 +583,7 @@ def test_redelivery_aligns_a_closed_review_branch_when_base_already_has_the_body
     assert delivery.content_revision == CONTENT_SHA
 
 
-def test_redelivery_refuses_when_the_file_changed_after_generation():
+def test_redelivery_overwrites_a_file_changed_in_the_open_pull_request():
     requests, base_handler = _responses(
         existing_reference="https://github.com/acme/handbook/pull/17"
     )
@@ -778,23 +601,18 @@ def test_redelivery_refuses_when_the_file_changed_after_generation():
             )
         return base_handler(request)
 
-    document = replace(
-        _document(),
-        delivered_path="docs/configuring-sso.md",
-        revision_source_content_revision="a" * 40,
+    delivery = deliver(
+        _config(),
+        replace(_document(), delivered_path="docs/configuring-sso.md"),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
-    with pytest.raises(
-        DestinationError,
-        match="made after this revision was written",
-    ):
-        deliver(
-            _config(),
-            document,
-            {"DOCS_GITHUB_TOKEN": TOKEN},
-            client=httpx.Client(transport=httpx.MockTransport(handler)),
-        )
 
-    assert not any(request.url.path.endswith("/git/blobs") for request in requests)
+    assert delivery.content_revision == CONTENT_SHA
+    (tree,) = [_request_json(r) for r in requests if r.url.path.endswith("/git/trees")]
+    assert [(entry["path"], entry["sha"]) for entry in tree["tree"]] == [
+        ("docs/configuring-sso.md", CONTENT_SHA)
+    ]
 
 
 def test_an_enterprise_destination_uses_the_hosts_api_v3_base():

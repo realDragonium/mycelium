@@ -117,20 +117,6 @@ def due(
     return rows
 
 
-def _planner(drafts: sqlite3.Connection, rows: list[sqlite3.Row]) -> str | None:
-    """The agent that made the plan these items came from, if one did."""
-    for plan_id in {str(row["plan_id"]) for row in rows}:
-        plan = doc_plans.get_plan(drafts, plan_id)
-        agent = (
-            json.loads(plan["summary"]).get("agent")
-            if plan is not None and plan["summary"]
-            else None
-        )
-        if isinstance(agent, str):
-            return agent
-    return None
-
-
 def _task(
     drafts: sqlite3.Connection, planned: Target, rows: list[sqlite3.Row]
 ) -> ai.StructuredTask[Verdicts]:
@@ -331,7 +317,6 @@ def start(guideline_set: str, *, call: Call | None = None) -> bool:
                 "plan_review",
                 subject_id=None,
                 state={"guideline_set": guideline_set, "item_ids": list(item_ids)},
-                excluded_claimant=_planner(drafts, rows),
             )
             return True
         context = contextvars.copy_context()

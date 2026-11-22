@@ -34,11 +34,13 @@ from typing import TYPE_CHECKING, Any
 
 from .. import timestamps
 from ..ask.prompts import format_recon
-from .schema import ReviewFinding
+from . import flows as flow_drawing
+from .schema import FlowDefinition, RefusedDraft, ReviewFinding, StoredFlow
 
 if TYPE_CHECKING:
     from ..audiences import Audience
     from ..media import Offer
+    from .reads import ConceptContext, ExistingPage
     from .trace import ReviewNote
 
 __all__ = [
@@ -84,7 +86,9 @@ never reaches the page.
 YOUR TOOLS
 The substrate's read primitives (search_statements, \
 get_statements, get_entity, list_statements, grep_statements, discover_facts, \
-and the vocabulary lookups above) — use them freely. Plus `report_knowledge_gap`, for \
+and the vocabulary lookups above) — use them freely. `preview_flow` shows the \
+steps that follow from one statement, read from its links; the statements it \
+returns count as read. Plus `report_knowledge_gap`, for \
 filing what the substrate could not supply. You have NO write tool: nothing \
 you do can change the substrate, and the document does not become substrate \
 truth. You finish by calling exactly ONE terminal tool: `emit_document`.
@@ -118,7 +122,24 @@ say what is not known in the reader's terms ("this is not documented yet"), \
 and let the cited ids travel beside the document.
 - Media placed other than as `![alt text](media:med_...)`, an image with \
   empty alt text, or a media id no read offered you.
+- A flow whose start or stop does not exist or this audience may not see, a \
+  flow that draws fewer than three statements, a placement naming no flow in \
+  `flows`, a flow in `flows` the body never places, and a flow name that is \
+  malformed or used twice. An image placeholder whose description has fewer \
+  than three words. All of them come back in one refusal.
 These are checked before anything is stored, and you will be asked again.
+
+CONCEPT LINKS AND FLOWS
+Both are optional. Link a concept the reader may want to open as `[[Name]]`, \
+or `[[Name|text shown]]` where the sentence needs other words, using a name \
+the knowledge base gives that concept. A link that matches no concept is not \
+refused: it reads as its text. To show something that happens in steps, \
+`preview_flow` it, then hand it over in `flows` as `{name, title, start, \
+stop}` and place it in the body with a fenced block whose info string is \
+`flow` and whose only content is the name. The server draws it from the \
+stored links, so the body carries no statement ids. Choose `start` and `stop` \
+so the drawing stays readable: start where the process the text describes \
+begins, and stop it where the text stops.
 
 MEDIA
 A read result may end with AVAILABLE MEDIA: screenshots and recordings \
@@ -131,6 +152,12 @@ for a reader who cannot see it. A template may mark an image slot as \
 `{Image: what it should show}`: fill it with an offered item that shows that, \
 or leave the slot out. Never describe a screenshot you were not offered, and \
 leave out media that does not fit the text.
+
+IMAGE PLACEHOLDERS
+Where seeing a screen would help the reader and no offered media shows it, \
+mark the place with `![what the picture should show](image-wanted)` on its \
+own line. Describe the screen and the state it is in, in at least three \
+words; a person adds the picture later. It is not media and needs no id.
 
 WHEN THE SUBSTRATE FALLS SHORT
 The template will ask for things the substrate does not hold. That is the \
@@ -209,6 +236,16 @@ whose alt text does not say what it shows, or one that, by its alt text and \
 caption, does not show what the surrounding text describes. Fail EXPOSURE for \
 an image whose alt text or caption reveals what this audience must not get. \
 Leaving an image slot empty conforms.
+`[[Name]]` and `[[Name|text]]` link a concept, and a fenced block with the \
+info string `flow` holding one name places a flow the server draws. Both are \
+permitted body syntax, not placeholders left in. PLACED FLOWS says what each \
+placed flow shows: the reader sees its caption, steps, conditions, outcomes \
+and what it says continues, so the exposure check covers them as it covers \
+the body. Fail CONFORMANCE for a flow that does not show what the \
+surrounding text describes.
+`![what the picture should show](image-wanted)` marks where a picture would \
+help. It is permitted body syntax: not media, and not a placeholder left in. \
+Fail CONFORMANCE for one only when its description does not say what to show.
 
 {instructions}
 
@@ -402,10 +439,48 @@ class Anchor:
     statements: list[dict[str, Any]]
     #: How many statements mention it, of which `statements` is the first page.
     total: int
+    #: None when the run's reader cannot supply it.
+    context: ConceptContext | None = None
+    #: Documents of this profile about the concepts in `context`.
+    pages: Sequence[ExistingPage] = ()
 
 
 def _article(noun: str) -> str:
     return "an" if noun[:1].lower() in "aeiou" else "a"
+
+
+def _concept_lines(context: ConceptContext) -> list[str]:
+    def quoted(name: str, entity_id: str) -> str:
+        return f"{json.dumps(name, ensure_ascii=False)} ({entity_id})"
+
+    lines: list[str] = []
+    if context.related:
+        lines.append("\nRELATED CONCEPTS (its direct concept links):")
+        lines.extend(
+            f"- this concept {link.link_type} {quoted(link.name, link.entity_id)}"
+            if link.direction == "outgoing"
+            else f"- {quoted(link.name, link.entity_id)} {link.link_type} this concept"
+            for link in context.related
+        )
+    if context.more_specific:
+        lines.append(
+            "\nMORE SPECIFIC CONCEPTS (it contains them, or they are a kind of "
+            "it; with how many statements mention each):"
+        )
+        lines.extend(
+            f"- {quoted(concept.name, concept.entity_id)}: {concept.statements}"
+            for concept in context.more_specific
+        )
+    if context.named_together:
+        lines.append(
+            "\nOFTEN NAMED TOGETHER (concepts most often named in the same "
+            "statements, with how many statements name both):"
+        )
+        lines.extend(
+            f"- {quoted(concept.name, concept.entity_id)}: {concept.statements}"
+            for concept in context.named_together
+        )
+    return lines
 
 
 def format_anchor(anchor: Anchor) -> str:
@@ -417,8 +492,29 @@ def format_anchor(anchor: Anchor) -> str:
     ]
     if len(anchor.names) > 1:
         lines.append("Also called: " + ", ".join(anchor.names[1:]))
+    lines.append(
+        f"{json.dumps(name, ensure_ascii=False)} is its preferred name. Call "
+        "every concept by its preferred name throughout, which is the name "
+        "this message gives it. Do not list this concept's other names: the "
+        "page shows them."
+    )
     if anchor.description.strip():
         lines.append("Description: " + anchor.description.strip())
+    if anchor.context is not None:
+        lines.extend(_concept_lines(anchor.context))
+    if anchor.pages:
+        lines.append(
+            "\nPAGES THAT EXIST (documents this profile already holds about "
+            "the concepts above, each with its title and how it opens). Link "
+            "to a page with its concept's name instead of repeating what it "
+            "covers:"
+        )
+        lines.extend(
+            f"- {json.dumps(page.name, ensure_ascii=False)}: "
+            f"{json.dumps(page.title, ensure_ascii=False)}"
+            + (f" — {page.lead}" if page.lead else "")
+            for page in anchor.pages
+        )
     lines.append(
         f"\nSTATEMENTS THAT MENTION IT ({len(anchor.statements)} of {anchor.total}; "
         "already retrieved, so you may cite them directly):"
@@ -433,10 +529,22 @@ def format_anchor(anchor: Anchor) -> str:
             f"with list_statements(entity_id={anchor.entity_id!r}, "
             f"offset={len(anchor.statements)}).)"
         )
+    if anchor.context is not None and anchor.context.flow_starts:
+        lines.append(
+            "\nWHERE FLOWS START (statements about it that begin a chain of "
+            "steps, largest first, with how many statements the drawing from "
+            "there holds; preview_flow(start=<id>) shows it):"
+        )
+        lines.extend(
+            f"- {start.statement_id} [{start.kind}] {start.text} "
+            f"({start.size} statements)"
+            for start in anchor.context.flow_starts
+        )
     lines.append(
         "\nCOVERAGE STARTS HERE. Each statement above is about the concept, so "
         "each belongs in the document unless it is off-topic for what the "
-        "request asks; leave one out deliberately, never by not getting to it. "
+        "request asks or the template asks for a summary; leave one out "
+        "deliberately, never by not getting to it. "
         "Then follow their links and search for what is about the concept "
         "without naming it."
     )
@@ -451,19 +559,17 @@ def initial_user_message(
     document_type: str,
     anchor: Anchor | None = None,
     current_document: str | None = None,
-    edited_at_destination: bool = False,
+    current_flows: Sequence[StoredFlow] = (),
+    current_statement_ids: Sequence[str] = (),
     review_notes: Sequence[ReviewNote] = (),
+    refused_draft: RefusedDraft | None = None,
 ) -> str:
-    provenance = (
-        "\nThis is the published copy, which people edited after Mycelium "
-        "published it. Keep their edits unless the request asks to change them."
-        if edited_at_destination
-        else ""
-    )
     revision = (
         "\n\nCURRENT DOCUMENT TO REVISE (verbatim):"
-        f"{provenance}\n=== CURRENT DOCUMENT ===\n"
+        "\n=== CURRENT DOCUMENT ===\n"
         f"{current_document}\n=== END CURRENT DOCUMENT ==="
+        + submitted_flows(current_flows)
+        + cited_statements(current_statement_ids)
         if current_document is not None
         else ""
     )
@@ -479,6 +585,16 @@ def initial_user_message(
         if review_notes
         else ""
     )
+    if refused_draft is not None:
+        notes += (
+            "THE DOCUMENT THAT ATTEMPT SUBMITTED. Revise this text instead of "
+            "starting over: keep what the notes do not touch and fix what they "
+            "name. Read a statement before citing it, and submit every flow "
+            "the body still places.\n"
+            + document_payload(title=refused_draft.title, body=refused_draft.body)
+            + _flows_text("ITS FLOWS", refused_draft.flows, refused_draft.flows)
+            + "\n\n"
+        )
     return (
         f"DOCUMENTATION REQUEST:\n-----\n{prompt}\n-----\n\n"
         + notes
@@ -496,6 +612,100 @@ def initial_user_message(
         + revision
         + "\n\nFile a report_knowledge_gap for anything the template needs and the "
         "substrate does not hold. Then call emit_document once."
+    )
+
+
+def _flow_block(flow: StoredFlow, *, with_ids: bool) -> str:
+    lines = flow_drawing.flow_lines(flow.drawing, with_ids=with_ids)
+    return "\n".join(f"  {line}" for line in lines)
+
+
+def cited_statements(statement_ids: Sequence[str]) -> str:
+    """The statements a document cited, for a writer about to submit it
+    again, who would otherwise have to find them a second time."""
+    if not statement_ids:
+        return ""
+    return (
+        "\n\nSTATEMENTS IT CITED (ids). Read the ones you still rest on with "
+        "get_statements before citing them again, and cite others where the "
+        "text changes:\n" + ", ".join(statement_ids)
+    )
+
+
+def submitted_flows(flows: Sequence[StoredFlow]) -> str:
+    """The flows a document places, for a writer about to submit it again:
+    each one's definition and its drawing, with statement ids."""
+    if not flows:
+        return ""
+    return (
+        "\n\nCURRENT FLOWS (the flows this document places, each with its "
+        "definition and the drawing stored for it). The `flows` you submit "
+        "replace this set: submit again every flow the body still places, and "
+        "leave out one whose placement you removed.\n"
+        + "\n".join(
+            "- "
+            + json.dumps(
+                flow.model_dump(include={"name", "title", "start", "stop"}),
+                ensure_ascii=False,
+            )
+            + "\n"
+            + _flow_block(flow, with_ids=True)
+            for flow in flows
+        )
+    )
+
+
+def _flows_text(
+    heading: str,
+    definitions: Sequence[FlowDefinition],
+    drawn: Sequence[StoredFlow],
+) -> str:
+    """Submitted flows as text: each definition, and its drawing with
+    statement ids where one was made."""
+    if not definitions:
+        return ""
+    drawings = {flow.name: flow for flow in drawn}
+    return (
+        f"\n\n{heading} (each with its definition and, where it was drawn, "
+        "its drawing):\n"
+        + "\n".join(
+            "- "
+            + json.dumps(
+                definition.model_dump(include={"name", "title", "start", "stop"}),
+                ensure_ascii=False,
+            )
+            + (
+                "\n" + _flow_block(drawings[definition.name], with_ids=True)
+                if definition.name in drawings
+                else ""
+            )
+            for definition in definitions
+        )
+    )
+
+
+def returned_submission(
+    *,
+    title: str,
+    body: str,
+    definitions: Sequence[FlowDefinition],
+    drawn: Sequence[StoredFlow],
+    statement_ids: Sequence[str],
+    findings: Sequence[str],
+) -> str:
+    """What a writer whose submission was refused, or sent back by review,
+    reads when it takes the work up again: the document it submitted and why
+    it came back."""
+    return (
+        "YOUR LAST SUBMISSION CAME BACK. Revise the text below instead of "
+        "starting over: keep what the findings do not touch, fix what they "
+        "name, and submit the whole document again with its flows.\n\n"
+        "FINDINGS:\n"
+        + "\n".join(f"- {finding}" for finding in findings)
+        + "\n\n"
+        + document_payload(title=title, body=body)
+        + _flows_text("THE FLOWS IT SUBMITTED", definitions, drawn)
+        + cited_statements(statement_ids)
     )
 
 
@@ -541,8 +751,21 @@ def review_message(
     body: str,
     statements: Any | None,
     placed_media: Sequence[Offer] = (),
+    placed_flows: Sequence[StoredFlow] = (),
 ) -> str:
     """The reviewer's sole user message, composed without writer history."""
+    flow_text = (
+        "PLACED FLOWS (what each flow the body places shows; the server draws "
+        "them from stored links):\n"
+        + "\n".join(
+            f"- `{flow.name}`: {json.dumps(flow.title, ensure_ascii=False)}\n"
+            + _flow_block(flow, with_ids=False)
+            for flow in placed_flows
+        )
+        + "\n\n"
+        if placed_flows
+        else ""
+    )
     media_text = (
         "PLACED MEDIA (what each image the body places shows; you cannot see "
         "the pixels):\n"
@@ -565,6 +788,7 @@ def review_message(
         "CITED STATEMENTS:\n"
         f"{statement_text}\n\n"
         + media_text
+        + flow_text
         + "Review only this finished document against the checks in your system "
         "prompt, then call record_review once."
     )
@@ -604,6 +828,8 @@ def review_retry_message(
     body: str,
     exposure_findings: list[ReviewFinding],
     conformance_findings: list[ReviewFinding],
+    flows: Sequence[StoredFlow] = (),
+    statement_ids: Sequence[str] = (),
 ) -> str:
     """The rejected document and findings for the fresh writer context."""
     groups = []
@@ -631,10 +857,14 @@ def review_retry_message(
         "ORIGINAL DOCUMENTATION REQUEST:\n-----\n"
         f"{prompt}\n"
         "-----\n\n"
-        f"{document_payload(title=title, body=body)}\n\n"
+        f"{document_payload(title=title, body=body)}"
+        f"{submitted_flows(flows)}"
+        f"{cited_statements(statement_ids)}\n\n"
         f"REVIEW FINDINGS:\n{findings}\n\n"
         "This is the ONE further attempt. A second rejection ends the run "
-        "with nothing recorded. Fix the findings. You may read more from the "
+        "with nothing recorded. Revise the document above instead of starting "
+        "over: keep what the findings do not touch and fix what they name. "
+        "You may read more from the "
         "substrate if a finding needs material you do not have. The same "
         "grounding rule applies: every statement_ids entry must be one THIS "
         "RUN retrieved, including anything read before the rejection. Then "

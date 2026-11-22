@@ -13,8 +13,10 @@ A submission is the `emit_document` input and passes the loop's gates: it
 cites only statements this task read and its audience may see, uses no
 internal vocabulary and places only media it was offered. A grounded document
 is then reviewed, by the server's reviewer on the documentation provider or,
-when the setting says so, by a second agent that is not the writer. Refusals
-come back as findings, as many times as the internal loop allows. What is
+when the setting says so, by an agent that claims the review task. Refusals
+come back as findings, as many times as the internal loop allows, and the
+brief then carries the refused document so whoever takes the task up revises
+it. What is
 finally kept or refused is recorded by the same code that records an internal
 run (`doc_runs.record_result`).
 """
@@ -40,21 +42,26 @@ from .. import (
 from ..agent_tasks import Finding, ReadResult, Submitted, Task
 from ..ask.substrate import InProcessSubstrate
 from ..model_settings import AgentReview
-from . import loop, prompts
+from . import loop, prompts, reads
 from .config import DOCTRINE_NAME, DocgenConfig
 from .schema import (
     DocgenResult,
     DocumentWritten,
+    FlowDefinition,
     NothingWritten,
+    RefusedDraft,
     ReviewCheck,
     ReviewRecord,
     RevisionTarget,
+    StoredFlow,
+    StoredLink,
 )
 from .tools import (
     _EMIT_SCHEMA,
     READ_TOOLS,
     build_tools,
     emit_tool_def,
+    parse_emit_flows,
     parse_emit_input,
     parse_review_input,
     review_tool_def,
@@ -77,6 +84,8 @@ class Request(BaseModel):
     writer_anchor: str | None
     target: RevisionTarget | None
     review_notes: list[ReviewNote]
+    #: What the run this one retries submitted and had refused.
+    refused_draft: RefusedDraft | None = None
     review: AgentReview
     #: The server reviewer's model, captured with the request.
     provider: ai.Provider
@@ -91,10 +100,17 @@ class Pending(BaseModel):
     body: str
     statement_ids: list[str]
     gaps: list[str]
+    concept_links: list[StoredLink] = []
+    flows: list[StoredFlow] = []
+    #: Concept links as written that matched no concept, or more than one.
+    unmatched_links: list[str] = []
 
 
 class WritingState(BaseModel):
     request: Request
+    #: The brief's first message as the opening built it, before any refused
+    #: submission was added to it.
+    opening_input: str = ""
     #: What the opening reads put in front of the writer.
     opening: list[str] = []
     #: What the current claimant has read, the opening included.
@@ -154,7 +170,7 @@ def _open(request: Request) -> loop._RunContext | NothingWritten:
         requested_set=request.guideline_set,
         requested_type=request.document_type,
         client=None,
-        substrate=InProcessSubstrate(),
+        substrate=reads.DocumentationSubstrate(InProcessSubstrate()),
         report_gap=loop._default_gap_reporter,
         config=config,
         doctrine_text=instructions.text,
@@ -169,6 +185,7 @@ def _open(request: Request) -> loop._RunContext | NothingWritten:
         scope_reader=loop._scope_reader,
         review_notes=request.review_notes,
         media_lookup=media,
+        refused_draft=request.refused_draft,
     )
 
 
@@ -188,10 +205,11 @@ def _resume(state: WritingState) -> loop._RunContext:
         request.guideline_set, request.document_type
     )
     config = _config(request)
-    scoped = audience_scope.scoped(InProcessSubstrate(), audience)
+    scoped = audience_scope.scoped(
+        reads.DocumentationSubstrate(InProcessSubstrate()), audience
+    )
     return loop._RunContext(
         prompt=request.prompt,
-        manual_document=None,
         client=None,
         substrate=scoped,
         report_gap=loop._default_gap_reporter,
@@ -319,6 +337,7 @@ def submit(task: Task, claimant: str, result: dict[str, JsonValue]) -> Submitted
     ctx = _resume(state)
     try:
         title, body, ids, gaps = parse_emit_input(dict(result))
+        definitions = parse_emit_flows(dict(result))
     except ValueError as exc:
         state.malformed += 1
         if state.malformed > loop._MAX_MALFORMED_RETRIES:
@@ -334,9 +353,7 @@ def submit(task: Task, claimant: str, result: dict[str, JsonValue]) -> Submitted
             [Finding(check="shape", problem=str(exc))],
             loop._MAX_MALFORMED_RETRIES - state.malformed + 1,
         )
-    problem = loop._emit_problem(
-        title, body, ids, ctx.retrieved_ids, ctx.visible_ids
-    ) or loop._media_problem(ctx, body)
+    problem, flows = loop._submission_problem(ctx, title, body, ids, definitions)
     if problem is not None:
         state.emit_blocks += 1
         if state.emit_blocks > loop._MAX_EMIT_BLOCKS:
@@ -351,8 +368,18 @@ def submit(task: Task, claimant: str, result: dict[str, JsonValue]) -> Submitted
             state,
             [Finding(check="grounding", problem=problem)],
             loop._MAX_EMIT_BLOCKS - state.emit_blocks + 1,
+            returned=_Returned(title, body, definitions, flows, ids),
         )
-    pending = Pending(title=title, body=body, statement_ids=ids, gaps=gaps)
+    links, unmatched = loop._resolve_links(ctx, body)
+    pending = Pending(
+        title=title,
+        body=body,
+        statement_ids=loop._with_flow_statements(ids, flows),
+        gaps=gaps,
+        concept_links=links,
+        flows=flows,
+        unmatched_links=unmatched,
+    )
     if state.request.review == "agent":
         return _queue_review(task, claimant, state, ctx, pending)
     return _server_review(task, state, ctx, pending)
@@ -367,7 +394,9 @@ def _server_review(
         server.model_loop_slot(),
         ai.usage.attributed("docgen", run_id=state.request.run_id),
     ):
-        record = loop._review(ctx, pending.title, pending.body, pending.statement_ids)
+        record = loop._review(
+            ctx, pending.title, pending.body, pending.statement_ids, pending.flows
+        )
     if record is None:
         return _close(
             task,
@@ -393,12 +422,16 @@ def _reviewed(
     record = record.model_copy(update={"attempts": state.reviews + 1})
     if record.passed:
         ctx.cited_statements = cited
+        if not ctx.trace.unmatched_links:
+            loop.note_unmatched_links(ctx, pending.unmatched_links)
         written = DocumentWritten(
             slug=loop._slug(pending.title),
             title=pending.title,
             body=pending.body,
             statement_ids=pending.statement_ids,
             cited_statements=cited,
+            concept_links=pending.concept_links,
+            flows=pending.flows,
             guideline_set=state.request.guideline_set,
             document_type=state.request.document_type,
             review=record,
@@ -407,7 +440,13 @@ def _reviewed(
                 ctx, "document_written", cited=pending.statement_ids
             ),
         )
-        return _close(task, state, written, failed=False)
+        return _close(
+            task,
+            state,
+            written,
+            failed=False,
+            note=_links_note(pending.unmatched_links),
+        )
     state.reviews += 1
     state.pending = None
     if state.reviews <= loop._MAX_REVIEW_RETRIES:
@@ -416,6 +455,13 @@ def _reviewed(
             state,
             _review_findings(record),
             loop._MAX_REVIEW_RETRIES - state.reviews + 1,
+            returned=_Returned(
+                pending.title,
+                pending.body,
+                pending.flows,
+                pending.flows,
+                pending.statement_ids,
+            ),
         )
     refused = loop._nothing(
         ctx,
@@ -424,6 +470,8 @@ def _reviewed(
         title=pending.title,
         body=pending.body,
         cited=pending.statement_ids,
+        links=pending.concept_links,
+        flows=pending.flows,
     )
     return _close(task, state, refused, failed=True)
 
@@ -441,18 +489,76 @@ def _review_findings(record: ReviewRecord) -> list[Finding]:
     ]
 
 
+@dataclasses.dataclass(frozen=True)
+class _Returned:
+    """A submission that was read and then refused."""
+
+    title: str
+    body: str
+    definitions: Sequence[FlowDefinition]
+    #: Those of `definitions` the server drew.
+    drawn: Sequence[StoredFlow]
+    statement_ids: Sequence[str]
+
+
 def _refused(
-    task: Task, state: WritingState, findings: list[Finding], retries_left: int
+    task: Task,
+    state: WritingState,
+    findings: list[Finding],
+    retries_left: int,
+    *,
+    returned: _Returned | None = None,
 ) -> Submitted:
+    """Refuse a submission. One that could be read goes into the brief with
+    its findings: the task may be taken up again without the conversation
+    that wrote it, by this agent or another."""
     from .. import drafts_store
 
-    return agent_tasks.refused(
-        drafts_store.connection(), task, findings, retries_left, state=_dump(state)
+    conn = drafts_store.connection()
+    if returned is not None and task.brief is not None:
+        state.opening_input = state.opening_input or str(task.brief["input"])
+        agent_tasks.save(
+            conn,
+            task.id,
+            brief={
+                **task.brief,
+                "input": state.opening_input
+                + "\n\n"
+                + prompts.returned_submission(
+                    title=returned.title,
+                    body=returned.body,
+                    definitions=returned.definitions,
+                    drawn=returned.drawn,
+                    statement_ids=returned.statement_ids,
+                    findings=[
+                        f"{finding.check}: "
+                        + (f"{finding.where} — " if finding.where else "")
+                        + finding.problem
+                        for finding in findings
+                    ],
+                ),
+            },
+        )
+    return agent_tasks.refused(conn, task, findings, retries_left, state=_dump(state))
+
+
+def _links_note(unmatched: Sequence[str]) -> str:
+    if not unmatched:
+        return ""
+    return (
+        " The document holds "
+        + loop.unmatched_links_note(unmatched)
+        + ". Revise the document to correct them."
     )
 
 
 def _close(
-    task: Task, state: WritingState, result: DocgenResult, *, failed: bool
+    task: Task,
+    state: WritingState,
+    result: DocgenResult,
+    *,
+    failed: bool,
+    note: str = "",
 ) -> Submitted:
     """Record the run's outcome as an internal run's is recorded, and close
     the task."""
@@ -472,7 +578,8 @@ def _close(
     return agent_tasks.closed(
         drafts_store.connection(),
         task,
-        reason or "The document was reviewed and saved; see get_documentation_run.",
+        reason
+        or "The document was reviewed and saved; see get_documentation_run." + note,
         failed=failed,
         findings=_review_findings(result.review)
         if isinstance(result, NothingWritten) and result.review is not None
@@ -516,6 +623,7 @@ def _queue_review(
                 body=pending.body,
                 statements=statements,
                 placed_media=loop._placed(ctx, pending.body),
+                placed_flows=pending.flows,
             ),
             "read_tools": [],
             "result": tool["description"],
@@ -536,7 +644,6 @@ def _queue_review(
                 cited_statements=loop._statement_texts(statements),
             )
         ),
-        excluded_claimant=claimant,
     )
     state.pending = pending
     agent_tasks.save(
@@ -546,8 +653,9 @@ def _queue_review(
     return Submitted(
         task_id=task.id,
         status="in_review",
-        message="Grounded. Another agent reviews the document next; a refused "
-        "review returns the task to the queue with its findings.",
+        message="Grounded. An agent reviews the document next; a refused "
+        "review returns the task to the queue with its findings."
+        + _links_note(pending.unmatched_links),
     )
 
 
@@ -641,6 +749,8 @@ def _give_up(task: Task, state: WritingState, reason: str) -> None:
             document_type=request.document_type,
             title=None if pending is None else pending.title,
             body=None if pending is None else pending.body,
+            concept_links=[] if pending is None else pending.concept_links,
+            flows=[] if pending is None else pending.flows,
         ),
         failed=True,
     )

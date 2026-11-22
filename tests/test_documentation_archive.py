@@ -281,3 +281,102 @@ def test_an_archive_from_before_plans_restores_without_them(tmp_path):
             conn.execute("SELECT title FROM generated_documents").fetchone()[0]
             == "Page"
         )
+
+
+def _flow_json() -> dict:
+    from mycelium.docgen import flows
+    from mycelium.docgen.schema import StoredFlow
+
+    class Chain:
+        def statement(self, statement_id):
+            return flows.FlowStatement("event", "An invoice is exported.")
+
+        def links(self, statement_id):
+            return []
+
+    drawing = flows.draw_flow(Chain(), "stm_exported")
+    assert drawing is not None
+    return StoredFlow(
+        name="export-steps", title="Export steps", start="stm_exported", drawing=drawing
+    ).model_dump(mode="json")
+
+
+def _archive_with_flows(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    with closing(store.connect(source / "mycelium.db")) as conn:
+        store.migrate(conn)
+    body = "An [[Invoice]] is exported.\n\n```flow\nexport-steps\n```\n"
+    links = [{"name": "Invoice", "entity_id": "ent_invoice"}]
+    with closing(docs_store.connect(source / documentation_archive.DB_NAME)) as conn:
+        docs_store.migrate(conn)
+        document = docs_store.upsert_document(
+            conn,
+            slug="exports",
+            title="Exports",
+            body=body,
+            statement_ids=["stm_exported"],
+            concept_links=links,
+            flows=[_flow_json()],
+        )
+        run = docs_store.create_run(conn, prompt="Explain exports", created_by=None)
+        docs_store.finish_run(
+            conn,
+            run,
+            outcome="nothing_written",
+            draft_title="Exports",
+            draft_body=body,
+            draft_concept_links=links,
+            draft_flows=[_flow_json()],
+        )
+    archive = tmp_path / "backup.tar.gz"
+    backup.export_substrate(source, archive, include_vectors=False)
+    return archive, document, run
+
+
+def test_links_and_flows_travel_with_revisions_and_refused_drafts(tmp_path):
+    archive, document, run = _archive_with_flows(tmp_path)
+    restored = tmp_path / "restored"
+
+    backup.import_substrate(archive, restored)
+
+    with closing(docs_store.connect(restored / documentation_archive.DB_NAME)) as conn:
+        revision = docs_store.get_revision(conn, document, 1)
+        expected = {
+            "concept_links": [{"name": "Invoice", "entity_id": "ent_invoice"}],
+            "flows": [_flow_json()],
+        }
+        assert docs_store.links_and_flows(revision) == expected
+        assert docs_store.draft_links_and_flows(docs_store.get_run(conn, run)) == (
+            expected
+        )
+
+
+@pytest.mark.parametrize(
+    ("table", "column", "value"),
+    [
+        ("generated_document_revisions", "flows", '[{"name": "export-steps"}]'),
+        ("generated_document_revisions", "concept_links", '[{"name": "Invoice"}]'),
+        ("documentation_runs", "draft_flows", "not json"),
+        ("generated_document_revisions", "flows", "twice"),
+    ],
+)
+def test_an_archive_with_unreadable_links_or_flows_is_refused(
+    tmp_path, table, column, value
+):
+    archive, _document, _run = _archive_with_flows(tmp_path)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    with tarfile.open(archive) as tar:
+        tar.extractall(staging, filter="data")
+    section = staging / documentation_archive.FILE_NAME
+    payload = json.loads(section.read_text())
+    if value == "twice":
+        value = json.dumps([_flow_json(), _flow_json()])
+    payload["tables"][table][0][column] = value
+    section.write_text(json.dumps(payload))
+    broken = tmp_path / "broken.tar.gz"
+    backup._make_archive(staging, broken)
+
+    with pytest.raises(ValueError, match=r"links or flows|flow name twice"):
+        backup.import_substrate(broken, tmp_path / "restored")

@@ -7,9 +7,10 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from . import docs_store
+from .docgen.schema import STORED_FLOWS, STORED_LINKS
 
 DB_NAME = "mycelium-drafts.db"
 FILE_NAME = "documentation.json"
@@ -140,6 +141,7 @@ def _validate_history(conn: sqlite3.Connection) -> None:
     if missing_published:
         raise ValueError("documentation archive is missing a publication receipt")
     _validate_json(conn)
+    _validate_links_and_flows(conn)
     _validate_publication(conn)
 
 
@@ -169,6 +171,32 @@ def _validate_publication(conn: sqlite3.Connection) -> None:
             if actual != expected:
                 raise ValueError(
                     "documentation publication metadata differs from its receipt"
+                )
+
+
+def _validate_links_and_flows(conn: sqlite3.Connection) -> None:
+    """What a body refers to travels beside it, for a revision and for a
+    run's draft. A flow that does not parse could not be rendered or checked
+    for changes after the restore."""
+    for table, links, flows in (
+        ("generated_document_revisions", "concept_links", "flows"),
+        ("documentation_runs", "draft_concept_links", "draft_flows"),
+    ):
+        for row in conn.execute(
+            f"SELECT {links}, {flows} FROM {table} "
+            f"WHERE {links} IS NOT NULL OR {flows} IS NOT NULL"
+        ):
+            try:
+                STORED_LINKS.validate_json(row[links] or "[]")
+                stored = STORED_FLOWS.validate_json(row[flows] or "[]")
+            except ValidationError as exc:
+                raise ValueError(
+                    f"invalid documentation archive links or flows: {table}"
+                ) from exc
+            names = [flow.name for flow in stored]
+            if len(names) != len(set(names)):
+                raise ValueError(
+                    f"documentation archive holds a flow name twice: {table}"
                 )
 
 

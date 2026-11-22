@@ -53,6 +53,9 @@ class RunSummary(TypedDict):
     cited_statement_ids: NotRequired[list[str]]
     #: Why the review refused the document, when it did.
     review_findings: NotRequired[list[ReviewNote]]
+    #: Concept links of the saved document, as written, that matched no
+    #: concept or more than one and so read as plain text.
+    unmatched_concept_links: NotRequired[list[str]]
 
 
 @dataclass
@@ -98,6 +101,8 @@ class TraceBuilder:
     forced_finalize: str | None = None
     degraded: bool = False
     notes: list[str] = field(default_factory=list)
+    #: Concept links of the last submission that matched no single concept.
+    unmatched_links: list[str] = field(default_factory=list)
     #: Per-phase timing (recon / model turns / tool calls), exported as a
     #: speedscope flamegraph. Off the `build()` record — an out-of-band timing
     #: artifact, not part of the trace contract.
@@ -192,7 +197,12 @@ class TraceBuilder:
                 elapsed_s=latency_ms / 1000.0,
                 retrieved=grounding["retrieved_ids"],
             )
-            | {"statements_cited": len(cited), "cited_statement_ids": cited},
+            | {"statements_cited": len(cited), "cited_statement_ids": cited}
+            | (
+                {"unmatched_concept_links": self.unmatched_links}
+                if self.unmatched_links and outcome == "document_written"
+                else {}
+            ),
             "forced_finalize": self.forced_finalize,
             "degraded": self.degraded,
             "notes": self.notes,

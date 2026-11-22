@@ -215,7 +215,7 @@ function ActionModelSettings({ settings, catalog, canConfigure }: { settings: Ac
     <Card title={title} actions={<button type="button" className="btn ghost sm" onClick={() => void reload()} disabled={busy}>Reload</button>}>
       <p className="muted">
         Now: Runs on {current.external_agent
-          ? <>External agent{settings.action === 'docgen' && <> · {current.agent_review === 'agent' ? 'reviewed by another agent' : <>reviewed by {actionProviderName(current.provider)} · {current.model}</>}</>}</>
+          ? <>External agent{settings.action === 'docgen' && <> · {current.agent_review === 'agent' ? 'reviewed by an agent' : <>reviewed by {actionProviderName(current.provider)} · {current.model}</>}</>}</>
           : <>{actionProviderName(current.provider)} · {current.model || 'no model chosen'} · effort {(current.provider === 'claude' ? current.claude_reasoning_effort : current.openai_reasoning_effort) ?? 'model default'}</>}
       </p>
       {settings.action === 'docgen' && <p className="hint">The default for new documents. Choosing another provider when generating uses that provider's saved model and effort.</p>}
@@ -231,9 +231,9 @@ function ActionModelSettings({ settings, catalog, canConfigure }: { settings: Ac
                   : 'Agents with a writer token claim this work over MCP (claim_agent_task). See Agent tasks in the docs.' : undefined} onChange={value => edit(value === 'external' ? { external_agent: true } : { provider: value, external_agent: false })} />
               {settings.action === 'docgen' && form.external_agent && <label className="field"><span>Review</span>
                 <select className="input" value={form.agent_review} onChange={e => edit({ agent_review: e.target.value === 'agent' ? 'agent' : 'server' })}>
-                  <option value="server">Server reviewer (the provider below)</option><option value="agent">Another agent</option>
+                  <option value="server">Server reviewer (the provider below)</option><option value="agent">An agent</option>
                 </select>
-                <span className="hint">Another agent is never the document's writer, but two tokens of one person are not told apart.</span>
+                <span className="hint">An agent claims the review as a task. The account that wrote the document may claim it too; run the review in a separate session.</span>
               </label>}
               {showProvider && <>
                 {form.external_agent && <ProviderSelect value={form.provider} onChange={provider => edit({ provider })} label="Reviewer provider" />}
@@ -461,7 +461,7 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
                 <span className="hint">With only clean approvals, a draft the reviewer wants to correct waits for a curator, who applies or edits the suggested corrections.</span>
               </label>
               <ActionRunnerSelect value={form.external_agent ? 'external' : form.provider} agentSupported
-                hint={form.external_agent ? 'Agents with a writer token claim reviews over MCP (claim_agent_task, kind draft_review) and act as the reviewer; never of a draft they created.' : undefined}
+                hint={form.external_agent ? 'Agents with a writer token claim reviews over MCP (claim_agent_task, kind draft_review) and act as the reviewer.' : undefined}
                 onChange={p => change(p === 'external' ? { external_agent: true } : {
                   external_agent: false,
                   provider: p,

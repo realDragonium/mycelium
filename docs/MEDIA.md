@@ -136,10 +136,9 @@ without alt text are not offered. The writer places one as
 ```
 
 and the harness refuses a document that places media it was not offered, an
-image with empty alt text, or a `media:` reference outside an image. A manual
-edit may place any item the document's audience may see. A template can mark
-an image slot as `{Image: what it should show}`; the shipped how-to template
-has one in its steps.
+image with empty alt text, or a `media:` reference outside an image. A
+template can mark an image slot as `{Image: what it should show}`; the shipped
+how-to template has one in its steps.
 
 The reviewer is shown what each placed image shows and fails conformance for
 alt text that does not say what the image shows or an image that does not fit
@@ -149,7 +148,7 @@ audience must not get.
 The document view renders a `media:` image from Mycelium's content route; any
 other image in a document is shown as its alt text. Publishing to GitHub commits each image beside the
 Markdown as `<file stem>-media/<id>-v<version>.<ext>` and links it by that
-relative path; reading the published copy maps the links back. Publishing
+relative path. Publishing
 refuses a document placing media that was deleted or that its audience may no
 longer see.
 

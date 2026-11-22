@@ -32,12 +32,15 @@ from typing import Any, Literal
 
 from ..agentloop import read_tool_defs
 from ..ask.substrate import ToolSpec
-from .schema import ReviewCheck, ReviewFinding
+from .schema import FLOW_DEFINITIONS, FlowDefinition, ReviewCheck, ReviewFinding
 
 EMIT_TOOL = "emit_document"
 GAP_TOOL = "report_knowledge_gap"
 RESOLVE_TOOL = "choose_guideline_set"
 REVIEW_TOOL = "record_review"
+#: A documentation-only read, added by `reads.DocumentationSubstrate` rather
+#: than discovered from the server's tools.
+PREVIEW_TOOL = "preview_flow"
 
 #: The reads the system prompt, the doctrine and the shipped guidance tell a
 #: writer to use; recon runs `search_statements`.
@@ -54,6 +57,7 @@ READ_TOOLS = frozenset(
         "list_link_types",
         "list_entity_link_types",
         "list_statement_kinds",
+        PREVIEW_TOOL,
     }
 )
 
@@ -75,7 +79,9 @@ _EMIT_SCHEMA: dict[str, Any] = {
                 "The finished document in Markdown, written against the "
                 "guideline set's template. Complete as it stands — nothing "
                 "downstream edits it, fills a placeholder, or resolves a "
-                "'TODO'."
+                "'TODO'. Link a concept as [[Name]] or [[Name|text shown]]. "
+                "Place a flow from `flows` with a fenced block whose info "
+                "string is `flow` and whose only content is the flow's name."
             ),
         },
         "statement_ids": {
@@ -98,6 +104,46 @@ _EMIT_SCHEMA: dict[str, Any] = {
                 "Report each through report_knowledge_gap as you meet it; "
                 "this is your own summary of the same ground."
             ),
+        },
+        "flows": {
+            "type": "array",
+            "description": (
+                "Optional. The flows the body places: each is drawn by the "
+                "server from the stored links that follow from `start`, as "
+                "preview_flow shows it. Every flow here must be placed in "
+                "the body, and every placement must name one. On a revision "
+                "this list replaces the document's stored flows."
+            ),
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": (
+                            "What the body's placement names: lowercase "
+                            "letters, digits and hyphens, unique in this list."
+                        ),
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "The flow's caption, as a reader sees it.",
+                    },
+                    "start": {
+                        "type": "string",
+                        "description": "The statement id (stm_…) the flow starts from.",
+                    },
+                    "stop": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Statement ids the drawing does not continue "
+                            "past; may be empty."
+                        ),
+                    },
+                },
+                "required": ["name", "title", "start", "stop"],
+            },
         },
     },
     "required": ["title", "body", "statement_ids", "gaps"],
@@ -295,6 +341,15 @@ def parse_emit_input(data: dict) -> tuple[str, str, list[str], list[str]]:
     ids = _str_list(data.get("statement_ids"))
     gaps = _str_list(data.get("gaps"))
     return title.strip(), body, ids, gaps
+
+
+def parse_emit_flows(data: dict) -> list[FlowDefinition]:
+    """The flows an `emit_document` input submits; none when it has no `flows`.
+
+    Wire shape only, as `parse_emit_input`: whether a flow may stand is the
+    loop's gate."""
+    flows = data.get("flows")
+    return FLOW_DEFINITIONS.validate_python([] if flows is None else flows)
 
 
 def parse_review_input(

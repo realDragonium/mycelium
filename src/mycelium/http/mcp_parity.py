@@ -53,6 +53,10 @@ _PROMPT_ROWS = NotAnAction(
     "raw prompt-store rows no screen uses; get_writing_profile, get_settings "
     "and edit_prompt_text read and edit the texts Settings edits"
 )
+_SITE = NotAnAction(
+    "a zip for a browser or a script to save; agents read the same pages "
+    "through list_documentation and get_generated_document"
+)
 _REVIEWER = NotAnAction("a step of the internal draft reviewer, called in-process")
 
 ROUTES: dict[tuple[str, str], Parity] = {
@@ -211,13 +215,9 @@ ROUTES: dict[tuple[str, str], Parity] = {
     ("GET", "/api/documentation/runs"): Tool("list_documentation"),
     ("GET", "/api/documentation/runs/{run_id}"): Tool("get_documentation_run"),
     ("POST", "/api/documentation/runs/{run_id}/retry"): Tool("retry_documentation"),
-    ("POST", "/api/documentation/preview"): NotAnAction(
-        "renders a Markdown body as HTML for the editor's preview"
-    ),
-    ("POST", "/api/documentation/documents/{document_id}/edits"): Tool("edit_document"),
-    ("POST", "/api/documentation/runs/{run_id}/edits"): Tool("edit_document"),
     ("GET", "/api/documentation/documents"): Tool("list_documentation"),
     ("GET", "/api/documentation/destinations"): Tool("list_documentation"),
+    ("GET", "/api/documentation/sites/{guideline_set}"): _SITE,
     ("GET", "/api/documentation/maintenance"): Tool("list_documentation"),
     ("GET", "/api/documentation/documents/{document_id}"): Tool(
         "get_generated_document"

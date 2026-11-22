@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 from .. import quarantine
-from .schema import CurrentDocument, PullRequestState
+from .schema import PullRequestState
 
 
 class DestinationError(RuntimeError):
@@ -58,11 +58,6 @@ class DeliveryDocument:
     document_type: str
     statement_ids: tuple[str, ...]
     delivered_path: str | None = None
-    delivered_content_revision: str | None = None
-    revision_source_content_revision: str | None = None
-    #: Every blob this document published. The base branch holding one of
-    #: them is Mycelium's own text, as after a later PR closed unmerged.
-    published_content_revisions: frozenset[str] = frozenset()
     media: tuple[MediaFile, ...] = ()
 
 
@@ -99,15 +94,6 @@ class DestinationBackend(Protocol):
         document: DeliveryDocument,
         env: Mapping[str, str] | None = None,
     ) -> Delivery: ...
-
-    def read(
-        self,
-        destination: DestinationConfig,
-        path: str,
-        document_id: str,
-        slug: str,
-        env: Mapping[str, str] | None = None,
-    ) -> CurrentDocument | None: ...
 
     def pull_request_state(
         self,
@@ -224,16 +210,6 @@ def deliver_document(
 
 def destination_coordinates(config: DestinationConfig) -> dict[str, str]:
     return _backend(config).coordinates(config)
-
-
-def read_document(
-    config: DestinationConfig,
-    path: str,
-    document_id: str,
-    slug: str,
-    env: Mapping[str, str] | None = None,
-) -> CurrentDocument | None:
-    return _backend(config).read(config, path, document_id, slug, env)
 
 
 def pull_request_state(

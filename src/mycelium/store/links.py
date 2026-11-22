@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from typing import Any
 
 from . import kernel
@@ -190,6 +191,36 @@ def get_links(
         (r["to_statement_id"], r["link_type"], _load_when_tree(conn, r["link_id"]))
         for r in rows
     ]
+
+
+def get_links_from(
+    conn: sqlite3.Connection, statement_ids: Sequence[str]
+) -> dict[str, list[tuple[str, str, dict[str, Any] | None]]]:
+    """`get_links` for many statements in one read per 500 of them. A
+    statement without outgoing links is absent."""
+    from .. import when_expression as we
+
+    found: dict[str, list[tuple[str, str, dict[str, Any] | None]]] = {}
+    for offset in range(0, len(statement_ids), 500):
+        chunk = statement_ids[offset : offset + 500]
+        rows = conn.execute(
+            "SELECT link_id, from_statement_id, to_statement_id, link_type, when_hash "
+            "FROM statement_links "
+            f"WHERE from_statement_id IN ({', '.join('?' for _ in chunk)}) "
+            "ORDER BY link_id",
+            tuple(chunk),
+        ).fetchall()
+        for r in rows:
+            found.setdefault(r["from_statement_id"], []).append(
+                (
+                    r["to_statement_id"],
+                    r["link_type"],
+                    None
+                    if r["when_hash"] == we.HASH_NONE
+                    else _load_when_tree(conn, r["link_id"]),
+                )
+            )
+    return found
 
 
 def get_incoming_links(

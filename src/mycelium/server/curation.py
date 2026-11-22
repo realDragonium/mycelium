@@ -468,8 +468,7 @@ def release_curation_work(
 
     `answered` (one `question` item): your `answer` to the reviewer's
     questions with the `evidence` you checked, in `set_operation_evidence`'s
-    shape (one to five items); the draft is reviewed again with it. Not for
-    a draft you created. `resolved` (gaps): an applied draft settled it.
+    shape (one to five items); the draft is reviewed again with it. `resolved` (gaps): an applied draft settled it.
     `not_applicable` dismisses a gap or records that a duplicate pair is
     distinct; give a reason.
     """
@@ -537,11 +536,6 @@ def _answer(
     question = _question(gap_id)
     if question is None:
         raise ValueError("the reviewer no longer waits for this answer")
-    draft = drafts_store.get_draft(_drafts_db(), question["draft_id"])
-    if draft is not None and draft["created_by"] == principal.id:
-        raise ValueError(
-            "you created this draft; its reviewer's questions are for someone else"
-        )
     draft_review_runs.answer(
         question["draft_id"],
         question["run_id"],

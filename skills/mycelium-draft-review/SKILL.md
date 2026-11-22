@@ -1,6 +1,6 @@
 ---
 name: mycelium-draft-review
-description: Decide Mycelium drafts (submitted drf_ drafts) against the product's code. Finds the queue with list_drafts (waiting drafts, corrections the server's reviewer held, its questions, drafts it rejected), checks each operation against the code with file:line evidence, and decides with review_draft (approve, approve with precise corrections, reject with a reason, or ask a person), reopening wrongly rejected drafts with reopen_draft first. Works whatever Settings → Draft review is set to. Use when asked to review, decide, triage, drain or approve the draft queue, or to reconsider drafts the AI reviewer rejected or held. Needs a real writer or admin token, and never decides a draft the same principal created. To be the server's reviewer for one claimed task while draft review is set to External agent, use mycelium-agent-tasks (kind draft_review).
+description: Decide Mycelium drafts (submitted drf_ drafts) against the product's code. Finds the queue with list_drafts (waiting drafts, corrections the server's reviewer held, its questions, drafts it rejected), checks each operation against the code with file:line evidence, and decides with review_draft (approve, approve with precise corrections, reject with a reason, or ask a person), reopening wrongly rejected drafts with reopen_draft first. Works whatever Settings → Draft review is set to. Use when asked to review, decide, triage, drain or approve the draft queue, or to reconsider drafts the AI reviewer rejected or held. Needs a real writer or admin token. To be the server's reviewer for one claimed task while draft review is set to External agent, use mycelium-agent-tasks (kind draft_review).
 ---
 
 # Mycelium draft review
@@ -28,8 +28,8 @@ does; you check that, operation by operation, and decide.
   `decisions`.
 - **A person** can do the same in the draft detail view (`#/drafts/<id>`).
 
-You cannot decide or reopen a draft your own principal created; leave those
-for another writer or admin, and say so.
+A draft may be one your own principal created: decide it in a session that
+did not write it, from the code.
 
 ## Connection
 

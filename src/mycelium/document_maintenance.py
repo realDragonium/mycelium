@@ -269,7 +269,9 @@ def _propose(
                 anchor_entity_id=document.anchor_entity_id,
                 document_id=document.id,
                 rationale=document_freshness.revision_brief(
-                    document.freshness.changes, document.freshness.media_changes
+                    document.freshness.changes,
+                    document.freshness.media_changes,
+                    document.freshness.flow_changes,
                 ),
                 priority="high",
                 statement_ids=tuple(
@@ -308,7 +310,9 @@ def _revise(
             )
         run_id = doc_runs.start_run(
             prompt=document_freshness.revision_brief(
-                document.freshness.changes, document.freshness.media_changes
+                document.freshness.changes,
+                document.freshness.media_changes,
+                document.freshness.flow_changes,
             ),
             guideline_set=guideline_set,
             document_type=document.document_type,
@@ -446,7 +450,7 @@ def _retry_finished(
     review's findings when the review refused it. After `retries` automatic
     retries it is given up with a reason. Returns the ids of the runs
     started."""
-    from . import document_edits, server
+    from . import server
 
     recovering = {
         profile.name for profile in snapshot.profiles if profile.recovery == "ai"
@@ -462,7 +466,6 @@ def _retry_finished(
         if (
             row["outcome"] == "document_written"
             or row["guideline_set"] not in recovering
-            or row["prompt"] == document_edits.MANUAL_EDIT_PROMPT
         ):
             _recovered(conn, run_id, "none")
             continue

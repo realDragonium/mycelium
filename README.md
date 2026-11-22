@@ -10,7 +10,8 @@ See [AI model configuration](docs/AI_MODELS.md) to select Claude or GPT independ
 See [AI prompts](docs/AI_PROMPTS.md) to edit per-action instructions in the UI without redeploying.
 
 See [the documentation workflow](docs/DOCUMENTATION_MODELS.md) to configure writing profiles,
-generate and revise documents, and publish GitHub pull requests from the web app.
+generate and revise documents, publish GitHub pull requests from the web app, and
+download a profile's pages as a static website (`mycelium docs-site`).
 
 See [internal draft review](docs/DRAFT_REVIEW.md) for configurable Claude/GPT assessment and
 automatic application configuration.
@@ -87,7 +88,7 @@ Statements are typed claims. Their `kind` describes the shape of the claim,
 such as `event`, `state`, or `capability`. Entity mentions are derived from
 names found in statement text. Statement links use `to_id` and `from_id`.
 
-MCP advertises 85 tools: every action a person can take on the knowledge base
+MCP advertises 84 tools: every action a person can take on the knowledge base
 in the web app is also an MCP tool. Every registered tool also has an HTTP
 route. See [the MCP tool manifest](docs/MCP_TOOLS.md) for which tools are
 advertised over MCP and why.

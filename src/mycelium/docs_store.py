@@ -125,6 +125,8 @@ def migrate(conn: sqlite3.Connection) -> None:
     _add_document_revisions(conn)
     _add_document_lifecycle(conn)
     _add_cited_statements(conn)
+    _add_links_and_flows(conn)
+    _add_draft_links_and_flows(conn)
     _add_run_summary(conn)
     doc_plans.migrate(conn)
     agent_tasks.migrate(conn)
@@ -291,6 +293,37 @@ def _add_cited_statements(conn: sqlite3.Connection) -> None:
         )
 
 
+def _add_links_and_flows(conn: sqlite3.Connection) -> None:
+    """Keep what each revision's body refers to beside it: the concept its
+    links matched and the flows it places, as drawn when it was submitted.
+
+    NULL for a revision saved before this, whose body has neither.
+    """
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(generated_document_revisions)")
+    }
+    for name in ("concept_links", "flows"):
+        if name not in columns:
+            conn.execute(
+                f"ALTER TABLE generated_document_revisions ADD COLUMN {name} TEXT"
+            )
+
+
+def _add_draft_links_and_flows(conn: sqlite3.Connection) -> None:
+    """Keep what a run's draft body refers to beside it, as a revision does:
+    what the writer of a refused draft submitted.
+
+    NULL for a run without a draft, and for a draft kept before this.
+    """
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
+    }
+    for name in ("draft_concept_links", "draft_flows"):
+        if name not in columns:
+            conn.execute(f"ALTER TABLE documentation_runs ADD COLUMN {name} TEXT")
+
+
 def _add_run_summary(conn: sqlite3.Connection) -> None:
     """What each run spent and gathered. NULL for a run recorded before this,
     and for one that never reached its first model turn."""
@@ -421,7 +454,18 @@ def serialize_revision(
     }
     if include_body:
         result["body"] = row["body"]
+        result.update(links_and_flows(row))
     return result
+
+
+def links_and_flows(row: sqlite3.Row) -> dict[str, object]:
+    """What a revision's body refers to: `concept_links`, each the name as
+    written and the concept it matched, and `flows`, each a placed flow's
+    definition and drawing. Both empty for a revision without them."""
+    return {
+        "concept_links": json.loads(row["concept_links"] or "[]"),
+        "flows": json.loads(row["flows"] or "[]"),
+    }
 
 
 def _delivery_status(row: sqlite3.Row) -> str:
@@ -689,7 +733,6 @@ def create_run(
     target_document_id: str | None = None,
     target_revision: int | None = None,
     anchor_entity_id: str | None = None,
-    revision_base: str | None = None,
     review_notes: Sequence[Mapping[str, object]] = (),
     retry_of: str | None = None,
     attempt: int = 0,
@@ -705,8 +748,8 @@ def create_run(
             require_revision(conn, target_document_id, target_revision)
         conn.execute(
             "INSERT INTO documentation_runs "
-            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, reasoning_effort, target_document_id, target_revision, anchor_entity_id, revision_base, review_notes, retry_of, attempt) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, reasoning_effort, target_document_id, target_revision, anchor_entity_id, review_notes, retry_of, attempt) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 prompt,
@@ -720,7 +763,6 @@ def create_run(
                 target_document_id,
                 target_revision,
                 anchor_entity_id,
-                revision_base,
                 json.dumps(list(review_notes)) if review_notes else None,
                 retry_of,
                 attempt,
@@ -759,7 +801,6 @@ def readmit_run(
     reasoning_effort: str | None,
     target_document_id: str | None,
     target_revision: int | None,
-    revision_base: str | None,
 ) -> None:
     """Refresh an unfinished run's admission details without changing its identity."""
     with conn:
@@ -773,7 +814,7 @@ def readmit_run(
         cur = conn.execute(
             "UPDATE documentation_runs SET guideline_set = ?, document_type = ?, "
             "provider = ?, model = ?, reasoning_effort = ?, "
-            "target_document_id = ?, target_revision = ?, revision_base = ? "
+            "target_document_id = ?, target_revision = ? "
             "WHERE id = ? AND finished_at IS NULL",
             (
                 guideline_set,
@@ -783,7 +824,6 @@ def readmit_run(
                 reasoning_effort,
                 target_document_id,
                 target_revision,
-                revision_base,
                 run_id,
             ),
         )
@@ -842,6 +882,8 @@ def finish_run(
     error: str | None = None,
     draft_title: str | None = None,
     draft_body: str | None = None,
+    draft_concept_links: Sequence[Mapping[str, object]] | None = None,
+    draft_flows: Sequence[Mapping[str, object]] | None = None,
     matched_document_id: str | None = None,
     result_revision: int | None = None,
     summary: Mapping[str, object] | None = None,
@@ -852,6 +894,9 @@ def finish_run(
     record of the attempt, not a document. Nothing that serves documents to a
     reader can reach it, which is what makes keeping refused text safe.
 
+    The draft's concept links and flows stay only with a draft body. Given
+    None they stay as the run holds them.
+
     Without a final `summary`, the last progress summary stays, minus what
     the run was doing: a run that crashed still shows what it had spent.
     """
@@ -860,7 +905,12 @@ def finish_run(
     conn.execute(
         "UPDATE documentation_runs "
         "SET finished_at = ?, outcome = ?, document_id = ?, error = ?, "
-        "draft_title = ?, draft_body = ?, matched_document_id = ?, result_revision = COALESCE(?, result_revision), "
+        "draft_title = ?, draft_body = ?, "
+        "draft_concept_links = CASE WHEN ?6 IS NULL THEN NULL "
+        "ELSE COALESCE(?, draft_concept_links) END, "
+        "draft_flows = CASE WHEN ?6 IS NULL THEN NULL "
+        "ELSE COALESCE(?, draft_flows) END, "
+        "matched_document_id = ?, result_revision = COALESCE(?, result_revision), "
         "summary = COALESCE(?, json_set(summary, '$.activity', NULL)) "
         "WHERE id = ? AND finished_at IS NULL",
         (
@@ -870,6 +920,8 @@ def finish_run(
             error,
             draft_title,
             draft_body,
+            _json_list(draft_concept_links),
+            _json_list(draft_flows),
             matched_document_id,
             result_revision,
             None if summary is None else json.dumps(summary),
@@ -877,6 +929,18 @@ def finish_run(
         ),
     )
     conn.commit()
+
+
+def _json_list(items: Sequence[Mapping[str, object]] | None) -> str | None:
+    return None if items is None else json.dumps([dict(item) for item in items])
+
+
+def draft_links_and_flows(row: sqlite3.Row) -> dict[str, object]:
+    """What a run's draft body refers to, shaped as `links_and_flows`."""
+    return {
+        "concept_links": json.loads(row["draft_concept_links"] or "[]"),
+        "flows": json.loads(row["draft_flows"] or "[]"),
+    }
 
 
 # A queued run's place in line, 1 being next: runs start in admission order.
@@ -992,7 +1056,6 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "target_revision": row["target_revision"],
         "result_revision": row["result_revision"],
         "anchor_entity_id": row["anchor_entity_id"],
-        "revision_base": row["revision_base"],
         "profile_revisions": json.loads(row["profile_revisions"]),
         "profile_snapshot": json.loads(row["profile_snapshot"]),
         "document_superseded": _document_superseded(row),
@@ -1031,6 +1094,9 @@ def serialize_run_detail(row: sqlite3.Row) -> dict:
         **serialize_run(row),
         "draft_title": row["draft_title"],
         "draft_body": row["draft_body"],
+        **{
+            f"draft_{name}": value for name, value in draft_links_and_flows(row).items()
+        },
     }
 
 
@@ -1096,6 +1162,34 @@ def _write_refusal(
     )
 
 
+def _refuse_other_drawing(
+    conn: sqlite3.Connection,
+    existing: sqlite3.Row | None,
+    concept_links: str | None,
+    flows: str | None,
+) -> None:
+    """An identical body replaces nothing, but a reader also sees the concept
+    links and flows stored beside it, and this write did not name the
+    document."""
+    if existing is None:
+        return
+    stored = conn.execute(
+        "SELECT concept_links, flows FROM generated_document_revisions "
+        "WHERE document_id = ? AND revision = ?",
+        (existing["id"], existing["current_revision"]),
+    ).fetchone()
+    if stored is None or (stored["concept_links"], stored["flows"]) == (
+        concept_links,
+        flows,
+    ):
+        return
+    raise ValueError(
+        "document write refused because it would replace the concept links or "
+        f"flows stored with document {existing['id']!r}; to deliberately replace "
+        f"them, pass updates={existing['id']!r} and replacing=body_digest(stored_body)"
+    )
+
+
 def upsert_document(
     conn: sqlite3.Connection,
     *,
@@ -1109,10 +1203,11 @@ def upsert_document(
     run_id: str | None = None,
     updates: str | None = None,
     replacing: str | None = None,
-    revision_source_content_revision: str | None = None,
     expected_revision: int | None = None,
     anchor_entity_id: str | None = None,
     cited_statements: Mapping[str, str] | None = None,
+    concept_links: Sequence[Mapping[str, object]] = (),
+    flows: Sequence[Mapping[str, object]] = (),
 ) -> str:
     """Write content while preserving metadata a partial writer omits.
 
@@ -1134,6 +1229,9 @@ def upsert_document(
     apart, since an anchored document is known not to be that one. A run's
     write takes the anchor the run holds now rather than the one it started
     with: merging or deleting the entity meanwhile re-points or clears it.
+
+    `concept_links` and `flows` belong to this body and are stored with the
+    revision as given: a write that omits them stores a revision without any.
     """
     slug = slug.strip()
     title = title.strip()
@@ -1151,8 +1249,7 @@ def upsert_document(
     conn.execute("BEGIN IMMEDIATE")
     try:
         existing = conn.execute(
-            "SELECT id, body, statement_ids, review, last_run_id, "
-            "revision_source_content_revision, current_revision "
+            "SELECT id, body, statement_ids, review, last_run_id, current_revision "
             "FROM generated_documents "
             "WHERE guideline_set = ? AND document_type = ? AND slug = ?",
             (guideline_set, document_type, slug),
@@ -1184,15 +1281,20 @@ def upsert_document(
         )
         if refusal is not None:
             raise ValueError(refusal)
+        links_json = _json_list(concept_links or None)
+        flows_json = _json_list(flows or None)
+        _refuse_other_drawing(
+            conn, None if updates else existing, links_json, flows_json
+        )
         now = _now()
         if existing is None:
             document_id = "gdc_" + _uuid.uuid4().hex[:12]
             conn.execute(
                 "INSERT INTO generated_documents "
                 "(id, slug, title, guideline_set, document_type, body, "
-                "statement_ids, review, revision_source_content_revision, "
+                "statement_ids, review, "
                 "created_at, updated_at, last_run_id, anchor_entity_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     document_id,
                     slug,
@@ -1204,7 +1306,6 @@ def upsert_document(
                         list(statement_ids) if statement_ids is not None else []
                     ),
                     json.dumps(review if review is not None else {}),
-                    revision_source_content_revision,
                     now,
                     now,
                     run_id,
@@ -1216,8 +1317,7 @@ def upsert_document(
             conn.execute(
                 "UPDATE generated_documents "
                 "SET title = ?, body = ?, statement_ids = ?, review = ?, "
-                "revision_source_content_revision = ?, updated_at = ?, "
-                "last_run_id = ? WHERE id = ?",
+                "updated_at = ?, last_run_id = ? WHERE id = ?",
                 (
                     title,
                     body,
@@ -1225,9 +1325,6 @@ def upsert_document(
                     if statement_ids is None
                     else json.dumps(list(statement_ids)),
                     existing["review"] if review is None else json.dumps(review),
-                    existing["revision_source_content_revision"]
-                    if revision_source_content_revision is None
-                    else revision_source_content_revision,
                     now,
                     existing["last_run_id"] if run_id is None else run_id,
                     document_id,
@@ -1241,14 +1338,18 @@ def upsert_document(
         conn.execute(
             "INSERT INTO generated_document_revisions "
             "(document_id, revision, parent_revision, slug, title, guideline_set, document_type, body, "
-            "statement_ids, review, created_at, run_id, cited_statements) "
+            "statement_ids, review, created_at, run_id, cited_statements, "
+            "concept_links, flows) "
             "SELECT id, current_revision, ?, slug, title, guideline_set, document_type, body, "
-            "statement_ids, review, updated_at, last_run_id, ? FROM generated_documents WHERE id = ?",
+            "statement_ids, review, updated_at, last_run_id, ?, ?, ? "
+            "FROM generated_documents WHERE id = ?",
             (
                 revision - 1 if revision > 1 else None,
                 None
                 if cited_statements is None
                 else json.dumps(dict(cited_statements)),
+                links_json,
+                flows_json,
                 document_id,
             ),
         )
@@ -1312,6 +1413,31 @@ def find_by_anchor(
         "AND document_type = ? AND anchor_entity_id = ?",
         (guideline_set, document_type, anchor_entity_id),
     ).fetchone()
+
+
+def linked_documents(
+    conn: sqlite3.Connection,
+    guideline_set: str,
+    document_type: str,
+    entity_ids: Sequence[str],
+) -> dict[str, str]:
+    """The document a concept link opens, by concept: the one anchored on that
+    concept in this profile, of this template when there is one and otherwise
+    of the template that comes first by name. A concept without one is absent."""
+    wanted = list(dict.fromkeys(entity_ids))
+    if not wanted:
+        return {}
+    rows = conn.execute(
+        "SELECT id, anchor_entity_id FROM generated_documents "
+        "WHERE guideline_set = ? "
+        f"AND anchor_entity_id IN ({', '.join('?' for _ in wanted)}) "
+        "ORDER BY document_type != ?, document_type, id",
+        (guideline_set, *wanted, document_type),
+    )
+    found: dict[str, str] = {}
+    for row in rows:
+        found.setdefault(str(row["anchor_entity_id"]), str(row["id"]))
+    return found
 
 
 def move_anchors(
@@ -1482,18 +1608,6 @@ def record_delivery(
         raise
 
 
-def published_blobs(conn: sqlite3.Connection, document_id: str) -> frozenset[str]:
-    """Every destination blob a delivery receipt says this document published."""
-    return frozenset(
-        str(row["content_revision"])
-        for row in conn.execute(
-            "SELECT content_revision FROM generated_document_deliveries "
-            "WHERE document_id = ?",
-            (document_id,),
-        )
-    )
-
-
 def record_pull_request_state(
     conn: sqlite3.Connection, document_id: str, number: int, state: str
 ) -> None:
@@ -1545,7 +1659,6 @@ def serialize_document(row: sqlite3.Row) -> dict:
         "delivery_path": row["delivery_path"],
         "delivery_reference": row["delivery_reference"],
         "delivery_content_revision": row["delivery_content_revision"],
-        "revision_source_content_revision": row["revision_source_content_revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "last_run_id": row["last_run_id"],
@@ -1574,7 +1687,6 @@ def serialize_document_summary(row: sqlite3.Row) -> dict:
         "delivery_path": row["delivery_path"],
         "delivery_reference": row["delivery_reference"],
         "delivery_content_revision": row["delivery_content_revision"],
-        "revision_source_content_revision": row["revision_source_content_revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

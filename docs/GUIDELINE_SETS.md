@@ -114,7 +114,7 @@ background run.
 
 ## Example profiles
 
-[`docs/profile-examples/`](profile-examples/) holds three product-neutral
+[`docs/profile-examples/`](profile-examples/) holds four product-neutral
 examples to copy into a new profile:
 
 | Example | Written for | Templates |
@@ -122,11 +122,19 @@ examples to copy into a new profile:
 | [Knowledge base](profile-examples/knowledge-base.md) | the profile's audience, default internal | `tutorial`, `how-to`, `reference`, `explanation`, `troubleshooting` |
 | [Help center](profile-examples/help-center.md) | external non-technical: people using the product | `how-to`, `troubleshooting`, `explanation` |
 | [Internal guide](profile-examples/internal-guide.md) | internal non-technical: support, sales, customer success | `reference`, `explanation`, `how-to`, `troubleshooting` |
+| [Developer reference](profile-examples/developer-reference.md) | internal technical: developers on the product | `entity-page` |
 
 The server never reads them. Their guidance is written for the server-side
 writer: the run already gathers, files gaps and emits, so an example says
 what the document contains, how it reads and how long it is, and never asks
 the reader a question, names a file or path, or walks through tool calls.
+
+The developer reference writes one page per concept, with
+[concept links and flows](DOCUMENTATION_MODELS.md#concept-links-and-flows),
+and names no GitHub destination: its pages are read as a
+[website](DOCUMENTATION_MODELS.md#download-as-a-website). A template may
+also ask for image placeholders, `![what the picture should show](image-wanted)`,
+where a picture would help and no media shows it.
 
 Earlier builds seeded a `kb-authoring` profile on first start. An instance
 that has it keeps it as saved data; nothing in the package refers to its

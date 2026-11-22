@@ -14,11 +14,11 @@ the server, using the agents its people already run.
 | Action | External agent | |
 |---|---|---|
 | Documentation (writing and revising) | Yes | Kind `documentation` |
-| Documentation review | Yes, for documents an agent wrote | Kind `document_review`, when Review is **Another agent**. A person's manual edit is still reviewed by the server's reviewer |
+| Documentation review | Yes, for documents an agent wrote | Kind `document_review`, when Review is **An agent**. |
 | Documentation planning | Yes | Kind `documentation_planning`, and `plan_review` for a profile whose plan items an AI reviewer decides |
 | Audience labelling | Yes | Kind `audience_labelling` |
-| Review of waiting external grants | Yes, for grants another agent labelled | Kind `audience_review`, when **AI reviews waiting external grants** is on; see [Audiences](AUDIENCES.md#ai-review-of-waiting-grants) |
-| Edited curator labels and kept grants | Yes, for labels another account set | Kind `audience_review`, when **AI decides edited curator labels and kept grants** is on; see [Audiences](AUDIENCES.md#ai-decisions-on-edited-labels) |
+| Review of waiting external grants | Yes, for grants an agent labelled | Kind `audience_review`, when **AI reviews waiting external grants** is on; see [Audiences](AUDIENCES.md#ai-review-of-waiting-grants) |
+| Edited curator labels and kept grants | Yes | Kind `audience_review`, when **AI decides edited curator labels and kept grants** is on; see [Audiences](AUDIENCES.md#ai-decisions-on-edited-labels) |
 | Ingest | Yes | Kind `ingest` |
 | Connect pass | Yes | Kind `connect` |
 | Alias discovery | Yes | Kind `alias_discovery` |
@@ -46,18 +46,17 @@ The agent needs a **writer** or **admin** token. That is the role that may
 already ask the server for documentation, so an agent can do no more than its
 token could request. Drafters cannot claim: a drafter's writes go to a draft
 for review, but an agent's document, plan or labels are saved as a server
-model's would be. Readers cannot claim either. A draft's creator is never
-given its review, nor the agent that made a plan its plan review, nor a
-labeller the review of its own grants: a claim that held such tasks back says
-so in `note`, and a submission by the creator is refused and the task goes
-back to the queue (a grant review skips the grants it labelled).
+model's would be. Readers cannot claim either. A review task can be claimed
+by the account that made what it reviews: a document, a plan, a draft or
+labels. Do the review in a session that did not make the thing, so the review
+does not lean on what the maker remembers.
 
 ## Kinds
 
 | `kind` | Queued when | The agent submits |
 |---|---|---|
-| `documentation` | A documentation run starts, or a document is revised, while Documentation is set to External agent | The document: title, Markdown body and the statement ids it rests on, as the server's writer emits it |
-| `document_review` | An agent's document passed its checks and Documentation's Review is **Another agent** | The review: exposure and conformance verdicts with findings |
+| `documentation` | A documentation run starts, or a document is revised, while Documentation is set to External agent | The document: title, Markdown body, the statement ids it rests on and the `flows` the body places, as the server's writer emits it |
+| `document_review` | An agent's document passed its checks and Documentation's Review is **An agent** | The review: exposure and conformance verdicts with findings |
 | `documentation_planning` | A plan is requested for a writing profile, by a person or by the profile's automatic planning, while Documentation planning is set to External agent; and for each further call of a plan allowed more than one | The proposed documents, placing the brief's uncovered statements in updates of existing documents or in new ones, without proposing again what `already_proposed` lists |
 | `plan_review` | A profile whose plan items an AI reviewer decides has proposed items no review decided (checked by the maintenance sweep and when an agent claims), while Documentation planning is set to External agent | A decision for every item: `approve` or `dismiss`, with a reason |
 | `audience_labelling` | An agent asks for labelling work while Audience labelling is set to External agent | A label for each statement in the batch |
@@ -77,9 +76,8 @@ then, at the labelling batch size set under Limits. A statement in an open
 batch is not put in another. A statement whose text changed after it was
 batched is not labelled from that batch; it is due again.
 
-A manual edit of a document still goes through the server's reviewer and so
-needs a documentation model. Asking for a run with an explicit `provider`
-(`claude` or `openai`) runs it on the server whatever the setting.
+Asking for a run with an explicit `provider` (`claude` or `openai`) runs it on
+the server whatever the setting.
 
 ## Workflow
 
@@ -107,7 +105,7 @@ needs a documentation model. Asking for a run with an explicit `provider`
    knowledge with `report_knowledge_gap`.
 3. **Submit.** `submit_agent_task(task_id, result)` with the result shaped
    as `result_schema`. It returns `accepted` (saved), `refused` (with
-   `findings` and `retries_left`; fix and submit again), `in_review` (another
+   `findings` and `retries_left`; fix and submit again), `in_review` (an
    agent reviews the document next) or `failed` (the work is closed and the
    run or plan records why).
 4. **Or release.** `release_agent_task(task_id, reason)` gives a task back
@@ -140,6 +138,25 @@ refused submission and, once done, its `result`, such as the draft it made.
   brief returned count as read. A new claimant starts again from those.
 - **Vocabulary and media.** The internal-vocabulary refusal and the media check
   of the server's emit gate apply unchanged.
+- **Flows and concept links.** Each flow in `flows` (`name`, `title`, `start`,
+  `stop`) is drawn by the server inside the audience and stored with the
+  document; its statements are cited with the ones the agent listed. One
+  refusal names every problem with the flows: a `start` or `stop` that does
+  not exist or the audience may not see, a drawing of fewer than three
+  statements, a placement naming no submitted flow, a flow never placed, and a
+  malformed or repeated name. A `[[Name]]` link that matches no concept the
+  audience may see is not refused; the result's `message` names it. An agent
+  sees what a flow will draw with the `preview_flow` read, and a
+  `document_review` brief lists what each placed flow shows.
+- **Image placeholders.** `![what the picture should show](image-wanted)`
+  marks where a picture would help. A description of fewer than three words
+  is refused with the flow problems.
+- **Revisions and returned submissions.** On a revision the brief's `input`
+  holds the document's current text, its flows with what they draw, and the
+  ids of the statements it cites; the `flows` submitted replace the stored
+  ones. A submission that is refused, or sent back by its review, is added to
+  the brief the same way with its findings, so whoever takes the task up
+  revises that text instead of starting over.
 - **Template conformance and exposure.** A grounded document is reviewed
   against the template and the audience's exposure rules, by the server's
   reviewer or by a second agent (see [Review](#review)).
@@ -172,7 +189,7 @@ loop would try again:
 | Check | Refusals before the work closes |
 |---|---|
 | Malformed document | 1 |
-| Citations, vocabulary or media | 3 |
+| Citations, vocabulary, media or flows | 3 |
 | Review | 1 (the document returns to its writer with the review's findings) |
 | Malformed review | 1 |
 | Malformed or invalid plan, plan review, labels, grant review, aliases or draft review | 2 |
@@ -192,9 +209,12 @@ how many items stopped ([Audiences](AUDIENCES.md#stopped-decisions)).
 ## Review
 
 **Server reviewer** (the default) reviews the document when it is submitted,
-synchronously, on the documentation provider and model. **Another agent** puts
-the writing task `in_review` and queues a `document_review` task. The task is
-never offered to the writer who submitted the document. A passed review saves
+synchronously, on the documentation provider and model. **An agent** puts
+the writing task `in_review` and queues a `document_review` task. Any writer
+or admin account may claim it, the one that submitted the document included,
+so one account can write and review. The review sees only the document and
+its brief, never the writer's conversation; run it in a separate session so it
+reads the document fresh. A passed review saves
 the document. A failed one sends the writing task back to the queue with the
 review's findings.
 

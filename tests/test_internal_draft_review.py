@@ -577,7 +577,7 @@ def test_source_attach_invalidates_completed_assessment(running_app, monkeypatch
     assert server.get_draft(draft_id)["review_assessment"]["stale"] is True
 
 
-def test_drafter_cannot_request_or_impersonate_reviewer(running_app, monkeypatch):
+def test_drafter_cannot_request_a_review(running_app, monkeypatch):
     draft_id = _draft()
     _set_review_controls(mode="review-only")
     token = _principal("drafter")
@@ -586,15 +586,6 @@ def test_drafter_cannot_request_or_impersonate_reviewer(running_app, monkeypatch
             server.request_draft_review(draft_id)
     finally:
         auth.current_principal.reset(token)
-    with store.transaction(runtime._auth_db()):
-        runtime._auth_db().execute(
-            "INSERT INTO users(id, name, role, type, status, created_at) VALUES ('drafter-1', 'Creator', 'writer', 'service', 'active', 'now')"
-        )
-    _set_review_controls(reviewer_id="drafter-1")
-    _request(draft_id)
-    result = _result(draft_id)
-    assert result["status"] == "failed"
-    assert "independent" in result["detail"]
 
 
 def test_review_without_credentials_is_refused_before_a_run(running_app, monkeypatch):

@@ -52,6 +52,15 @@ document shows what changed, old wording beside new. **Revise** starts a
 revision briefed with exactly those changes; once it is saved, the document is
 current again. Revisions saved before this was recorded show no status.
 
+A document is also out of date when the step links leaving the statements of
+a flow it places, or their conditions, changed since the flow was drawn
+(`stale.flow_changes`: a step added, a step removed or a condition changed).
+The revision is then told to preview the flow and submit it again.
+
+A writer that revises a document is given its current text, its flows with
+what they draw, and the ids of the statements it cites. A retry briefed with
+the review's notes gets the refused draft and its flows the same way.
+
 Publishing opens or updates a GitHub pull request, and the document shows
 whether it is open, merged or closed. Mycelium asks GitHub when the document is
 opened, at most once a minute, and keeps the last known state when GitHub
@@ -63,21 +72,14 @@ exact internal version on screen, preserving its identity and earlier revisions.
 If another run changes the document first, reload its current revision before
 retrying. Old revisions remain readable and downloadable as Markdown.
 
-A published document can be edited on GitHub, on its pull request branch or on
-the base branch after merge. A revision therefore reads the published copy
-first. Mycelium recognises every text it published itself. Any other text there
-is someone's edit, and the revision starts from it, telling the writer to keep
-it. The run records this as `revision_base: destination`. If the document also
-has a revision here that was never published, Mycelium refuses rather than
-merging the two. To keep the GitHub edits, choose **Start from the published
-copy on GitHub** (`start_from_destination` over MCP): the revision starts from
-the GitHub text and the unpublished revision stays in the history. To continue
-from the revision here instead, undo the GitHub edits or close the pull request
-without merging. A deleted file in an open pull request
-is refused the same way. If the published copy cannot be read, the revision is
-refused until the connection or credential binding is restored. A manual edit
-does not read GitHub, so publishing it is refused over GitHub edits it did not
-see.
+Publishing to GitHub is one-way. Mycelium's text is the only source: a revision
+always starts from the revision here, and nothing is read back from GitHub into
+a document. A publish overwrites the file, on the open pull request branch or
+in a new pull request from the base branch, including changes someone made to
+it on GitHub by hand. To change a published document, change the statements or
+ask for a revision, then publish again. The one refusal: a file someone deleted
+in the open pull request is not put back; restore it there or close the pull
+request.
 
 Generation records the model and a consistent snapshot of the available writing
 profiles at admission. The selected guidance, exposure rules, template, and their
@@ -92,6 +94,73 @@ reviewer checks each image's alt text, relevance and exposure, and a template
 may mark image slots. A document is out of date when an image it places was
 replaced, deleted or relabelled away from its audience. See
 [Media](MEDIA.md#in-documents).
+
+A writer can also mark where a picture would help and none was offered, as
+`![what the picture should show](image-wanted)`. It is not media and needs no
+id; the description must have at least three words. The page shows it as a
+note, and the [website](#download-as-a-website) lists every one in
+`images-wanted.html`.
+
+### Concept links and flows
+
+A body is Markdown with two additions, both optional.
+
+- **Concept links.** `[[Invoice]]`, or `[[Invoice|invoices]]` where the
+  sentence needs other words, links a concept. The name is matched, ignoring
+  case, against the names and aliases of concepts the document's audience may
+  see, and the match is stored with the revision. In the document view the
+  link opens the profile's document about that concept. A name that matches
+  no concept, or more than one, is not refused: it reads as its text, and the
+  run's summary lists it (`unmatched_concept_links`).
+- **Flows.** A flow shows something that happens in steps. The writer names a
+  start statement; the server draws the steps from the stored links, so a
+  document cannot show a step or a condition that is not stored. The writer
+  sees the drawing first with the `preview_flow` read, submits the flow
+  beside the body as `{name, title, start, stop}`, and places it with a
+  fenced block whose info string is `flow` and whose only content is the
+  name:
+
+  ````markdown
+  ```flow
+  export-request-to-download
+  ```
+  ````
+
+What a flow draws from each link:
+
+| Link | Drawn as |
+|---|---|
+| `proceeds`, `next` | the next step |
+| `contains`, from an event to an event or a procedure to an action | a step that is part of its parent |
+| `triggers` | a step that starts a separate process |
+| `on-success`, `on-failure` | a branch named so |
+| `fallback-to` | an alternative, "otherwise" |
+| `establishes` | a result at the side of its step |
+
+A condition is written on its arrow in words. A statement reached twice is
+drawn once and the later arrow joins it, which also ends a loop. The walk does
+not continue past a `stop` statement. A drawing holds at most 12 steps and 4
+side outcomes per step, and the walk visits at most 60 statements; where a
+limit cuts it short, the flow says it continues and `preview_flow` reports
+`truncated`, so the writer can pick a later start or add a stop.
+
+One refusal names every problem with a submission's flows: a placement naming
+no submitted flow, a flow never placed, a name that is not lowercase letters,
+digits and hyphens or is used twice, a `start` or `stop` that does not exist
+or the audience may not see, and a drawing of fewer than three statements.
+
+The drawing is stored with the revision and its statements are cited with the
+ones the writer listed. The reviewer is told what each placed flow shows. A
+revising writer submits `flows` again; what it submits replaces the stored
+set.
+
+A document about one concept starts from a brief that also lists where flows
+start among the concept's statements, its related and more specific concepts,
+the concepts most often named with it, and the pages the profile already has
+about those, so the writer links to a page instead of repeating it.
+
+The [developer reference](profile-examples/developer-reference.md) example
+profile writes one such page per concept.
 
 ### Keeping documents up to date
 
@@ -177,10 +246,68 @@ replaced image gets a new file name, so its document changes too. Publishing
 refuses a document placing media that was deleted or that its audience may no
 longer see.
 
+A document whose body holds a concept link or a flow placement is not
+delivered to GitHub: only Mycelium renders them. Read it in Mycelium or as a
+[website](#download-as-a-website).
+
 The document shows which revision was published and whether a newer internal
-revision awaits publication. A publication completing during a concurrent local
-edit still records the exact revision sent. Existing remote-change checks remain
-in place. Merging and deployment happen in GitHub; Mycelium does not perform them.
+revision awaits publication. A publication completing during a concurrent
+revision still records the exact revision sent. Merging and deployment happen
+in GitHub; Mycelium does not perform them.
+
+### Download as a website
+
+A writing profile's current documents can be written as a static site: a home
+page, one page per document, links between concepts, flows and search. It
+loads nothing from elsewhere and opens from `file://`.
+
+- **In the web app:** an administrator opens the profile under **Settings →
+  Documentation** and chooses **Download as a website**, with an optional
+  site name and feedback address. The zip is built on request and not kept.
+- **Over HTTP:** `GET /api/documentation/sites/<profile>?title=…&feedback_url=…`
+  returns the same zip. Real admins only, because the site holds everything
+  the profile's audience may see, whoever asks. A refusal answers 400 with
+  the reason.
+- **On the machine holding the data directory:**
+
+  ```bash
+  mycelium docs-site --profile developer-reference --out site \
+    --title "Product reference" \
+    --feedback-url "mailto:docs@example.com?subject={title}"
+  ```
+
+  `--out` must be missing or empty, so no page of an earlier export is left
+  behind. The command reads the databases as they are and prints what the
+  export revealed.
+
+What is written:
+
+| File | Holds |
+|---|---|
+| `index.html` | The written pages as a tree under their parent concepts, each with the first sentence of its lead, then the pages not written yet |
+| `<template>/<slug>.html` | One page per document: breadcrumb, title, "Also called", lead, contents list, the concept's direct relations (at most 12), sections, cited statements folded as sources, and when the revision was written |
+| `concept/<slug>.html` | A generated page for each concept a page links to that has no written page: names, description, relations, the statements naming it and the pages linking to it, marked as not written yet |
+| `media/` | The images the pages place |
+| `search-index.js`, `site.js`, `site.css` | Search over titles, other names, headings and text, run in the browser; the script and the stylesheet |
+| `images-wanted.html` | Every image placeholder with its page, section and description |
+| `site-report.html` | Linked concepts without a written page, images wanted, documents left out and why, flows a limit cut short, and concept links that matched no concept |
+
+Every page carries the same tree as a sidebar and a search box. Concept names
+are linked without the writer marking them: the names and aliases of concepts
+named by the statements a page cites, once in the lead and once per section,
+never inside code, headings, links or flows.
+
+The feedback address must start with `http:`, `https:` or `mailto:`. It puts a
+"Report a problem with this page" link on every page; `{title}` and `{page}`
+are replaced, URL-encoded, by the page's title and its path within the site.
+
+Everything is read through the audience the profile writes for. A document is
+left out, and named in the report, when it cites a statement, draws a flow
+statement or places media that audience can no longer see. An external
+audience, which may not see concept relations, gets a flat home page and no
+relations on its pages. No site is written when the profile does not exist,
+its audience was retired, or a document's template name or slug is not a safe
+file name.
 
 ### Storage and automation
 

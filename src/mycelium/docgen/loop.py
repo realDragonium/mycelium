@@ -60,15 +60,18 @@ from ..agentloop import (
     substrate_has as _substrate_has,
 )
 from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
-from . import prompts
+from . import prompts, reads, render
 from .config import DOCTRINE_NAME, DocgenConfig
 from .schema import (
     DocgenResult,
     DocumentWritten,
-    ManualDocument,
+    FlowDefinition,
     NothingWritten,
+    RefusedDraft,
     ReviewRecord,
     RevisionTarget,
+    StoredFlow,
+    StoredLink,
 )
 from .tools import (
     EMIT_TOOL,
@@ -77,6 +80,7 @@ from .tools import (
     RESOLVE_TOOL,
     REVIEW_TOOL,
     build_tools,
+    parse_emit_flows,
     parse_emit_input,
     parse_review_input,
     resolve_tool_def,
@@ -105,6 +109,13 @@ _MAX_SLUG_CHARS = 80
 #: mentioned by more names the rest and how to page through them.
 _MAX_ANCHOR_STATEMENTS = 200
 _ANCHOR_PAGE = 100
+_FLOW_NAME = re.compile(r"[a-z0-9-]+")
+#: A drawing of fewer statements says nothing a sentence would not.
+_MIN_FLOW_STATEMENTS = 3
+#: An image placeholder with fewer words does not say what to show.
+_MIN_PLACEHOLDER_WORDS = 3
+#: How many existing pages about surrounding concepts the brief lists.
+_MAX_EXISTING_PAGES = 12
 #: Words of this harness that mean nothing to a document's reader.
 _INTERNAL_VOCABULARY = re.compile(
     r"\bsubstrate\b|\b(?:stm|ent)_\w+|\b(?:"
@@ -134,10 +145,6 @@ class MediaLookup(Protocol):
         audience: Audience | None,
     ) -> list[media.Offer]: ...
 
-    def placeable(
-        self, media_ids: Iterable[str], audience: Audience | None
-    ) -> dict[str, media.Offer]: ...
-
 
 def run_docgen(
     prompt: str,
@@ -149,7 +156,6 @@ def run_docgen(
     report_gap: Callable[[str], Any] | None = None,
     config: DocgenConfig | None = None,
     revision_target: RevisionTarget | None = None,
-    manual_document: ManualDocument | None = None,
     profiles: CatalogueSnapshot | None = None,
     instructions: ai_prompts.Snapshot | None = None,
     review_instructions: ai_prompts.Snapshot | None = None,
@@ -159,6 +165,7 @@ def run_docgen(
     scope_reader: ScopeReader | None = None,
     review_notes: Sequence[ReviewNote] = (),
     media_lookup: MediaLookup | None = None,
+    refused_draft: RefusedDraft | None = None,
 ) -> DocgenResult:
     """Write one document for `prompt`. Returns `DocumentWritten` or
     `NothingWritten` — never raises for retrieval, resolution or closure
@@ -174,10 +181,13 @@ def run_docgen(
     With `profiles`, the run writes for its profile's audience: every read
     goes through `scope_reader` and a citation outside what it can return is
     refused. Without them (a bench script) nothing is scoped.
+
+    `refused_draft` is what an earlier attempt at this request submitted and
+    had refused; the writer revises it instead of starting over.
     """
     config = config or DocgenConfig.from_env()
     if substrate is None:
-        substrate = InProcessSubstrate()
+        substrate = reads.DocumentationSubstrate(InProcessSubstrate())
     if report_gap is None:
         report_gap = _default_gap_reporter
 
@@ -204,7 +214,6 @@ def run_docgen(
             else _store_catalogue(),
             load_texts=profiles.texts if profiles is not None else _store_texts,
             revision_target=revision_target,
-            manual_document=manual_document,
             anchor_entity_id=anchor_entity_id,
             run_id=run_id,
             on_progress=on_progress,
@@ -212,6 +221,7 @@ def run_docgen(
             scope_reader=scope_reader or _scope_reader,
             review_notes=review_notes,
             media_lookup=media_lookup or media,
+            refused_draft=refused_draft,
         )
 
     result.trace["prompts"] = [
@@ -294,7 +304,6 @@ class _RunContext:
     positional parameters (mirrors ask/ingest)."""
 
     prompt: str
-    manual_document: ManualDocument | None
     client: Any
     substrate: SubstrateReader
     report_gap: Callable[[str], Any]
@@ -345,7 +354,6 @@ def _open(
     catalogue: dict[str, list[str]],
     load_texts: Callable[[str, str], tuple[str | None, str | None, str | None]],
     revision_target: RevisionTarget | None = None,
-    manual_document: ManualDocument | None = None,
     review_instructions: str = prompts.DEFAULT_REVIEW_INSTRUCTIONS,
     anchor_entity_id: str | None = None,
     run_id: str | None = None,
@@ -354,6 +362,7 @@ def _open(
     scope_reader: ScopeReader | None = None,
     review_notes: Sequence[ReviewNote] = (),
     media_lookup: MediaLookup | None = None,
+    refused_draft: RefusedDraft | None = None,
 ) -> _RunContext | NothingWritten:
     """Everything before the first writing turn: settle the guideline set
     and document type, scope the reader to the profile's audience, build the
@@ -375,7 +384,6 @@ def _open(
 
     ctx = _RunContext(
         prompt=prompt,
-        manual_document=manual_document,
         client=client,
         substrate=substrate,
         report_gap=report_gap,
@@ -463,15 +471,6 @@ def _open(
         template=template,
         audience=ctx.audience,
     )
-    if manual_document is not None:
-        ctx.system_prompt += (
-            "\n\nMANUAL EDIT: The user supplied immutable document text. Your task is "
-            "to gather source statements supporting that text, not to write or revise it. "
-            "Return its title and body unchanged through emit_document, with source IDs. "
-            "If substantive claims lack support and are not explicitly marked uncertain, "
-            "report the knowledge gap and emit with empty statement_ids to refuse saving. "
-            "Do not cite merely related statements as support for unsupported claims."
-        )
     ctx.tools = build_tools(substrate.tool_specs())
 
     anchor = _read_anchor(ctx, anchor_entity_id) if anchor_entity_id else None
@@ -486,30 +485,18 @@ def _open(
                 document_type=ctx.document_type,
                 anchor=anchor,
                 current_document=current_document,
-                edited_at_destination=revision_target is not None
-                and revision_target.base == "destination",
+                current_flows=revision_target.current.flows
+                if revision_target is not None
+                else (),
+                current_statement_ids=revision_target.current.statement_ids
+                if revision_target is not None
+                else (),
                 review_notes=review_notes,
+                refused_draft=refused_draft,
             )
             + "".join(ctx.opening_media),
         }
     ]
-    if manual_document is not None:
-        ctx.messages = [
-            {
-                "role": "user",
-                "content": prompts.initial_user_message(
-                    prompt,
-                    recon,
-                    guideline_set=ctx.guideline_set,
-                    document_type=ctx.document_type,
-                    anchor=anchor,
-                )
-                + "\n\nIMMUTABLE USER-SUPPLIED DOCUMENT:\n"
-                + prompts.document_payload(
-                    title=manual_document.title, body=manual_document.body
-                ),
-            }
-        ]
     return ctx
 
 
@@ -791,6 +778,7 @@ def _read_anchor(ctx: _RunContext, entity_id: str) -> prompts.Anchor | None:
         trace.notes.append(f"anchor read failed: {exc}")
         return None
     ctx.successful_reads += 1
+    context = _concept_context(ctx, entity_id)
     anchor = prompts.Anchor(
         entity_id=entity_id,
         names=[
@@ -801,10 +789,69 @@ def _read_anchor(ctx: _RunContext, entity_id: str) -> prompts.Anchor | None:
         description=str(entity.get("description") or ""),
         statements=statements,
         total=max(total, len(statements)),
+        context=context,
+        pages=_existing_pages(ctx, entity_id, context) if context is not None else [],
     )
-    found = _note_retrieved(ctx, statements, prompts.format_anchor(anchor))
+    # A flow start beyond the listed page is shown with its text all the same.
+    shown = [
+        statements,
+        [{"id": start.statement_id} for start in context.flow_starts]
+        if context is not None
+        else [],
+    ]
+    found = _note_retrieved(ctx, shown, prompts.format_anchor(anchor))
     ctx.opening_media.append(_offer_media(ctx, found, (entity_id,)))
     return anchor
+
+
+def _concept_context(ctx: _RunContext, entity_id: str) -> reads.ConceptContext | None:
+    """Where the concept's flows start and which concepts surround it.
+    Best-effort: the brief still lists the concept's statements without it."""
+    trace: TraceBuilder = ctx.trace
+    if not _substrate_has(ctx.substrate, reads.CONTEXT_CALL):
+        return None
+    args = {"entity_id": entity_id}
+    try:
+        raw = ctx.substrate.call(reads.CONTEXT_CALL, args)
+    except SubstrateError as exc:
+        trace.notes.append(f"anchor context read failed: {exc}")
+        return None
+    trace.record_tool_call(reads.CONTEXT_CALL, args, raw, ok=True, counts_as_op=True)
+    return reads.ConceptContext.model_validate(raw)
+
+
+def _existing_pages(
+    ctx: _RunContext, entity_id: str, context: reads.ConceptContext
+) -> list[reads.ExistingPage]:
+    """The documents this profile already holds about the concepts around the
+    anchor, so the writer links to them instead of repeating them.
+    Best-effort, as the context is."""
+    surrounding = [
+        concept
+        for concept in dict.fromkeys(
+            [
+                *(link.entity_id for link in context.related),
+                *(concept.entity_id for concept in context.more_specific),
+                *(concept.entity_id for concept in context.named_together),
+            ]
+        )
+        if concept != entity_id
+    ]
+    if not surrounding or not _substrate_has(ctx.substrate, reads.PAGES_CALL):
+        return []
+    args = {
+        "guideline_set": ctx.guideline_set,
+        "document_type": ctx.document_type,
+        "entity_ids": surrounding,
+        "limit": _MAX_EXISTING_PAGES,
+    }
+    try:
+        raw = ctx.substrate.call(reads.PAGES_CALL, args)
+    except SubstrateError as exc:
+        ctx.trace.notes.append(f"existing pages read failed: {exc}")
+        return []
+    ctx.trace.record_tool_call(reads.PAGES_CALL, args, raw, ok=True, counts_as_op=True)
+    return reads.EXISTING_PAGES.validate_python(raw)
 
 
 def _progress(ctx: _RunContext, activity: str) -> None:
@@ -940,7 +987,9 @@ def _handle_emit(
     finish, or None to keep looping after a re-prompt."""
     trace: TraceBuilder = ctx.trace
     try:
-        title, body, ids, gaps = parse_emit_input(dict(tool_use.input or {}))
+        emitted = dict(tool_use.input or {})
+        title, body, ids, gaps = parse_emit_input(emitted)
+        definitions = parse_emit_flows(emitted)
     except ValueError as exc:
         if ctx.malformed_retries < _MAX_MALFORMED_RETRIES and not degraded:
             ctx.malformed_retries += 1
@@ -951,18 +1000,10 @@ def _handle_emit(
         trace.notes.append(f"emit_document malformed: {exc}")
         return _nothing(ctx, f"the emitted document was malformed: {exc}")
 
-    if ctx.manual_document is not None:
-        title, body = ctx.manual_document.title, ctx.manual_document.body
-    problem = _emit_problem(
-        title, body, ids, ctx.retrieved_ids, ctx.visible_ids
-    ) or _media_problem(ctx, body)
+    problem, drawn = _submission_problem(ctx, title, body, ids, definitions)
     if problem is not None:
         trace.refused_emits.append(problem)
-        if (
-            ctx.emit_blocks < _MAX_EMIT_BLOCKS
-            and not degraded
-            and ctx.manual_document is None
-        ):
+        if ctx.emit_blocks < _MAX_EMIT_BLOCKS and not degraded:
             ctx.emit_blocks += 1
             _append_tool_error(
                 ctx.messages, tool_use.id, prompts.emit_block_message(problem)
@@ -973,18 +1014,16 @@ def _handle_emit(
     trace.declared_gaps = list(gaps)
     if degraded:
         trace.degraded = True
-    review = _review(ctx, title, body, ids)
+    ids = _with_flow_statements(ids, drawn)
+    links, _unmatched = _resolve_links(ctx, body)
+    review = _review(ctx, title, body, ids, drawn)
     if review is None:
         # The reviewer is the gate between generated text and the registry.
         # A gate that could not run is closed, never treated as an implicit
         # pass merely because the writer produced grounded text.
         return _nothing(ctx, f"the document could not be reviewed: {ctx.review_error}")
     if not review.passed:
-        if (
-            review.attempts <= _MAX_REVIEW_RETRIES
-            and not degraded
-            and ctx.manual_document is None
-        ):
+        if review.attempts <= _MAX_REVIEW_RETRIES and not degraded:
             # This replacement discards the pending emit_document tool_use
             # with the old conversation, so it needs no tool_result. Keeping
             # either would also keep the reasoning the findings contradict.
@@ -995,6 +1034,8 @@ def _handle_emit(
                         prompt=ctx.prompt,
                         title=title,
                         body=body,
+                        flows=drawn,
+                        statement_ids=ids,
                         exposure_findings=review.exposure.findings,
                         conformance_findings=review.conformance.findings,
                     ),
@@ -1013,6 +1054,8 @@ def _handle_emit(
             title=title,
             body=body,
             cited=ids,
+            links=links,
+            flows=drawn,
         )
     # Guideline resolution runs before the first writing turn.
     assert ctx.guideline_set is not None and ctx.document_type is not None
@@ -1022,6 +1065,8 @@ def _handle_emit(
         body=body,
         statement_ids=ids,
         cited_statements=ctx.cited_statements,
+        concept_links=links,
+        flows=drawn,
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
         review=review,
@@ -1031,7 +1076,11 @@ def _handle_emit(
 
 
 def _review(
-    ctx: _RunContext, title: str, body: str, ids: list[str]
+    ctx: _RunContext,
+    title: str,
+    body: str,
+    ids: list[str],
+    flows: Sequence[StoredFlow] = (),
 ) -> ReviewRecord | None:
     """Put one grounded document through an isolated reviewer context.
 
@@ -1086,6 +1135,7 @@ def _review(
                 body=body,
                 statements=statements,
                 placed_media=_placed(ctx, body),
+                placed_flows=flows,
             ),
         }
     ]
@@ -1207,21 +1257,185 @@ def _emit_problem(
     return None
 
 
+def _submission_problem(
+    ctx: _RunContext,
+    title: str,
+    body: str,
+    ids: list[str],
+    definitions: Sequence[FlowDefinition],
+) -> tuple[str | None, list[StoredFlow]]:
+    """Why this submission may not be recorded, or None, with the flows its
+    body places. Flows are drawn first: the statements of a flow this
+    submission places count as read, for this submission only."""
+    drawn, flow_problem = _draw_flows(ctx, body, definitions)
+    read = ctx.retrieved_ids.union(*(flow.drawing.statement_ids for flow in drawn))
+    problem = (
+        _emit_problem(title, body, ids, read, ctx.visible_ids)
+        or _media_problem(ctx, body)
+        # One refusal for everything about flows and image placeholders, so
+        # together they cost one attempt.
+        or " ".join(filter(None, [flow_problem, _placeholder_problem(body)]))
+        or None
+    )
+    return problem, drawn
+
+
+def _placeholder_problem(body: str) -> str | None:
+    vague = [
+        placeholder.description
+        for placeholder in render.image_placeholders(body)
+        if len(placeholder.description.split()) < _MIN_PLACEHOLDER_WORDS
+    ]
+    if not vague:
+        return None
+    return (
+        "an image placeholder does not say what to show: "
+        + ", ".join(f"![{description}]({render.IMAGE_WANTED})" for description in vague)
+        + f". Describe the screen and the state it is in, in at least "
+        f"{_MIN_PLACEHOLDER_WORDS} words, or leave the placeholder out."
+    )
+
+
+def _draw_flows(
+    ctx: _RunContext, body: str, definitions: Sequence[FlowDefinition]
+) -> tuple[list[StoredFlow], str | None]:
+    """Draw each submitted flow inside the run's audience. Every problem with
+    the flows comes back in one message, so together they cost one attempt."""
+    placed = render.flow_placements(body)
+    if not placed and not definitions:
+        return [], None
+    names = [definition.name for definition in definitions]
+    problems = [
+        f"the body places a flow {name!r} that `flows` does not hold"
+        for name in dict.fromkeys(placed)
+        if name not in names
+    ]
+    problems += [
+        f"the body places flow {name!r} {placed.count(name)} times; place it once"
+        for name in dict.fromkeys(placed)
+        if placed.count(name) > 1
+    ]
+    problems += [
+        f"flow {name!r} is submitted {names.count(name)} times; give each flow "
+        "its own name"
+        for name in dict.fromkeys(names)
+        if names.count(name) > 1
+    ]
+    drawn: list[StoredFlow] = []
+    for definition in definitions:
+        name = definition.name
+
+        def refuse(reason: str, name: str = name) -> None:
+            problems.append(f"flow {name!r} {reason}")
+
+        if not _FLOW_NAME.fullmatch(name):
+            refuse("has a name that is not lowercase letters, digits and hyphens")
+        if names.count(name) > 1:
+            continue
+        if name not in placed:
+            refuse(
+                "is never placed in the body; place it with a fenced `flow` "
+                "block holding its name, or leave it out"
+            )
+        found = _draw(ctx, definition)
+        if isinstance(found, str):
+            refuse(f"could not be drawn: {found}")
+            continue
+        for missing in found.missing:
+            end = "start" if missing == definition.start else "stop"
+            refuse(
+                f"has a {end}, {missing}, that does not exist or that this "
+                "document's audience may not see"
+            )
+        if found.drawing is None:
+            continue
+        if len(found.drawing.statement_ids) < _MIN_FLOW_STATEMENTS:
+            refuse(
+                f"draws fewer than {_MIN_FLOW_STATEMENTS} statements "
+                f"({len(found.drawing.statement_ids)}). Preview it and choose a "
+                "start that more follows from, or describe it in prose"
+            )
+        drawn.append(StoredFlow(**definition.model_dump(), drawing=found.drawing))
+    if not problems:
+        return drawn, None
+    return [], "its flows cannot be stored: " + "; ".join(problems) + "."
+
+
+def _draw(ctx: _RunContext, definition: FlowDefinition) -> reads.DrawnFlow | str:
+    """One flow drawn by the harness, or why it could not be."""
+    if not _substrate_has(ctx.substrate, reads.DRAW_CALL):
+        return "this run cannot draw flows"
+    args = {"start": definition.start, "stop": definition.stop}
+    try:
+        raw = ctx.substrate.call(reads.DRAW_CALL, args)
+    except SubstrateError as exc:
+        ctx.trace.record_tool_call(
+            reads.DRAW_CALL, args, None, ok=False, counts_as_op=True, error=str(exc)
+        )
+        return str(exc)
+    ctx.trace.record_tool_call(reads.DRAW_CALL, args, raw, ok=True, counts_as_op=True)
+    return reads.DrawnFlow.model_validate(raw)
+
+
+def _with_flow_statements(ids: list[str], flows: Sequence[StoredFlow]) -> list[str]:
+    """The cited statements with every statement a placed flow draws."""
+    drawn = [
+        statement_id for flow in flows for statement_id in flow.drawing.statement_ids
+    ]
+    return list(dict.fromkeys([*ids, *drawn]))
+
+
+def _resolve_links(ctx: _RunContext, body: str) -> tuple[list[StoredLink], list[str]]:
+    """The body's concept links matched, ignoring case, against the names and
+    aliases of concepts the run's audience may see, and the names as written
+    that matched no concept or more than one. Those are not refused: such a
+    link reads as its text, and the run's notes name it."""
+    names = list(dict.fromkeys(link.name for link in render.concept_links(body)))
+    if not names:
+        ctx.trace.unmatched_links = []
+        return [], []
+    resolved: dict[str, str] = {}
+    if _substrate_has(ctx.substrate, reads.LINKS_CALL):
+        try:
+            resolved = ctx.substrate.call(reads.LINKS_CALL, {"names": names})
+        except SubstrateError as exc:
+            ctx.trace.notes.append(f"concept links were not resolved: {exc}")
+    unmatched = [name for name in names if name not in resolved]
+    note_unmatched_links(ctx, unmatched)
+    return (
+        [
+            StoredLink(name=name, entity_id=resolved[name])
+            for name in names
+            if name in resolved
+        ],
+        unmatched,
+    )
+
+
+def note_unmatched_links(ctx: _RunContext, unmatched: Sequence[str]) -> None:
+    ctx.trace.unmatched_links = list(unmatched)
+    if unmatched:
+        ctx.trace.notes.append(unmatched_links_note(unmatched))
+
+
+def unmatched_links_note(names: Sequence[str]) -> str:
+    return (
+        "concept links that match no concept, or more than one, and read as "
+        "plain text: " + ", ".join(f"[[{name}]]" for name in names)
+    )
+
+
 def _placed(ctx: _RunContext, body: str) -> list[media.Offer]:
-    placed = media.referenced(body)
-    if not placed:
-        return []
-    if ctx.manual_document is not None and ctx.media_lookup is not None:
-        known = ctx.media_lookup.placeable(placed, ctx.audience)
-    else:
-        known = ctx.offered_media
-    return [known[item] for item in placed if item in known]
+    return [
+        ctx.offered_media[item]
+        for item in media.referenced(body)
+        if item in ctx.offered_media
+    ]
 
 
 def _media_problem(ctx: _RunContext, body: str) -> str | None:
     """Why the media this body places may not stand, or None. The writer may
-    place only what it was offered; a manual edit, which no writer chose
-    from offers, may place what the document's audience may see."""
+    place only what it was offered."""
     images = media.IMAGE.findall(body)
     if len(images) != len(media.REFERENCE.findall(body)):
         return (
@@ -1246,9 +1460,6 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> DocgenResult:
     reason to stop gathering, never a reason to record a groundless page."""
     trace: TraceBuilder = ctx.trace
     trace.forced_finalize = reason
-    if ctx.manual_document is not None:
-        detail = ctx.model_error if reason == "api_error" else reason
-        return _nothing(ctx, f"The manual edit could not be checked: {detail}")
     trace.degraded = True
     ctx.messages.append(
         {"role": "user", "content": prompts.forced_finalize_message(reason)}
@@ -1285,9 +1496,9 @@ def _nothing(
     title: str | None = None,
     body: str | None = None,
     cited: list[str] | None = None,
+    links: Sequence[StoredLink] = (),
+    flows: Sequence[StoredFlow] = (),
 ) -> NothingWritten:
-    if ctx.manual_document is not None:
-        title, body = ctx.manual_document.title, ctx.manual_document.body
     carried_review = review if review is not None else ctx.review
     return NothingWritten(
         reason=reason,
@@ -1296,6 +1507,8 @@ def _nothing(
         review=carried_review,
         title=title,
         body=body,
+        concept_links=list(links),
+        flows=list(flows),
         gaps=list(ctx.gaps),
         trace=_build_trace(ctx, "nothing_written", cited=cited or []),
     )

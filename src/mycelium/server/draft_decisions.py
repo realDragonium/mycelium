@@ -99,14 +99,6 @@ def ask(draft_id: str, question: str, note: DecisionNote) -> None:
         )
 
 
-def _decidable_by(principal: _auth.Principal, row: sqlite3.Row) -> None:
-    if row["created_by"] == principal.id:
-        raise _auth.RoleRequired(
-            f"draft '{row['id']}' was created by you; another writer or admin "
-            "decides it"
-        )
-
-
 @tool(role="writer", real_role=True)
 def review_draft(
     draft_id: str,
@@ -117,7 +109,7 @@ def review_draft(
     question: str | None = None,
     evidence: list[Evidence] | None = None,
 ) -> DraftDecision:
-    """Decide a submitted draft you did not create, as a curator does in the
+    """Decide a submitted draft, as a curator does in the
     web app, whatever the automatic draft-review setting is.
 
     - `approve` applies the draft as it is.
@@ -139,7 +131,6 @@ def review_draft(
     """
     principal = _identified_principal()
     row = _draft(draft_id)
-    _decidable_by(principal, row)
     if drafts_store.status_for(row) != "submitted":
         raise ValueError(
             f"draft '{draft_id}' is {drafts_store.status_for(row)}; only "
@@ -202,14 +193,13 @@ def _approve(
 
 @tool(role="writer", real_role=True)
 def reopen_draft(draft_id: str, reason: str) -> DraftDecision:
-    """Return a rejected draft you did not create to `submitted`, so it can be
+    """Return a rejected draft to `submitted`, so it can be
     decided again with `review_draft`; the automatic reviewer's rejections
     included. `reason` says why and is recorded in the draft's `decisions`.
     Refused when a record the draft changes was rewritten after the draft was
     written: such a draft has to be submitted again against current
     knowledge."""
     principal = _identified_principal()
-    _decidable_by(principal, _draft(draft_id))
     reopen(
         draft_id,
         drafts_store.decision_note(

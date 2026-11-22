@@ -752,8 +752,6 @@ def decide_as_reviewer(
         draft = drafts_store.get_draft(drafts, draft_id)
         if draft is None:
             raise ValueError("Draft not found.")
-        if draft["created_by"] == principal.id:
-            raise auth.RoleRequired("A draft creator cannot review their own aliases.")
         drafts_store._check_no_active_application(drafts, draft_id)
         if drafts_store.status_for(draft) != "submitted":
             raise Conflict("This draft is already decided.")
@@ -809,8 +807,6 @@ def resolve_stale_as_reviewer(
         draft = drafts_store.get_draft(drafts, draft_id)
         if draft is None:
             raise ValueError("Draft not found.")
-        if draft["created_by"] == principal.id:
-            raise auth.RoleRequired("A draft creator cannot review their own aliases.")
         drafts_store._check_no_active_application(drafts, draft_id)
         if drafts_store.status_for(draft) != "submitted":
             raise Conflict("This draft is already decided.")

@@ -140,14 +140,17 @@ def test_rejecting_then_reopening_lets_the_draft_be_decided_again():
     assert actions == ["rejected", "reopened", "approved"]
 
 
-def test_a_principal_cannot_decide_or_reopen_its_own_draft():
-    draft_id = _draft(by="agent-1")
+def test_a_principal_may_reject_reopen_and_approve_its_own_draft(agent):
+    draft_id = _draft(by=agent.id)
 
-    with pytest.raises(auth.RoleRequired, match="created by you"):
-        server.review_draft(draft_id, "approve", _revision(draft_id))
-    with pytest.raises(auth.RoleRequired, match="created by you"):
-        server.reopen_draft(draft_id, "Try again.")
-    assert server.get_draft(draft_id)["status"] == "submitted"
+    server.review_draft(
+        draft_id, "reject", _revision(draft_id), reason="Not yet checked."
+    )
+    server.reopen_draft(draft_id, "Checked against the export code.")
+    server.review_draft(draft_id, "approve", _revision(draft_id))
+
+    assert server.get_draft(draft_id)["status"] == "approved"
+    assert _texts() == {"A workspace admin exports invoices."}
 
 
 def test_a_drafter_cannot_decide_drafts():

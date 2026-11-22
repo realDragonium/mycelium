@@ -176,9 +176,8 @@ grants** is on), a second AI decides waiting grants in place of a curator:
   **Retries of a failed AI audience decision** times (`decision_retries`,
   default 2), then left for a curator; see [Stopped decisions](#stopped-decisions).
 - With Audience labelling set to External agent, waiting grants are queued as
-  [`audience_review`](AGENT_TASKS.md#kinds) tasks, one batch per labeller. The
-  agent that labelled a batch is not offered it, and a submission deciding a
-  grant it labelled is skipped.
+  [`audience_review`](AGENT_TASKS.md#kinds) tasks, which any agent can
+  claim, the one that labelled the grants included.
 
 Each decision is confirm or reject, with a reason. It goes through the same
 path as a curator's: the label records who decided (the agent, or
@@ -231,8 +230,7 @@ lists that otherwise wait for a curator:
 It runs on the same model or agents as grant review, one decision per
 statement with a reason. On a server model a statement it leaves out is tried
 again up to `decision_retries` times for the same text. On an External agent the batches
-are `audience_review` tasks; the curator who set a label, or the labeller of a
-kept grant, is not given it. A statement edited again, or relabelled, since it
+are `audience_review` tasks. A statement edited again, or relabelled, since it
 was offered is skipped. Curators can still decide both lists themselves.
 
 ### Stopped decisions

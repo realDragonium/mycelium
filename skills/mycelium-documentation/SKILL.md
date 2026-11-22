@@ -88,7 +88,7 @@ the run. Name them so the operator can fill them in the knowledge base (the
 ## Retry
 
 `retryable` on the run says whether it can start again as it was: it wrote
-nothing and was not a manual edit.
+nothing.
 
 - **Retry**: `retry_documentation(run_id=…)` starts the same request again. Use it after a
   failure that has gone away (a provider error, a limit since raised).
@@ -119,14 +119,17 @@ gave up, and only on the operator's word.
 document cites were edited, deleted, merged away or are no longer visible to
 its audience; `stale.changes` shows old and new text. Revise with
 `update_sources=true` (no prompt needed) to brief the run with exactly those
-changes.
+changes. `stale.flow_changes` lists the steps of a placed flow that changed
+(a step added or removed, a condition changed); the same revision redraws it.
 
-**Edited on GitHub.** A published document can be edited on its pull
-request branch or after merge. A revision then starts from the published
-text and keeps those edits (`revision_base: destination`). If the document
-also has a revision here that was never published, the call is refused.
-Relay the choice to the operator: keep the GitHub edits with
-`start_from_destination=true`, or undo them on GitHub. Do not choose for them.
+**Concept links and flows.** A document's `concept_links` and `flows` are
+what its body's `[[Name]]` links matched and what each placed flow draws.
+The server's writer adds them; you do not write them.
+
+**Edited on GitHub.** Publishing is one-way: a revision always starts from
+Mycelium's text, and a publish overwrites the file on GitHub, including
+changes made there by hand. Tell the operator to change the statements or ask
+for a revision instead of editing the file.
 
 ## Plan which documents an audience needs
 
@@ -202,7 +205,13 @@ or dismissed item again. Report what gave up.
   publishes every reviewed revision itself; do not deliver it again. A profile
   that names its destinations (`destinations` in the profile listing)
   publishes only there; pick one of those. Merging the pull request is
-  the destination repository's decision, never yours.
+  the destination repository's decision, never yours. A document whose body
+  holds a concept link or a flow is not delivered to GitHub.
+- **A website of a profile's pages.** An administrator downloads it under
+  **Download as a website** on the profile in **Settings → Documentation**,
+  from `GET /api/documentation/sites/{guideline_set}` with an admin token, or with
+  `mycelium docs-site --profile <name> --out <dir>` on the server. There is
+  no MCP tool for it.
 - **Missing facts.** Fill them in the knowledge base, then run the request
   again.
 - **Server unavailable.** Report it. Do not write the document by hand.

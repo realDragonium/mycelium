@@ -136,12 +136,12 @@ and active-run limits; the rest start on later sweeps. With a reviewer, the
 only those the reviewer approved start. A person can still decide any item
 the reviewer has not.
 
-The reviewer is never the planner. It runs where the documentation planning
+The reviewer runs where the documentation planning
 action does ([AI models](AI_MODELS.md)): one model call, separate from the
 planner's, with the planning model, limits and token accounting, or, while
 planning is set to External agent, a `plan_review` task
-([Agent tasks](AGENT_TASKS.md)) that the agent who made the plan cannot
-claim. The reviewer reads the audience description, the profile's templates
+([Agent tasks](AGENT_TASKS.md)) that any agent can claim, the one that made
+the plan included. The reviewer reads the audience description, the profile's templates
 and documents, and each item with the statements it draws on that the
 audience may see. A review that fails, or an agent's that is refused too
 often, marks its items "not reviewed" for a person. When the profile retries

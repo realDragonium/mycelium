@@ -107,10 +107,11 @@ def _served_texts() -> dict[str, str]:
 def _offered_parameters() -> dict[str, set[str]]:
     from mycelium import server  # noqa: F401 — registers the tools
     from mycelium.ask.substrate import InProcessSubstrate
-    from mycelium.docgen import tools
+    from mycelium.docgen import reads, tools
 
+    substrate = reads.DocumentationSubstrate(InProcessSubstrate())
     defs = [
-        *tools.build_tools(InProcessSubstrate().tool_specs()),
+        *tools.build_tools(substrate.tool_specs()),
         tools.resolve_tool_def({"set": ["type"]}, None),
         tools.review_tool_def(check_exposure=True),
     ]
@@ -159,3 +160,71 @@ def test_the_reviewer_sees_only_what_cited_statements_say():
     assert "Invoices can be exported." in message
     for bookkeeping in ("local-admin", "updated_by", "2026-01-01", "stm_2"):
         assert bookkeeping not in message
+
+
+def test_image_placeholders_are_permitted_syntax_for_writer_and_reviewer():
+    writer = prompts.build_system_prompt(
+        None,
+        guideline_set="developer-reference",
+        document_type="entity-page",
+        guidance=None,
+        exposure=None,
+        template="Lead, then sections.",
+    )
+    reviewer = prompts.build_review_system_prompt(
+        guideline_set="developer-reference",
+        document_type="entity-page",
+        exposure=None,
+        template="Lead, then sections.",
+    )
+
+    for prompt in (writer, reviewer):
+        assert "`![what the picture should show](image-wanted)`" in prompt
+    assert "It is not media and needs no id." in writer
+    assert "fewer than three words" in " ".join(writer.split())
+    assert "not media, and not a placeholder left in" in reviewer
+    assert (
+        "Fail CONFORMANCE for one only when its description does not say what to show"
+        in " ".join(reviewer.split())
+    )
+
+
+def test_a_retried_run_is_briefed_with_the_refused_document_to_revise():
+    from mycelium.docgen.schema import RefusedDraft
+
+    notes = [{"check": "conformance", "where": "Steps", "problem": "Not numbered."}]
+    draft = RefusedDraft(title="Exports", body="A member asks for the file.\n")
+
+    message = prompts.initial_user_message(
+        "Explain exports",
+        [],
+        guideline_set="developer-reference",
+        document_type="entity-page",
+        review_notes=notes,
+        refused_draft=draft,
+    )
+    plain = prompts.initial_user_message(
+        "Explain exports",
+        [],
+        guideline_set="developer-reference",
+        document_type="entity-page",
+        review_notes=notes,
+    )
+
+    assert "- conformance: Steps — Not numbered." in message
+    assert "Revise this text instead of starting over" in message
+    assert prompts.document_payload(title=draft.title, body=draft.body) in message
+    assert "ITS FLOWS" not in message
+    assert "THE DOCUMENT THAT ATTEMPT SUBMITTED" not in plain
+
+
+def test_the_review_retry_asks_to_revise_the_returned_document():
+    message = prompts.review_retry_message(
+        prompt="Explain exports",
+        title="Exports",
+        body="Body.",
+        exposure_findings=[],
+        conformance_findings=[],
+    )
+
+    assert "Revise the document above instead of starting over" in message

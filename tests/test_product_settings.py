@@ -420,8 +420,7 @@ def test_http_saves_typed_lists_and_rejects_invalid_input(running_app, monkeypat
 
 def test_document_destination_change_refuses_old_delivery_coordinates(db, monkeypatch):
     from mycelium import docs_store
-    from mycelium.docgen import destinations, publication
-    from mycelium.docgen.schema import CurrentDocument
+    from mycelium.docgen import destinations
 
     monkeypatch.setenv(
         "MYCELIUM_GITHUB_CREDENTIALS",
@@ -451,17 +450,9 @@ def test_document_destination_change_refuses_old_delivery_coordinates(db, monkey
         content_revision="a" * 40,
         target=destinations.target_identity(admitted["docs"]),
     )
-    observed = []
-
-    def read(config, *args):
-        observed.append(destinations.destination_coordinates(config)["repo"])
-        return CurrentDocument(body="Remote")
-
-    monkeypatch.setattr(destinations, "read_document", read)
     row = docs_store.get_document(conn, document_id)
-    current = publication.destination_text(row)
-    assert current is not None and current.body == "Remote"
-    assert observed == ["original"]
+    recorded, _ = destinations.publishing_destination(row, "docs")
+    assert destinations.destination_coordinates(recorded)["repo"] == "original"
     changed = settings.DestinationSettings(
         name="docs",
         owner="acme",
@@ -471,9 +462,8 @@ def test_document_destination_change_refuses_old_delivery_coordinates(db, monkey
         binding="github",
     )
     save(settings.DocumentationSettings(destinations=(changed,)))
-    with pytest.raises(ValueError, match="destination has changed"):
-        publication.destination_text(row)
-    assert observed == ["original"]
+    with pytest.raises(destinations.DestinationError, match="destination has changed"):
+        destinations.publishing_destination(row, "docs")
     conn.close()
 
 

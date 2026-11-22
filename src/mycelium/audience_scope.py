@@ -83,8 +83,11 @@ _VIEWS: tuple[tuple[str, str], ...] = (
     (
         "statement_links",
         "SELECT * FROM main.statement_links l "
+        # The unary plus keeps the target out of the index search. Without it
+        # the planner probes the (from, to) index once per pair of visible
+        # statements, which is millions of probes for a few thousand links.
         "WHERE l.from_statement_id IN (SELECT id FROM temp.audience_visible) "
-        "AND l.to_statement_id IN (SELECT id FROM temp.audience_visible) "
+        "AND +l.to_statement_id IN (SELECT id FROM temp.audience_visible) "
         "AND NOT EXISTS (SELECT 1 FROM main.when_nodes w WHERE w.link_id = l.link_id "
         "AND w.statement_id IS NOT NULL "
         "AND w.statement_id NOT IN (SELECT id FROM temp.audience_visible))",

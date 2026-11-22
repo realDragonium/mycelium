@@ -26,7 +26,7 @@ Maintenance = Literal["manual", "propose", "auto-revise"]
 #: items wait for approval, or a plan whose items start their runs.
 Planning = Literal["off", "propose", "write"]
 #: Who decides the profile's proposed plan items: a person, or an AI reviewer
-#: other than the planner that approves or dismisses each with a reason (see
+#: that approves or dismisses each with a reason (see
 #: `mycelium.documentation_plan_review`).
 PlanReview = Literal["person", "ai"]
 #: Who may deliver the profile's documents: people in the web app, also

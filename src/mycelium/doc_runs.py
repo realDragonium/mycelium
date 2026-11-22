@@ -48,16 +48,17 @@ from . import (
     request_timing,
 )
 from .ai import Provider
-from .docgen import publication
 from .docgen.config import DocgenConfig
 from .docgen.schema import (
+    STORED_FLOWS,
     CurrentDocument,
     DocgenResult,
     ExistingDocument,
-    ManualDocument,
+    RefusedDraft,
     ReviewCheck,
     ReviewRecord,
     RevisionTarget,
+    revision_flows,
 )
 from .docgen.trace import ReviewNote, RunSummary
 
@@ -88,9 +89,7 @@ def start_run(
     runner: Callable[..., Any] | None = None,
     target_document_id: str | None = None,
     expected_revision: int | None = None,
-    manual_document: ManualDocument | None = None,
     anchor_entity_id: str | None = None,
-    start_from_destination: bool = False,
     review_notes: Sequence[ReviewNote] = (),
     restart_run_id: str | None = None,
     retry_of: str | None = None,
@@ -98,27 +97,20 @@ def start_run(
 ) -> str:
     """Admit a run, deciding first which document it writes.
 
-    `start_from_destination` makes a revision start from the published copy
-    even when an unpublished internal revision would otherwise refuse it.
     `review_notes` brief the writer, and only the writer, with what an earlier
-    review found.
+    review found; with `retry_of`, the document that run submitted goes with
+    them, so the writer revises it.
     `restart_run_id` re-admits an unfinished run without changing its identity.
 
     `provider="agent"`, or no provider while documentation is set to External
     agent, queues the run for an outside agent (`docgen.external`) instead
-    of starting a worker. A manual edit is always checked by a server model.
+    of starting a worker.
     """
     # Explicit argument wins; the module-level RUNNER hook only fills in when
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
     selected_runner = runner or RUNNER or _default_runner
     selection = model_settings.get("docgen")
-    if provider == "agent" and manual_document is not None:
-        raise ValueError(
-            "A manual edit is checked by a server model; choose Claude or OpenAI."
-        )
-    agent = provider == "agent" or (
-        provider is None and manual_document is None and selection.external_agent
-    )
+    agent = provider == "agent" or (provider is None and selection.external_agent)
     review = selection.agent_review if agent else "server"
     config = DocgenConfig.from_env(provider=None if provider == "agent" else provider)
     instructions = ai_prompts.resolve("docgen", default_path=config.doctrine_path)
@@ -141,12 +133,11 @@ def start_run(
         anchor_entity_id=anchor_entity_id,
         guideline_set=guideline_set,
         document_type=document_type,
-        manual=manual_document is not None,
-        start_from_destination=start_from_destination,
     )
     if target is not None:
         guideline_set = target.document.guideline_set
         document_type = target.document.document_type
+    refused_draft = _refused_draft(conn, retry_of) if review_notes else None
     # A revision of an anchored document is still about its concept.
     writer_anchor = anchor_entity_id or (
         _document_anchor(conn, target.document.id) if target is not None else None
@@ -172,7 +163,6 @@ def start_run(
                 target_document_id=None if target is None else target.document.id,
                 target_revision=None if target is None else target.revision,
                 anchor_entity_id=anchor_entity_id,
-                revision_base=None if target is None else target.base,
                 review_notes=review_notes,
                 retry_of=retry_of,
                 attempt=attempt,
@@ -191,7 +181,6 @@ def start_run(
                 else None,
                 target_document_id=None if target is None else target.document.id,
                 target_revision=None if target is None else target.revision,
-                revision_base=None if target is None else target.base,
             )
 
         def launch(conn: sqlite3.Connection) -> None:
@@ -207,21 +196,15 @@ def start_run(
                 profiles,
                 instructions,
                 review_instructions,
-                manual_document,
                 anchor_entity_id,
                 writer_anchor,
                 review_notes,
+                refused_draft,
             )
 
         try:
             if profiles is not None and guideline_set and document_type:
                 _record_profile(conn, run_id, profiles, guideline_set, document_type)
-            if manual_document is not None:
-                conn.execute(
-                    "UPDATE documentation_runs SET draft_title = ?, draft_body = ? WHERE id = ?",
-                    (manual_document.title, manual_document.body, run_id),
-                )
-                conn.commit()
             if agent:
                 from .docgen import external
 
@@ -237,6 +220,7 @@ def start_run(
                         writer_anchor=writer_anchor,
                         target=target,
                         review_notes=list(review_notes),
+                        refused_draft=refused_draft,
                         review=review,
                         provider=config.provider,
                         model=config.model,
@@ -248,7 +232,7 @@ def start_run(
             else:
                 launch(conn)
         except Exception as exc:
-            _fail_start(conn, run_id, exc, manual_document)
+            _fail_start(conn, run_id, exc)
             raise
         return run_id
 
@@ -268,7 +252,6 @@ def resume_after_restart(conn: sqlite3.Connection) -> tuple[int, int]:
                 conn, run_id, outcome="document_written", document_id=document_id
             )
             continue
-        manual = row["draft_body"] is not None
         if (restarts := int(row["restarts"])) > retries:
             docs_store.finish_run(
                 conn,
@@ -276,7 +259,7 @@ def resume_after_restart(conn: sqlite3.Connection) -> tuple[int, int]:
                 outcome="failed",
                 error=f"Interrupted by {restarts} server "
                 f"restart{'s' if restarts != 1 else ''} and not started again. "
-                + ("Edit the document again." if manual else "Retry starts it again."),
+                "Retry starts it again.",
             )
             failed += 1
             continue
@@ -296,27 +279,31 @@ def resume_after_restart(conn: sqlite3.Connection) -> tuple[int, int]:
                 anchor_entity_id=row["anchor_entity_id"],
                 target_document_id=None if anchored else row["target_document_id"],
                 expected_revision=None if anchored else row["target_revision"],
-                start_from_destination=(
-                    not anchored and row["revision_base"] == "destination"
-                ),
                 review_notes=review_notes,
-                manual_document=ManualDocument(
-                    title=str(row["draft_title"]), body=str(row["draft_body"])
-                )
-                if manual
-                else None,
+                retry_of=row["retry_of"],
             )
             readmitted += 1
         except Exception as exc:  # noqa: BLE001 — each invalid run is isolated
             error = (
                 "Interrupted by a server restart and not started again: "
-                f"{str(exc).rstrip('.')}. "
-                + ("Edit the document again." if manual else "Retry starts it again.")
+                f"{str(exc).rstrip('.')}. Retry starts it again."
             )
             docs_store.finish_run(conn, run_id, outcome="failed", error=error)
             failed += 1
             logger.warning("documentation run %s was not restarted: %s", run_id, exc)
     return readmitted, failed
+
+
+def _refused_draft(conn: sqlite3.Connection, run_id: str | None) -> RefusedDraft | None:
+    """The document a refused run submitted, for the run that retries it."""
+    row = None if run_id is None else docs_store.get_run(conn, run_id)
+    if row is None or not row["draft_title"] or not row["draft_body"]:
+        return None
+    return RefusedDraft(
+        title=str(row["draft_title"]),
+        body=str(row["draft_body"]),
+        flows=tuple(STORED_FLOWS.validate_json(row["draft_flows"] or "[]")),
+    )
 
 
 def _agent_pair(
@@ -404,7 +391,7 @@ def _start_waiting(conn: sqlite3.Connection) -> None:
             try:
                 launch(conn)
             except Exception as exc:  # noqa: BLE001 — the run records why
-                _fail_start(conn, run_id, exc, None)
+                _fail_start(conn, run_id, exc)
 
 
 def _launch(
@@ -419,10 +406,10 @@ def _launch(
     profiles: CatalogueSnapshot | None,
     instructions: ai_prompts.Snapshot,
     review_instructions: ai_prompts.Snapshot,
-    manual_document: ManualDocument | None,
     anchor_entity_id: str | None,
     writer_anchor: str | None,
     review_notes: Sequence[ReviewNote],
+    refused_draft: RefusedDraft | None,
 ) -> None:
     """Count the run against the bound and start its worker. Called with
     `_spawn_lock` held."""
@@ -451,10 +438,10 @@ def _launch(
             profiles,
             instructions,
             review_instructions,
-            manual_document,
             anchor_entity_id,
             writer_anchor,
             review_notes,
+            refused_draft,
         ),
         daemon=True,
         name=f"docgen-{run_id}",
@@ -463,12 +450,7 @@ def _launch(
     t.start()
 
 
-def _fail_start(
-    conn: sqlite3.Connection,
-    run_id: str,
-    exc: Exception,
-    manual_document: ManualDocument | None,
-) -> None:
+def _fail_start(conn: sqlite3.Connection, run_id: str, exc: Exception) -> None:
     """A run that never got its worker must not stay unfinished."""
     _in_memory_conns.pop(run_id, None)
     _threads.pop(run_id, None)
@@ -478,8 +460,6 @@ def _fail_start(
             run_id,
             outcome="failed",
             error=f"failed to start: {type(exc).__name__}: {exc}",
-            draft_title=manual_document.title if manual_document else None,
-            draft_body=manual_document.body if manual_document else None,
         )
     except Exception:  # noqa: BLE001 — startup restart sweep is the backstop
         logger.exception("could not finalize failed start of %s", run_id)
@@ -493,12 +473,10 @@ def _target(
     anchor_entity_id: str | None,
     guideline_set: str | None,
     document_type: str | None,
-    manual: bool,
-    start_from_destination: bool,
 ) -> RevisionTarget | None:
     """The document a run revises, or None when it creates one."""
     if anchor_entity_id is not None:
-        if document_id is not None or manual:
+        if document_id is not None:
             raise ValueError("A revision already names its document; omit the anchor.")
         anchored = _anchored_document(
             conn, anchor_entity_id, guideline_set, document_type
@@ -508,18 +486,10 @@ def _target(
     if document_id is None:
         if expected_revision is not None:
             raise ValueError("expected_revision requires a target document")
-        if start_from_destination:
-            raise ValueError("start_from_destination applies only to a revision.")
         return None
     if expected_revision is None:
         raise ValueError("expected_revision is required to revise a document")
-    return _revision_target(
-        conn,
-        document_id,
-        expected_revision,
-        manual=manual,
-        start_from_destination=start_from_destination,
-    )
+    return _revision_target(conn, document_id, expected_revision)
 
 
 def _document_anchor(conn: sqlite3.Connection, document_id: str) -> str | None:
@@ -548,39 +518,11 @@ def _anchored_document(
 
 
 def _revision_target(
-    conn: sqlite3.Connection,
-    document_id: str,
-    expected_revision: int,
-    *,
-    manual: bool,
-    start_from_destination: bool,
+    conn: sqlite3.Connection, document_id: str, expected_revision: int
 ) -> RevisionTarget:
-    """Pin the version a revision replaces and the text it starts from.
-
-    A model revision of a delivered document reads the published copy first, so
-    edits people made on GitHub are its starting point rather than something
-    publication later refuses to overwrite. A manual edit keeps the stored sync
-    point instead: its text was written against the internal version, and
-    publication still refuses it over edits it did not see.
-    """
+    """Pin the version a revision replaces and the text it starts from."""
     row = docs_store.require_revision(conn, document_id, expected_revision)
-    start = publication.RevisionStart(
-        CurrentDocument(body=str(row["body"])), "internal"
-    )
-    delivered = bool(row["delivery_destination"] and row["delivery_path"])
-    if start_from_destination and (manual or not delivered):
-        raise ValueError(
-            "This document has no published copy to start from."
-            if not delivered
-            else "A manual edit supplies its own text; it cannot start from GitHub's."
-        )
-    if delivered and not manual:
-        start = publication.revision_start(
-            row,
-            publication.destination_text(row),
-            docs_store.published_blobs(conn, document_id),
-            start_from_destination=start_from_destination,
-        )
+    stored = docs_store.get_revision(conn, document_id, expected_revision)
     return RevisionTarget(
         document=ExistingDocument(
             id=document_id,
@@ -591,8 +533,13 @@ def _revision_target(
             body_digest=docs_store.body_digest(str(row["body"])),
         ),
         revision=expected_revision,
-        current=start.current,
-        base=start.base,
+        current=CurrentDocument(
+            body=str(row["body"]),
+            flows=() if stored is None else tuple(revision_flows(stored)),
+            statement_ids=()
+            if stored is None
+            else tuple(json.loads(stored["statement_ids"])),
+        ),
     )
 
 
@@ -669,7 +616,6 @@ def _default_runner(
     document_type: str | None = None,
     config: DocgenConfig | None = None,
     revision_target: RevisionTarget | None = None,
-    manual_document: ManualDocument | None = None,
     profiles: CatalogueSnapshot | None = None,
     instructions: ai_prompts.Snapshot | None = None,
     review_instructions: ai_prompts.Snapshot | None = None,
@@ -677,6 +623,7 @@ def _default_runner(
     run_id: str | None = None,
     on_progress: Callable[[RunSummary], None] | None = None,
     review_notes: Sequence[ReviewNote] = (),
+    refused_draft: RefusedDraft | None = None,
 ) -> Any:
     """The real generation loop.
 
@@ -693,7 +640,6 @@ def _default_runner(
         document_type=document_type,
         config=config,
         revision_target=revision_target,
-        manual_document=manual_document,
         profiles=profiles,
         instructions=instructions,
         review_instructions=review_instructions,
@@ -701,6 +647,7 @@ def _default_runner(
         run_id=run_id,
         on_progress=on_progress,
         review_notes=review_notes,
+        refused_draft=refused_draft,
     )
 
 
@@ -717,10 +664,10 @@ def _execute_run(
     profiles: CatalogueSnapshot | None = None,
     instructions: ai_prompts.Snapshot | None = None,
     review_instructions: ai_prompts.Snapshot | None = None,
-    manual_document: ManualDocument | None = None,
     anchor_entity_id: str | None = None,
     writer_anchor: str | None = None,
     review_notes: Sequence[ReviewNote] = (),
+    refused_draft: RefusedDraft | None = None,
 ) -> None:
     own_conn = None
     conn = _in_memory_conns.pop(run_id, None)
@@ -728,8 +675,10 @@ def _execute_run(
     outcome = "failed"
     document_id = None
     error = None
-    draft_title = manual_document.title if manual_document else None
-    draft_body = manual_document.body if manual_document else None
+    draft_title = None
+    draft_body = None
+    draft_concept_links: list[dict[str, object]] | None = None
+    draft_flows: list[dict[str, object]] | None = None
     matched_document_id = None
     summary = None
 
@@ -760,7 +709,6 @@ def _execute_run(
                     document_type=document_type,
                     config=config,
                     revision_target=revision_target,
-                    manual_document=manual_document,
                     profiles=profiles,
                     instructions=instructions,
                     review_instructions=review_instructions,
@@ -768,6 +716,7 @@ def _execute_run(
                     run_id=run_id,
                     on_progress=progress,
                     review_notes=review_notes,
+                    refused_draft=refused_draft,
                 )
             else:
                 result = runner(
@@ -807,13 +756,6 @@ def _execute_run(
             # refusal with no reason. Raising lands it on `error` as what it is.
             raise ValueError(f"runner returned an unknown outcome: {reported!r}")
         if reported == "document_written":
-            if manual_document is not None and (
-                payload.get("title") != manual_document.title
-                or payload.get("body") != manual_document.body
-            ):
-                raise ValueError(
-                    "Manual document text changed during review; edit not saved"
-                )
             # The loop refuses an ungrounded document at its emit gate; this is
             # the same rule at the place that actually records one, so "a
             # stored document cites the statements it rests on" holds however
@@ -842,6 +784,8 @@ def _execute_run(
                 document_type=selected_type,
                 statement_ids=payload.get("statement_ids"),
                 cited_statements=payload.get("cited_statements"),
+                concept_links=payload.get("concept_links") or (),
+                flows=payload.get("flows") or (),
                 # The loop and DocumentWritten enforce that review ran. This
                 # overridable runner seam accepts older canned runners instead
                 # of making their missing record fatal; the store writes `{}`.
@@ -854,9 +798,6 @@ def _execute_run(
                 if revision_target is not None
                 else None,
                 replacing=revision_target.document.body_digest
-                if revision_target is not None
-                else None,
-                revision_source_content_revision=revision_target.current.content_revision
                 if revision_target is not None
                 else None,
                 anchor_entity_id=anchor_entity_id if revision_target is None else None,
@@ -873,8 +814,11 @@ def _execute_run(
                 summary = {**summary, "review_findings": notes}
             # The findings quote a document, so the document is kept beside
             # them. Present only when one was written and refused.
-            draft_title = payload.get("title") or draft_title
-            draft_body = payload.get("body") or draft_body
+            draft_title = payload.get("title")
+            draft_body = payload.get("body")
+            if payload.get("body"):
+                draft_concept_links = payload.get("concept_links") or []
+                draft_flows = payload.get("flows") or []
     except Exception as exc:
         logger.exception("documentation run failed: %s", run_id)
         outcome = "failed"
@@ -895,6 +839,8 @@ def _execute_run(
                 error=error,
                 draft_title=draft_title,
                 draft_body=draft_body,
+                draft_concept_links=draft_concept_links,
+                draft_flows=draft_flows,
                 matched_document_id=matched_document_id,
                 summary=summary,
             )

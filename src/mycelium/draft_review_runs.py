@@ -132,7 +132,7 @@ def credentials_error(settings: draft_review_settings.Snapshot) -> str | None:
     return None if reason is None else f"Internal draft review cannot run: {reason}"
 
 
-def reviewer(creator: str | None, identity: str) -> auth.Principal:
+def reviewer(identity: str) -> auth.Principal:
     from .server import runtime  # local import: loading it loads the server package
 
     principal = auth.resolve_session_user(runtime._auth_db(), identity)
@@ -140,8 +140,6 @@ def reviewer(creator: str | None, identity: str) -> auth.Principal:
         raise ValueError(
             "configured review user must be an active real writer or admin"
         )
-    if principal.id == creator:
-        raise ValueError("configured reviewer must be independent of the draft creator")
     return principal
 
 
@@ -211,10 +209,10 @@ def start(
         run.answers = answers
         draft_review_store.save(conn, run)
     if settings.external_agent:
-        _queue_agent_review(run, settings, row["created_by"], previous)
+        _queue_agent_review(run, settings, previous)
         return run
     try:
-        principal = reviewer(row["created_by"], settings.reviewer_id)
+        principal = reviewer(settings.reviewer_id)
         token = auth.current_principal.set(principal)
         try:
             inspection = server.inspect_draft_review(draft_id)
@@ -1162,7 +1160,7 @@ def _execute(
     from . import server  # local import: server registers the review tools
 
     try:
-        principal = reviewer(_creator(inspection), settings.reviewer_id)
+        principal = reviewer(settings.reviewer_id)
     except Exception as exc:
         _failed(run, str(exc))
         _futures.pop(run.run_id, None)
@@ -1202,11 +1200,6 @@ def _execute(
         _follow_up(run, settings, systemic=isinstance(exc, ai.ModelError))
     finally:
         _futures.pop(run.run_id, None)
-
-
-def _creator(inspection: DraftReviewInspection) -> str | None:
-    creator = inspection["draft"].get("created_by")
-    return creator if isinstance(creator, str) else None
 
 
 def _unsupported(
@@ -1494,7 +1487,7 @@ def _mutation_authority(
         raise ValueError("automatic action disabled by review mode")
     if draft_review_settings.load() != settings:
         raise ValueError("review configuration changed; rerun before automatic action")
-    principal = reviewer(_creator(inspection), run.reviewer_id or "")
+    principal = reviewer(run.reviewer_id or "")
     auth.current_principal.set(principal)
     return principal
 
@@ -2151,7 +2144,6 @@ _task_settings = TypeAdapter(draft_review_settings.Snapshot)
 def _queue_agent_review(
     run: ReviewRun,
     settings: draft_review_settings.Snapshot,
-    creator: str | None,
     previous: ReviewRun | None,
 ) -> None:
     state: dict[str, JsonValue] = {
@@ -2165,7 +2157,6 @@ def _queue_agent_review(
             "draft_review",
             subject_id=run.run_id,
             state=state,
-            excluded_claimant=creator,
         )
     except Exception as exc:
         _failed(run, f"could not queue the review for an external agent: {exc}")
@@ -2393,14 +2384,6 @@ def _submit_agent_review(
         )
     briefed = _Briefed.model_validate(task.state)
     inspection = TypeAdapter(DraftReviewInspection).validate_python(briefed.inspection)
-    if claimant == _creator(inspection):
-        agent_tasks.set_status(
-            conn, task.id, "waiting", release_reason="claimed by the draft's creator"
-        )
-        raise auth.RoleRequired(
-            f"You created draft {run.draft_id}, and a drafter never reviews its "
-            "own draft. The task went back to the queue for another agent."
-        )
     settings = _task_settings.validate_json(briefed.settings)
     ops = {str(op["operation_ref"]): op for op in _ops(inspection)}
     parts = [

@@ -247,18 +247,27 @@ def test_server_refusal_stays_advisory_when_disabled(agent):
     assert task.result == {"refused": review["rationale"]}
 
 
-def test_a_drafter_is_never_given_its_own_draft(agent):
-    _draft()
-    creator = auth.Principal(id="drafter-1", name="d", role="writer", type="human")
-    token = auth.current_principal.set(creator)
+def test_the_account_that_wrote_a_draft_may_review_it(agent):
+    token = _as(agent)
     try:
-        batch = server.claim_agent_task("draft_review")
+        draft_id = server.open_draft()["draft_id"]
+        server.upsert_entity(
+            name="Invoices", description="Billing records", draft_id=draft_id
+        )
+        server.submit_draft(draft_id)
     finally:
         auth.current_principal.reset(token)
 
-    assert batch.tasks == []
-    assert batch.note is not None and "a draft you created" in batch.note
-    assert len(_claim(agent).tasks) == 1
+    [task] = _claim(agent).tasks
+    submitted = _submit(agent, task.id, "good")
+
+    assert submitted.status == "accepted", submitted
+    result = server.get_draft(draft_id)
+    assert result["status"] == "approved"
+    assert result["review_assessment"]["application"] == "applied"
+    assert [entity["name"] for entity in server.list_entities()["entities"]] == [
+        "Invoices"
+    ]
 
 
 def test_a_malformed_verdict_is_refused_with_findings(agent):
@@ -356,14 +365,14 @@ def test_agent_refreshes_stale_alias_names_and_reviews_again(agent):
     conn = server._drafts_db()
     with store.transaction(conn):
         draft_id = drafts_store.create_draft(
-            conn, created_by="drafter-1", session_id=None, title="Export alias"
+            conn, created_by=agent, session_id=None, title="Export alias"
         )
         drafts_store.add_op(
             conn,
             draft_id=draft_id,
             kind=alias_suggestions.KIND,
             payload=suggestion.model_dump(mode="json"),
-            created_by="drafter-1",
+            created_by=agent,
         )
         drafts_store.set_submitted(conn, draft_id)
     [operation] = drafts_store.list_ops(conn, draft_id)

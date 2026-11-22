@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from mycelium import (
@@ -12,7 +14,10 @@ from mycelium import (
     media_store,
     store,
 )
+from mycelium.docgen import flows, loop
+from mycelium.docgen.schema import FlowDefinition, StoredFlow
 from mycelium.document_freshness import (
+    FlowChange,
     Freshness,
     MediaChange,
     StatementChange,
@@ -21,6 +26,14 @@ from mycelium.document_freshness import (
     assess_media,
 )
 from mycelium.server import documentation
+from test_docgen_reads import (  # noqa: F401 — `db` is a fixture
+    EXTERNAL,
+    INTERNAL,
+    Corpus,
+    _context,
+    _corpus,
+    db,
+)
 
 
 def test_assess_reports_each_kind_of_change():
@@ -231,3 +244,208 @@ def test_an_image_relabelled_away_from_the_audience_is_no_longer_visible(media_d
     assert assess_media(cited, items) == (
         MediaChange("med_000000000001", "no_longer_visible", "The export dialog"),
     )
+
+
+@pytest.fixture
+def drafts(tmp_path):
+    conn = docs_store.connect(tmp_path / "mycelium-drafts.db")
+    docs_store.migrate(conn)
+    yield conn
+    conn.close()
+
+
+FLOW_BODY = "A member asks for the file.\n\n```flow\nrequest-to-download\n```\n"
+
+
+def _flow_document(drafts, corpus: Corpus, audience) -> tuple[str, StoredFlow]:
+    """A document placing the export flow, drawn and saved for `audience`."""
+    ctx = _context(audience)
+    definition = FlowDefinition(
+        name="request-to-download",
+        title="From request to download",
+        start=corpus.requested,
+    )
+    problem, [stored] = loop._submission_problem(
+        ctx, "Exports", FLOW_BODY, [corpus.queued], [definition]
+    )
+    assert problem is None
+    run = docs_store.create_run(drafts, prompt="Explain exports", created_by=None)
+    drafts.execute(
+        "UPDATE documentation_runs SET profile_snapshot = ? WHERE id = ?",
+        (json.dumps({"audience": {"id": audience.id, "scope": audience.scope}}), run),
+    )
+    drafts.commit()
+    cited = store.get_statement_texts(
+        store.substrate_connection(), stored.drawing.statement_ids
+    )
+    document_id = docs_store.upsert_document(
+        drafts,
+        slug=f"exports-{audience.scope}",
+        title="Exports",
+        body=FLOW_BODY,
+        guideline_set="developer-reference",
+        document_type="entity-page",
+        statement_ids=list(cited),
+        cited_statements=cited,
+        flows=[stored.model_dump(mode="json")],
+        run_id=run,
+    )
+    return document_id, stored
+
+
+def _fresh(drafts, document_id: str) -> Freshness:
+    return document_freshness.for_documents(
+        drafts, store.substrate_connection, [document_id]
+    )[document_id]
+
+
+def test_a_flow_whose_step_links_changed_makes_its_document_out_of_date(
+    db,  # noqa: F811
+    drafts,
+    monkeypatch,
+):
+    corpus = _corpus(db)
+    document_id, _stored = _flow_document(drafts, corpus, INTERNAL)
+    # Listing compares stored links with current ones; it never draws.
+    monkeypatch.setattr(flows, "draw_flow", lambda *_a, **_k: pytest.fail("redrawn"))
+
+    assert _fresh(drafts, document_id) == Freshness("current")
+
+    reminder = store.create_statement(db, "event", "A reminder is sent to the member.")
+    store.insert_links(db, [(corpus.expired, reminder, "proceeds", None)])
+    store.delete_links(db, [(corpus.queued, corpus.failed, "on-failure", None)])
+    store.delete_links(
+        db, [(corpus.queued, corpus.ready, "proceeds", {"statement_id": corpus.sso})]
+    )
+    store.insert_links(db, [(corpus.queued, corpus.ready, "proceeds", None)])
+    db.commit()
+
+    freshness = _fresh(drafts, document_id)
+
+    def change(kind: str, link_type: str, source: str, target: str) -> FlowChange:
+        return FlowChange(
+            "request-to-download",
+            "From request to download",
+            kind,
+            link_type,
+            source,
+            target,
+        )
+
+    assert freshness.status == "out_of_date" and freshness.changes == ()
+    assert set(freshness.flow_changes) == {
+        change(
+            "step_added",
+            "proceeds",
+            "The download link of the workspace export expires.",
+            "A reminder is sent to the member.",
+        ),
+        change(
+            "step_removed",
+            "on-failure",
+            "The workspace export is queued.",
+            "The workspace export fails on worker b.",
+        ),
+        change(
+            "condition_changed",
+            "proceeds",
+            "The workspace export is queued.",
+            "The workspace export is ready with every invoice.",
+        ),
+    }
+    assert freshness.as_dict()["flow_changes"][0]["flow"] == "request-to-download"
+    brief = document_freshness.revision_brief(
+        freshness.changes, freshness.media_changes, freshness.flow_changes
+    )
+    assert "The steps of flow `request-to-download`" in brief
+    assert "preview_flow" in brief
+    assert (
+        "  - step added: 'The download link of the workspace export expires.' "
+        "now leads to 'A reminder is sent to the member.' (proceeds)."
+    ) in brief
+    assert (
+        "  - step removed: 'The workspace export is queued.' no longer leads to "
+        "'The workspace export fails on worker b.' (on-failure)."
+    ) in brief
+    assert (
+        "  - condition changed on the step from 'The workspace export is queued.' "
+        "to 'The workspace export is ready with every invoice.' (proceeds)."
+    ) in brief
+
+
+def test_flow_freshness_is_read_inside_the_documents_audience(db, drafts):  # noqa: F811
+    corpus = _corpus(db)
+    external, _stored = _flow_document(drafts, corpus, EXTERNAL)
+    internal, _stored = _flow_document(drafts, corpus, INTERNAL)
+    hidden = store.create_statement(db, "event", "Worker b retries the export.")
+    store.insert_links(db, [(corpus.queued, hidden, "proceeds", None)])
+    db.commit()
+
+    # The new step is unlabelled, so only the internal page's flow changed.
+    assert _fresh(drafts, external) == Freshness("current")
+    assert [change.change for change in _fresh(drafts, internal).flow_changes] == [
+        "step_added"
+    ]
+
+    store.audience_labels.set_label(
+        db, hidden, [INTERNAL.id, EXTERNAL.id], source="ai", reason="r"
+    )
+    db.commit()
+
+    [added] = _fresh(drafts, external).flow_changes
+    assert (added.change, added.target_text) == (
+        "step_added",
+        "Worker b retries the export.",
+    )
+
+
+def test_a_document_without_flows_reads_no_links(db, drafts, monkeypatch):  # noqa: F811
+    corpus = _corpus(db)
+    document_id = docs_store.upsert_document(
+        drafts,
+        slug="plain",
+        title="Plain",
+        body="No flow.",
+        statement_ids=[corpus.queued],
+        cited_statements={corpus.queued: "The workspace export is queued."},
+    )
+    monkeypatch.setattr(
+        store, "get_links_from", lambda *_a, **_k: pytest.fail("links were read")
+    )
+
+    assert _fresh(drafts, document_id) == Freshness("current")
+
+
+def test_every_flow_asked_about_shares_one_read_of_links(db, drafts, monkeypatch):  # noqa: F811
+    corpus = _corpus(db)
+    first, _stored = _flow_document(drafts, corpus, EXTERNAL)
+    second, _stored = _flow_document(drafts, corpus, INTERNAL)
+    reads = []
+    read = store.get_links_from
+
+    def counted(conn, statement_ids):
+        reads.append(list(statement_ids))
+        return read(conn, statement_ids)
+
+    monkeypatch.setattr(store, "get_links_from", counted)
+
+    document_freshness.for_documents(
+        drafts, store.substrate_connection, [first, second]
+    )
+
+    assert len(reads) == 1
+
+
+def test_a_flow_change_withholds_a_step_the_audience_lost(db, drafts):  # noqa: F811
+    corpus = _corpus(db)
+    external, _stored = _flow_document(drafts, corpus, EXTERNAL)
+    store.audience_labels.set_label(
+        db, corpus.queued, [INTERNAL.id], source="ai", reason="r"
+    )
+    db.commit()
+
+    changes = _fresh(drafts, external).flow_changes
+    assert changes
+    assert "The export is queued." not in {
+        text for change in changes for text in (change.source_text, change.target_text)
+    }

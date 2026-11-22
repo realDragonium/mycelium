@@ -290,7 +290,7 @@ def test_a_curation_agent_answers_a_question_with_evidence(curated_app, monkeypa
     assert server.get_draft(draft_id)["status"] == "approved"
 
 
-def test_the_drafts_creator_cannot_answer_its_reviewer(curated_app, monkeypatch):
+def test_the_drafts_creator_may_answer_its_reviewer(curated_app, monkeypatch):
     client, entity_id = curated_app
     _automatic()
     _asks_then_approves(monkeypatch)
@@ -304,12 +304,14 @@ def test_the_drafts_creator_cannot_answer_its_reviewer(curated_app, monkeypatch)
     token = auth.current_principal.set(creator)
     try:
         [item] = server.claim_curation_work("question")["items"]
-        with pytest.raises(ValueError, match="you created this draft"):
-            server.release_curation_work(
-                [item["id"]], "answered", answer="No.", evidence=[EVIDENCE]
-            )
+        server.release_curation_work(
+            [item["id"]], "answered", answer="No.", evidence=[EVIDENCE]
+        )
     finally:
         auth.current_principal.reset(token)
+    draft_review_runs.wait_all()
+
+    assert server.get_draft(draft_id)["status"] == "approved"
 
 
 def test_applying_the_answered_draft_resolves_its_question_gap(

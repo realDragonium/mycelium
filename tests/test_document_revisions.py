@@ -19,14 +19,18 @@ from mycelium import (
     prompt_store,
     server,
 )
-from mycelium.docgen import publication
+from mycelium.docgen import flows, publication
 from mycelium.docgen.destinations import (
     Delivery,
     DeliveryDocument,
     DestinationConfig,
     DestinationError,
 )
-from mycelium.docgen.schema import RevisionTarget
+from mycelium.docgen.schema import (
+    RefusedDraft,
+    RevisionTarget,
+    StoredFlow,
+)
 from product_settings_helpers import import_product_environment
 from settings_helpers import assume_configured_models
 
@@ -297,6 +301,35 @@ def test_publication_tracks_actual_revision_after_concurrent_generation_and_sett
             server._drafts_db(), document_id, "docs", expected_revision=1
         )
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("body", "held"),
+    [
+        ("An [[Invoice]] belongs to a workspace.", "concept links"),
+        ("Exports run in steps.\n\n```flow\nexport-steps\n```\n", "flow placements"),
+    ],
+)
+def test_a_body_with_concept_links_or_flows_is_not_delivered_to_github(
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, body: str, held: str
+) -> None:
+    from mycelium.docgen import destinations
+
+    configure(monkeypatch)
+    document_id = document(db, body)
+    monkeypatch.setattr(
+        destinations,
+        "deliver_document",
+        lambda *_args: pytest.fail("the document must not reach the destination"),
+    )
+
+    with pytest.raises(ValueError, match="cannot be delivered to GitHub") as refused:
+        publication.publish(
+            server._drafts_db(), document_id, "docs", expected_revision=1
+        )
+
+    assert held in str(refused.value)
+    assert server.get_generated_document(document_id)["published_revision"] is None
 
 
 def test_failed_publication_can_retry_and_binding_host_drift_is_rejected(
@@ -672,3 +705,96 @@ def test_legacy_startup_attributes_receipt_after_target_binding(
     assert bool(json.loads(receipt["target"])) is configured
     assert receipt["created_at"] is None
     documentation_archive._validate_history(db)
+
+
+FLOW_BODY = "Exports run in steps.\n\n```flow\nexport-steps\n```\n"
+LINKS = [{"name": "Invoice", "entity_id": "ent_invoice"}]
+
+
+def _export_flow() -> StoredFlow:
+    class Chain:
+        def statement(self, statement_id: str) -> flows.FlowStatement:
+            return flows.FlowStatement("event", "An invoice is exported.")
+
+        def links(self, statement_id: str) -> list[flows.FlowLink]:
+            return []
+
+    drawing = flows.draw_flow(Chain(), "stm_exported")
+    assert drawing is not None
+    return StoredFlow(
+        name="export-steps", title="Export steps", start="stm_exported", drawing=drawing
+    )
+
+
+def _refusing(seen: dict[str, object], **draft: object):
+    """A runner that records what it was given and refuses with `draft`."""
+
+    def runner(prompt: str, **kwargs: object) -> dict[str, object]:
+        seen.clear()
+        seen.update(kwargs)
+        return {"outcome": "nothing_written", "reason": "refused", **draft}
+
+    return runner
+
+
+def test_a_refused_draft_keeps_the_links_and_flows_its_writer_submitted(
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stored = _export_flow().model_dump(mode="json")
+    monkeypatch.setattr(
+        doc_runs,
+        "_default_runner",
+        _refusing(
+            {}, title="Exports", body=FLOW_BODY, concept_links=LINKS, flows=[stored]
+        ),
+    )
+
+    run_id = doc_runs.start_run(
+        prompt="Explain exports",
+        guideline_set=None,
+        document_type=None,
+        created_by=None,
+        conn=db,
+    )
+    doc_runs.wait_all()
+
+    detail = docs_store.serialize_run_detail(docs_store.get_run(db, run_id))
+    assert (detail["draft_body"], detail["draft_flows"]) == (FLOW_BODY, [stored])
+    assert detail["draft_concept_links"] == LINKS
+
+
+def test_a_retry_with_review_notes_hands_the_writer_the_refused_draft(
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flow = _export_flow()
+    source = docs_store.create_run(db, prompt="Explain exports", created_by=None)
+    docs_store.finish_run(
+        db,
+        source,
+        outcome="nothing_written",
+        draft_title="Exports",
+        draft_body=FLOW_BODY,
+        draft_flows=[flow.model_dump(mode="json")],
+    )
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(doc_runs, "_default_runner", _refusing(seen))
+    notes = [{"check": "conformance", "where": "Steps", "problem": "Not numbered."}]
+
+    def retry(**extra: object) -> None:
+        doc_runs.start_run(
+            prompt="Explain exports",
+            guideline_set=None,
+            document_type=None,
+            created_by=None,
+            conn=db,
+            retry_of=source,
+            **extra,
+        )
+        doc_runs.wait_all()
+
+    retry(review_notes=notes)
+    assert seen["refused_draft"] == RefusedDraft(
+        title="Exports", body=FLOW_BODY, flows=(flow,)
+    )
+    retry()
+    assert seen["refused_draft"] is None

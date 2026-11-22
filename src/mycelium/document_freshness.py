@@ -10,9 +10,16 @@ statement text rather than timestamps means a
 kind change or an edit that was reverted does not count, and it hands the
 reader the old and new wording without reading history.
 
+A flow the document places is out of date once the step links leaving the
+statements it draws differ, for that audience, from those stored with the
+drawing: a link added or removed, or its condition changed.
+
 The check is one keyed lookup of every cited id across the documents asked
 about, plus a history read for the few that no longer exist, so listing the
 library costs one pass over its citations rather than documents × statements.
+Flows add one read of the links leaving their drawn statements, across all the
+documents asked about, and nothing for documents without flows; no flow is
+drawn again.
 """
 
 from __future__ import annotations
@@ -23,7 +30,9 @@ from collections.abc import Callable, Iterable, Mapping, Sequence, Set
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-from . import audiences, media, media_store, store
+from . import audiences, media, media_store, store, when_expression
+from .docgen import flows as flow_drawing
+from .docgen.schema import STORED_FLOWS, StoredFlow
 
 #: How many changes a revision brief spells out before summarising the rest.
 _BRIEF_CHANGES = 10
@@ -51,16 +60,33 @@ class MediaChange:
 
 
 @dataclass(frozen=True)
+class FlowChange:
+    """One step link of a placed flow that differs from the stored drawing."""
+
+    #: The flow's name in the body, and its caption.
+    flow: str
+    title: str
+    change: Literal["step_added", "step_removed", "condition_changed"]
+    link_type: str
+    #: The drawn statement the link leaves and the one it leads to, as the
+    #: document's audience may read them; empty for one it may not.
+    source_text: str
+    target_text: str
+
+
+@dataclass(frozen=True)
 class Freshness:
     status: Literal["unknown", "current", "out_of_date"]
     changes: tuple[StatementChange, ...] = ()
     media_changes: tuple[MediaChange, ...] = ()
+    flow_changes: tuple[FlowChange, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
             "status": self.status,
             "changes": [asdict(change) for change in self.changes],
             "media_changes": [asdict(change) for change in self.media_changes],
+            "flow_changes": [asdict(change) for change in self.flow_changes],
         }
 
 
@@ -73,6 +99,7 @@ class _Cited:
     #: Media the body places, and when the revision was written.
     media_ids: tuple[str, ...] = ()
     written_at: str = ""
+    flows: tuple[StoredFlow, ...] = ()
 
 
 def assess(
@@ -139,10 +166,154 @@ def assess_media(
     return tuple(changes)
 
 
-def _with_media(freshness: Freshness, changes: tuple[MediaChange, ...]) -> Freshness:
-    if not changes:
+class _LinkReader:
+    """`flows.FlowReader` over statements and links read once for every flow
+    asked about, as one audience may see them."""
+
+    def __init__(
+        self,
+        statements: Mapping[str, flow_drawing.FlowStatement],
+        links: Mapping[str, Sequence[flow_drawing.FlowLink]],
+        visible: Set[str] | None,
+    ) -> None:
+        self._statements = statements
+        self._links = links
+        self._visible = visible
+
+    def statement(self, statement_id: str) -> flow_drawing.FlowStatement | None:
+        if self._visible is not None and statement_id not in self._visible:
+            return None
+        return self._statements.get(statement_id)
+
+    def links(self, statement_id: str) -> Sequence[flow_drawing.FlowLink]:
+        return self._links.get(statement_id, ())
+
+
+def _link_readers(
+    conn: sqlite3.Connection, snapshots: Mapping[str, _Cited]
+) -> dict[tuple[str, bool] | None, _LinkReader]:
+    """A reader per audience over the links that leave the statements the
+    snapshots' flows draw, and the statements those links name. Empty, and
+    nothing is read, when no snapshot places a flow."""
+    sources = sorted(
+        {
+            statement_id
+            for cited in snapshots.values()
+            if cited.statements
+            for flow in cited.flows
+            for statement_id in flow_drawing.drawn_statements(flow.drawing)
+        }
+    )
+    if not sources:
+        return {}
+    links = {
+        source: [flow_drawing.FlowLink(*link) for link in found]
+        for source, found in store.get_links_from(conn, sources).items()
+    }
+    named = sorted(
+        {
+            *sources,
+            *(link.target for found in links.values() for link in found),
+            *(
+                leaf
+                for found in links.values()
+                for link in found
+                for leaf in when_expression.leaves(link.when)
+            ),
+        }
+    )
+    kinds = store.get_statement_kinds(conn, named)
+    texts = store.get_statement_texts(conn, named)
+    statements = {
+        statement_id: flow_drawing.FlowStatement(kind, texts[statement_id])
+        for statement_id, kind in kinds.items()
+        if statement_id in texts
+    }
+    readers: dict[tuple[str, bool] | None, _LinkReader] = {}
+    for audience in {
+        cited.audience
+        for cited in snapshots.values()
+        if cited.flows and cited.statements
+    }:
+        visible = (
+            None
+            if audience is None
+            else store.audience_labels.visible_among(
+                conn, audiences.sees_of(audience[0]), audience[1], sorted(statements)
+            )
+        )
+        readers[audience] = _LinkReader(statements, links, visible)
+    return readers
+
+
+def assess_flows(
+    flows: Sequence[StoredFlow], reader: flow_drawing.FlowReader
+) -> tuple[FlowChange, ...]:
+    """The step links of each placed flow that differ, as `reader` sees them
+    now, from those stored with its drawing. Nothing is drawn."""
+    changes: list[FlowChange] = []
+    for flow in flows:
+        drawing = flow.drawing
+        before = _by_link(drawing.link_set)
+        after = _by_link(flow_drawing.link_set(reader, drawing))
+        if before == after:
+            continue
+        shown = {
+            **{step.statement_id: step.text for step in drawing.steps},
+            **{
+                outcome.statement_id: outcome.text
+                for step in drawing.steps
+                for outcome in step.outcomes
+            },
+        }
+
+        def text(statement_id: str, shown: Mapping[str, str] = shown) -> str:
+            statement = reader.statement(statement_id)
+            if statement is None:
+                return ""
+            return shown.get(statement_id, statement.text)
+
+        for link in sorted(before.keys() | after.keys()):
+            if before.get(link) == after.get(link):
+                continue
+            source, target, link_type = link
+            changes.append(
+                FlowChange(
+                    flow=flow.name,
+                    title=flow.title,
+                    change="step_added"
+                    if link not in before
+                    else "step_removed"
+                    if link not in after
+                    else "condition_changed",
+                    link_type=link_type,
+                    source_text=text(source),
+                    target_text=text(target),
+                )
+            )
+    return tuple(changes)
+
+
+def _by_link(
+    links: Iterable[flow_drawing.StepLink],
+) -> dict[tuple[str, str, str], frozenset[str]]:
+    """Each link's conditions, by source, target and type."""
+    found: dict[tuple[str, str, str], set[str]] = {}
+    for link in links:
+        found.setdefault((link.source, link.target, link.link_type), set()).add(
+            link.when_hash
+        )
+    return {link: frozenset(hashes) for link, hashes in found.items()}
+
+
+def _with(
+    freshness: Freshness,
+    media_changes: tuple[MediaChange, ...],
+    flow_changes: tuple[FlowChange, ...],
+) -> Freshness:
+    if not media_changes and not flow_changes:
         return freshness
-    return Freshness("out_of_date", freshness.changes, changes)
+    return Freshness("out_of_date", freshness.changes, media_changes, flow_changes)
 
 
 def for_documents(
@@ -152,7 +323,9 @@ def for_documents(
 ) -> dict[str, Freshness]:
     """Freshness of each document's current revision.
 
-    The substrate is opened only when some revision recorded citations.
+    The substrate is opened only when some revision recorded citations. A
+    flow's statements are among them, so a revision without any has no flow
+    to check.
     """
     snapshots = cited_snapshots(drafts, document_ids)
     cited_ids = sorted(
@@ -166,8 +339,10 @@ def for_documents(
     current: dict[str, str] = {}
     merged_into: dict[str, str] = {}
     visible: dict[tuple[str, bool], frozenset[str]] = {}
+    readers: dict[tuple[str, bool] | None, _LinkReader] = {}
     if cited_ids:
         conn = substrate()
+        readers = _link_readers(conn, snapshots)
         current = store.get_statement_texts(conn, cited_ids)
         missing = [sid for sid in cited_ids if sid not in current]
         merged_into = store.merge_targets(conn, missing) if missing else {}
@@ -198,7 +373,7 @@ def for_documents(
         }
     unrecorded = _Cited(None, None)
     return {
-        document_id: _with_media(
+        document_id: _with(
             assess(
                 (cited := snapshots.get(document_id, unrecorded)).statements,
                 current,
@@ -206,6 +381,9 @@ def for_documents(
                 visible.get(cited.audience) if cited.audience is not None else None,
             ),
             assess_media(cited, items) if media_store.is_configured() else (),
+            assess_flows(cited.flows, readers[cited.audience])
+            if cited.audience in readers
+            else (),
         )
         for document_id in document_ids
     }
@@ -220,7 +398,7 @@ def cited_snapshots(
         chunk = wanted[offset : offset + 500]
         placeholders = ", ".join("?" for _document_id in chunk)
         rows = conn.execute(
-            "SELECT r.document_id, r.cited_statements, r.body, r.created_at, "
+            "SELECT r.document_id, r.cited_statements, r.body, r.created_at, r.flows, "
             "json_extract(run.profile_snapshot, '$.audience.id') AS audience, "
             "json_extract(run.profile_snapshot, '$.audience.scope') AS scope "
             "FROM generated_documents AS d JOIN generated_document_revisions AS r "
@@ -238,12 +416,15 @@ def cited_snapshots(
                 else (str(row["audience"]), row["scope"] == "internal"),
                 tuple(media.referenced(str(row["body"]))),
                 str(row["created_at"]),
+                tuple(STORED_FLOWS.validate_json(row["flows"])) if row["flows"] else (),
             )
     return snapshots
 
 
 def revision_brief(
-    changes: Sequence[StatementChange], media_changes: Sequence[MediaChange] = ()
+    changes: Sequence[StatementChange],
+    media_changes: Sequence[MediaChange] = (),
+    flow_changes: Sequence[FlowChange] = (),
 ) -> str:
     """Instructions for a revision that brings a document up to date."""
     lines = [
@@ -295,7 +476,47 @@ def revision_brief(
             f"- …and {len(changes) - _BRIEF_CHANGES} more cited statements changed; "
             "re-read every statement the document cites."
         )
+    lines.extend(_flow_lines(flow_changes))
     return "\n".join(lines)
+
+
+def _flow_lines(changes: Sequence[FlowChange]) -> list[str]:
+    """What changed in each placed flow, by statement text."""
+    by_flow: dict[str, list[FlowChange]] = {}
+    for change in changes:
+        by_flow.setdefault(change.flow, []).append(change)
+    lines: list[str] = []
+    for name, found in by_flow.items():
+        lines.append(
+            f"- The steps of flow `{name}` ({found[0].title!r}) changed since "
+            "it was drawn. Preview it again with preview_flow, bring the text "
+            "around it in line, and submit the flow again so it is redrawn:"
+        )
+        for change in found[:_BRIEF_CHANGES]:
+            source = _said(change.source_text)
+            target = _said(change.target_text)
+            if change.change == "step_added":
+                lines.append(
+                    f"  - step added: {source} now leads to {target} "
+                    f"({change.link_type})."
+                )
+            elif change.change == "step_removed":
+                lines.append(
+                    f"  - step removed: {source} no longer leads to {target} "
+                    f"({change.link_type})."
+                )
+            else:
+                lines.append(
+                    f"  - condition changed on the step from {source} to {target} "
+                    f"({change.link_type})."
+                )
+        if len(found) > _BRIEF_CHANGES:
+            lines.append(f"  - …and {len(found) - _BRIEF_CHANGES} more changes.")
+    return lines
+
+
+def _said(text: str) -> str:
+    return repr(_clip(text)) if text else "a statement this audience cannot read"
 
 
 def addition_brief(statements: Mapping[str, str]) -> str:

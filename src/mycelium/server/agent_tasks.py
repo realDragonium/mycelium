@@ -43,8 +43,6 @@ class TaskBatch(BaseModel):
     #: Tasks of this kind you already held, whose lease this call extended.
     renewed: list[str]
     expires_at: str
-    #: Why waiting tasks were not offered to you, when some were not.
-    note: str | None = None
 
 
 class Released(BaseModel):
@@ -94,16 +92,18 @@ def claim_agent_task(
     minutes, when an action's model setting is External agent.
 
     `kind`: `documentation` (write or revise a document), `document_review`
-    (review a document another agent wrote; never your own),
+    (review a document an agent wrote, in a session that did not write it),
     `documentation_planning` (propose a writing profile's documents),
-    `plan_review` (approve or dismiss the items of a plan; never one you
-    made),
+    `plan_review` (approve or dismiss the items of a plan, in a session that
+    did not make it),
     `audience_labelling` (decide which audiences may see statements),
-    `audience_review` (review waiting external audience grants),
+    `audience_review` (review waiting external audience grants, in a session
+    that did not label them),
     `ingest` (turn text into a draft of knowledge), `connect` (propose links
     and concept mentions for unconnected statements), `alias_discovery`
     (find new names of concepts in statements) or `draft_review` (approve,
-    correct, reject or ask about a submitted draft; never one you created).
+    correct, reject or ask about a submitted draft, in a session that did not
+    write it).
     Oldest tasks come first. Each carries a `brief`: `instructions` and
     `input` are what the server's model would be given, `read_tools` the
     reads it could make (call them with `read_for_agent_task`) and
@@ -148,17 +148,11 @@ def claim_agent_task(
         )
         is not None
     ]
-    withheld = agent_tasks.withheld(_drafts_db(), kind, claimant)
     return TaskBatch(
         kind=kind,
         tasks=tasks,
         renewed=claimed.renewed,
         expires_at=claimed.expires_at,
-        note=f"{withheld} waiting {kind} task{'s are' if withheld > 1 else ' is'} "
-        "your own work, a draft you created, a document you wrote, a plan you "
-        "made or grants you labelled, and only another agent may review it."
-        if withheld
-        else None,
     )
 
 
@@ -185,7 +179,7 @@ def submit_agent_task(task_id: str, result: dict[str, JsonValue]) -> Submitted:
     """Hand in a claimed task's result, shaped as its brief's
     `result_schema`. It passes the checks the server's own output would:
     a refusal returns `findings` and how many `retries_left`; fix them and
-    submit again. `in_review` means another agent reviews the document
+    submit again. `in_review` means an agent reviews the document
     next; `failed` closes the task.
     """
     claimant = _claimant()

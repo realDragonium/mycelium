@@ -3,5 +3,3 @@
 
 class Conflict(ValueError):
     """An operation conflicts with the current state."""
-
-    code: str | None = None

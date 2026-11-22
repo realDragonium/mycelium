@@ -33,7 +33,7 @@ from Drafts. It configures this action independently of
 Ask, Ingest, and Documentation. Choose the mode, where it runs (**Claude**,
 **OpenAI** or **External agent**), model (from the
 [model catalog](AI_MODELS.md#model-catalog)), reasoning
-effort (empty uses the model's default), independent reviewer account, and
+effort (empty uses the model's default), reviewer account, and
 whether **Allow applying accepted reviews** (`application_enabled`) is on, then
 save. Changes take effect for new submissions and explicit reruns
 without restarting the server. The form can create a stored writer service
@@ -121,7 +121,7 @@ agent's submission with findings.
 
 In `review-and-apply`, with the application gate on, the decisions are made
 through the suggestion's own accept and reject path, as the reviewer account
-(or agent) and never as the draft's creator, and recorded with the quote and
+(or agent), and recorded with the quote and
 reason. A suggestion whose source text changed since is rejected as the
 reviewer ("The supporting statement changed since the suggestion; scan the
 current statement."), so a new alias scan judges the current text. One whose
@@ -395,11 +395,10 @@ reopened draft is not reviewed automatically again; decide it with
 `review_draft` or in the web app. Withdrawn drafts stay closed: withdrawing is
 their creator's choice.
 
-Both tools need a real writer or admin and refuse a draft the caller created:
-an agent never decides its own proposal. The web app does not refuse it: a
-writer who proposed through **Propose as draft**, `open_draft` or a drafter-scoped token can
-approve that draft on its page, as they could have written it live. Submitting
-it hands the decision to the reviewer or another curator instead. They work in every mode, `off`
+Both tools need a real writer or admin, so a drafter-scoped token can decide
+nothing, its own drafts included. A writer or admin can decide a draft their
+own account created, over MCP as in the web app: a writer who proposed
+through **Propose as draft** or `open_draft` could have written it live. They work in every mode, `off`
 included, as the web app's controls do; `review-only` makes automatic reviews
 advisory, not a curator's decision. Every decision, from the web app or an
 agent, is logged with its decider, time, `reason`, `evidence` (items shaped as
@@ -415,7 +414,7 @@ reviews drafts and no provider key, model or reviewer account is needed.
 Each review run queues a `draft_review` task on the
 [agent task queue](AGENT_TASKS.md) instead, and the run shows **Waiting for an
 external agent** until an agent with a writer or admin token claims and
-submits it. The draft's creator is never given its review.
+submits it. The account that created the draft can claim its review too.
 
 The brief is built when the task is claimed, from the knowledge as it is then.
 `instructions` and `input` are the internal reviewer's system prompt and

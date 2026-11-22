@@ -1,5 +1,5 @@
 """A generated document after it leaves Mycelium: its identity, its pull
-request, and the text people edit at the destination."""
+request, and the file a publish writes at the destination."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ import pytest
 
 from mycelium import doc_runs, docs_store
 from mycelium.docgen import publication
-from mycelium.docgen.schema import CurrentDocument, RevisionTarget
 from product_settings_helpers import import_product_environment
 from settings_helpers import assume_configured_models
 
@@ -248,126 +247,11 @@ def test_upgrade_reads_the_pull_request_number_back_from_the_review_url(tmp_path
     legacy.close()
 
 
-# --- which text a revision starts from --------------------------------------
-
-
-def _published(conn: sqlite3.Connection, body: str = "# SSO\n") -> sqlite3.Row:
-    document_id = _document(conn, body=body)
-    docs_store.record_delivery(
-        conn,
-        document_id,
-        destination="docs",
-        target=TARGET,
-        path="docs/sso.md",
-        reference="https://github.com/acme/handbook/pull/17",
-        content_revision=_blob(body),
-        revision=1,
-        pull_request_number=17,
-    )
-    row = docs_store.get_document(conn, document_id)
-    assert row is not None
-    return row
-
-
-def _revised_internally(conn: sqlite3.Connection, row: sqlite3.Row) -> sqlite3.Row:
-    docs_store.upsert_document(
-        conn,
-        slug="sso",
-        title="SSO",
-        body="# SSO, revised here\n",
-        guideline_set="kb",
-        document_type="how-to",
-        updates=row["id"],
-        replacing=docs_store.body_digest(row["body"]),
-        expected_revision=1,
-    )
-    revised = docs_store.get_document(conn, row["id"])
-    assert revised is not None
-    return revised
-
-
 def _blob(body: str) -> str:
     encoded = body.encode("utf-8")
     return hashlib.sha1(
         f"blob {len(encoded)}\0".encode() + encoded, usedforsecurity=False
     ).hexdigest()
-
-
-def _remote(body: str) -> CurrentDocument:
-    return CurrentDocument(body=body, content_revision=_blob(body))
-
-
-def _start(row, remote, published=frozenset(), **kwargs):
-    return publication.revision_start(row, remote, published, **kwargs)
-
-
-def test_an_untouched_published_copy_leaves_the_internal_head_as_the_start(conn):
-    row = _revised_internally(conn, _published(conn))
-
-    start = _start(row, _remote("# SSO\n"))
-
-    assert start.base == "internal"
-    assert start.current == CurrentDocument("# SSO, revised here\n", _blob("# SSO\n"))
-
-
-def test_a_copy_edited_on_github_is_the_start_when_nothing_is_unpublished(conn):
-    row = _published(conn)
-
-    start = _start(row, _remote("# SSO, edited by a reviewer\n"))
-
-    assert start.base == "destination"
-    assert start.current == _remote("# SSO, edited by a reviewer\n")
-
-
-def test_edits_on_both_sides_are_refused_with_the_ways_forward(conn):
-    row = _revised_internally(conn, _published(conn))
-
-    with pytest.raises(ValueError) as refusal:
-        _start(row, _remote("# SSO, edited by a reviewer\n"))
-
-    message = str(refusal.value)
-    assert "edited on GitHub after revision 1 was published" in message
-    assert "revision 2 here has not been published" in message
-    assert "start_from_destination" in message
-    assert "close pull request #17 without merging" in message
-
-
-def test_starting_from_the_destination_is_an_explicit_way_past_the_refusal(conn):
-    row = _revised_internally(conn, _published(conn))
-
-    start = _start(
-        row, _remote("# SSO, edited by a reviewer\n"), start_from_destination=True
-    )
-
-    assert start.base == "destination"
-
-
-def test_an_earlier_published_text_is_not_mistaken_for_an_edit(conn):
-    """After an unmerged close the base branch still holds an older version."""
-    row = _revised_internally(conn, _published(conn, body="# SSO v2\n"))
-
-    start = _start(row, _remote("# SSO v1\n"), frozenset({_blob("# SSO v1\n")}))
-
-    assert start.base == "internal"
-    assert start.current.content_revision == _blob("# SSO v1\n")
-
-
-def test_a_copy_already_matching_the_head_needs_no_reconciling(conn):
-    row = _revised_internally(conn, _published(conn))
-
-    start = _start(row, _remote("# SSO, revised here\n"))
-
-    assert start.base == "internal"
-
-
-def test_an_absent_copy_keeps_the_internal_head_and_the_sync_point(conn):
-    row = _revised_internally(conn, _published(conn))
-
-    assert _start(row, None) == publication.RevisionStart(
-        CurrentDocument("# SSO, revised here\n"), "internal"
-    )
-    with pytest.raises(ValueError, match="no published copy"):
-        _start(row, None, start_from_destination=True)
 
 
 # --- the whole loop against a fake GitHub -----------------------------------
@@ -545,7 +429,7 @@ def _later() -> datetime:
     return datetime.now(UTC) + publication.REFRESH_INTERVAL
 
 
-def _revise(conn, document_id, prompt, **kwargs) -> str:
+def _revise(conn, document_id, prompt) -> str:
     row = docs_store.get_document(conn, document_id)
     run_id = doc_runs.start_run(
         prompt=prompt,
@@ -555,20 +439,16 @@ def _revise(conn, document_id, prompt, **kwargs) -> str:
         conn=conn,
         target_document_id=document_id,
         expected_revision=int(row["current_revision"]),
-        **kwargs,
     )
     doc_runs.wait_all()
     return run_id
 
 
-def test_a_document_round_trips_through_review_edits_and_merge(
+def test_a_publish_overwrites_the_file_whatever_was_changed_on_github(
     conn, github, monkeypatch
 ):
-    started_from: list[RevisionTarget] = []
-
     def runner(prompt, *, revision_target=None, **kwargs):
         assert revision_target is not None
-        started_from.append(revision_target)
         return {
             "outcome": "document_written",
             "slug": "ignored",
@@ -585,15 +465,11 @@ def test_a_document_round_trips_through_review_edits_and_merge(
     first = publication.publish(conn, document_id, "docs")
     assert (first["pull_request_number"], github.file(branch, path)) == (17, "# SSO\n")
 
+    # Changed by hand on the open pull request, then on the base branch.
     github.commit_file(branch, path, "# SSO\n\nReviewer: mind the IdP clock.\n")
-    run = docs_store.get_run(conn, _revise(conn, document_id, "Add a summary."))
-    assert (run["outcome"], run["revision_base"]) == ("document_written", "destination")
-    assert "Reviewer: mind the IdP clock." in started_from[-1].current.body
-
+    _revise(conn, document_id, "Add a summary.")
     publication.publish(conn, document_id, "docs")
-    assert github.file(branch, path) == (
-        "# SSO\n\nReviewer: mind the IdP clock.\n\nAdd a summary.\n"
-    )
+    assert github.file(branch, path) == "# SSO\n\nAdd a summary.\n"
     assert list(github.pulls) == [17]
 
     github.merge(17)
@@ -602,12 +478,9 @@ def test_a_document_round_trips_through_review_edits_and_merge(
 
     github.commit_file("main", path, "# SSO\n\nEdited on main after merge.\n")
     _revise(conn, document_id, "Add a caveat.")
-    assert started_from[-1].base == "destination"
     second = publication.publish(conn, document_id, "docs")
     assert second["pull_request_number"] == 18
-    assert github.file(branch, path) == (
-        "# SSO\n\nEdited on main after merge.\n\nAdd a caveat.\n"
-    )
+    assert github.file(branch, path) == "# SSO\n\nAdd a summary.\n\nAdd a caveat.\n"
     assert _serialized(conn, document_id)["delivery_status"] == "published"
 
     github.close(18)
@@ -615,34 +488,6 @@ def test_a_document_round_trips_through_review_edits_and_merge(
     assert _serialized(conn, document_id)["delivery_status"] == "closed"
     third = publication.publish(conn, document_id, "docs")
     assert third["pull_request_number"] == 19
-
-
-def test_a_revision_over_edits_on_both_sides_is_refused_before_a_run_exists(
-    conn, github, monkeypatch
-):
-    monkeypatch.setattr(
-        doc_runs, "_default_runner", lambda *args, **kwargs: pytest.fail("ran")
-    )
-    document_id = _document(conn)
-    publication.publish(conn, document_id, "docs")
-    github.commit_file(f"mycelium/docs/sso-{document_id}", "docs/sso.md", "# Edited\n")
-    row = docs_store.get_document(conn, document_id)
-    docs_store.upsert_document(
-        conn,
-        slug="sso",
-        title="SSO",
-        body="# SSO, edited here too\n",
-        guideline_set="kb",
-        document_type="how-to",
-        updates=document_id,
-        replacing=docs_store.body_digest(row["body"]),
-        expected_revision=1,
-    )
-
-    with pytest.raises(ValueError, match="Mycelium will not merge the two"):
-        _revise(conn, document_id, "Tidy up.")
-
-    assert docs_store.list_runs(conn) == []
 
 
 def test_refresh_keeps_the_last_state_when_github_cannot_be_reached(
@@ -680,39 +525,20 @@ def test_refresh_reuses_a_recent_answer(conn, github):
 # --- the same loop through the HTTP routes ----------------------------------
 
 
-def test_the_http_routes_track_the_pull_request_and_offer_both_sides(
-    conn, github, monkeypatch
-):
+def test_the_http_routes_track_the_pull_request(conn, github, monkeypatch):
     from fastapi.testclient import TestClient
 
-    from mycelium import auth, drafts_store, guidelines, prompt_store
+    from mycelium import auth, drafts_store
     from mycelium.http import create_app
-
-    app = create_app()
     from mycelium.http.authentication import AuthMiddleware
 
     async def writer(*_):
         return auth.Principal(id="w", name="Writer", role="writer", type="human")
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", writer)
-    prompts = prompt_store.connection()
     # Routes run on worker threads, past a thread-pinned connection.
     monkeypatch.setattr(drafts_store, "connection", lambda: conn)
-    monkeypatch.setattr(prompt_store, "connection", lambda: prompts)
-    for slot in ("guidance", "how-to"):
-        prompt_store.save(prompts, type=guidelines.TYPE, name=f"kb/{slot}", text="t")
-    monkeypatch.setattr(
-        doc_runs,
-        "_default_runner",
-        lambda prompt, *, revision_target, **kwargs: {
-            "outcome": "document_written",
-            "slug": "sso",
-            "title": "SSO",
-            "body": revision_target.current.body + prompt + "\n",
-            "statement_ids": ["stm_1"],
-        },
-    )
-    client = TestClient(app)
+    client = TestClient(create_app())
     document_id = _document(conn)
     url = f"/api/documentation/documents/{document_id}"
     delivered = client.post(
@@ -721,32 +547,34 @@ def test_the_http_routes_track_the_pull_request_and_offer_both_sides(
     assert delivered.json()["pull_request_number"] == 17
     assert client.get(url).json()["pull_request"]["state"] == "open"
 
-    github.commit_file(f"mycelium/docs/sso-{document_id}", "docs/sso.md", "# Ed\n")
+    github.merge(17)
+    monkeypatch.setattr(publication, "REFRESH_INTERVAL", timedelta(0))
+    assert client.get(url).json()["pull_request"]["state"] == "merged"
+
+
+def test_an_identical_body_with_other_flows_or_links_is_refused(conn):
+    link = {"name": "SSO", "entity_id": "ent_sso"}
     docs_store.upsert_document(
         conn,
         slug="sso",
         title="SSO",
-        body="# SSO, edited here too\n",
+        body="# SSO\n",
         guideline_set="kb",
         document_type="how-to",
-        updates=document_id,
-        replacing=docs_store.body_digest("# SSO\n"),
-        expected_revision=1,
-    )
-    revise = {"prompt": "Tidy.", "expected_revision": 2}
-    refused = client.post(url + "/revisions", json=revise)
-    assert (refused.status_code, refused.json()["code"]) == (
-        409,
-        "both_sides_edited",
+        concept_links=[link],
     )
 
-    run = client.post(
-        url + "/revisions", json={**revise, "start_from_destination": True}
-    ).json()
-    doc_runs.wait_all()
-    assert run["revision_base"] == "destination"
-    assert docs_store.get_document(conn, document_id)["body"] == "# Ed\nTidy.\n"
+    def again(entity_id: str) -> str:
+        return docs_store.upsert_document(
+            conn,
+            slug="sso",
+            title="SSO",
+            body="# SSO\n",
+            guideline_set="kb",
+            document_type="how-to",
+            concept_links=[{**link, "entity_id": entity_id}],
+        )
 
-    github.merge(17)
-    monkeypatch.setattr(publication, "REFRESH_INTERVAL", timedelta(0))
-    assert client.get(url).json()["pull_request"]["state"] == "merged"
+    with pytest.raises(ValueError, match="would replace the concept links or flows"):
+        again("ent_other")
+    assert docs_store.get_document(conn, again("ent_sso"))["current_revision"] == 2

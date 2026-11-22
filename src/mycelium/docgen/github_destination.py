@@ -239,38 +239,6 @@ def deliver(
     )
 
 
-def read(
-    destination: DestinationConfig,
-    path: str,
-    document_id: str,
-    slug: str,
-    env: Mapping[str, str] | None = None,
-    *,
-    client: httpx.Client | None = None,
-) -> CurrentDocument | None:
-    """The file as it stands for review: on the open PR's branch, else the base.
-
-    None when the file is absent there, as it is after a PR closed unmerged.
-    """
-
-    def fetch(
-        active: httpx.Client, config: GitHubConfig, token: str
-    ) -> CurrentDocument | None:
-        branch = _branch_name(
-            config, DeliveryDocument(document_id, slug, "", "", "", "", ())
-        )
-        if not _has_open_review(config, branch, active, token):
-            return _media_references(
-                _file(config, path, config.base_branch, active, token), path
-            )
-        current = _file(config, path, branch, active, token)
-        if current is None:
-            raise _deleted_in_review(config, path, branch)
-        return _media_references(current, path)
-
-    return _call(destination, env, client, "read", fetch)
-
-
 def _media_folder(path: str) -> str:
     return f"{PurePosixPath(path).stem}-media"
 
@@ -296,19 +264,6 @@ def _with_media_files(
     folder = PurePosixPath(path).parent
     files = [(str(folder / names[item.id]), item) for item in document.media]
     return replace(document, body=body), files
-
-
-def _media_references(
-    current: CurrentDocument | None, path: str
-) -> CurrentDocument | None:
-    if current is None:
-        return None
-    link = re.compile(
-        r"\]\("
-        + re.escape(_media_folder(path))
-        + r"/(med_[0-9a-f]{12})-v[0-9]+\.[a-z0-9]+\)"
-    )
-    return replace(current, body=link.sub(r"](media:\1)", current.body))
 
 
 def pull_request_state(
@@ -458,22 +413,15 @@ def _deliver(
     parent_sha, base_tree_sha, branch_exists, additional_parent_sha = _delivery_base(
         config, branch, client, token, reuse_branch=reuse_branch
     )
-    expected_revision = (
-        document.revision_source_content_revision or document.delivered_content_revision
-    )
-    if expected_revision is not None:
-        ref = branch if reuse_branch else config.base_branch
-        # Absent from the base holds nothing to lose: the PR closed unmerged,
-        # or the file was removed, and delivery proposes it again for review.
-        current = _file(config, path, ref, client, token)
-        if current is None and reuse_branch:
+    if document.delivered_path is not None and reuse_branch:
+        # Anything else the file holds on the branch is overwritten below.
+        current = _file(config, path, branch, client, token)
+        if current is None:
             raise _deleted_in_review(config, path, branch)
         intended_revision = _git_blob_id(document.body)
-        if (
-            current is not None
-            and current.content_revision == intended_revision
-            and reuse_branch
-        ):
+        # Media is written with the document, so only a document without any
+        # can be known to need nothing.
+        if current.content_revision == intended_revision and not media_files:
             reference = _review(config, document, branch, client, token)
             return Delivery(
                 destination=config.destination.name,
@@ -481,17 +429,6 @@ def _deliver(
                 reference=reference,
                 content_revision=intended_revision,
                 pull_request_number=_pull_number(config, reference),
-            )
-        if current is not None and current.content_revision not in {
-            intended_revision,
-            expected_revision,
-            document.delivered_content_revision,
-            *document.published_content_revisions,
-        }:
-            raise DestinationError(
-                f"destination {config.destination.name!r} has edits to {path} on "
-                f"{ref} made after this revision was written. Revise the document "
-                "so the new revision starts from that text, then publish again."
             )
     content_sha = _blob(config, document, client, token)
     entries = [(path, content_sha)] + [

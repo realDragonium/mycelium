@@ -1,5 +1,5 @@
 import React from 'react';
-import { errorMessage, getJSON, HttpError, postJSON } from './api';
+import { errorMessage, getJSON, postJSON } from './api';
 import { substrate } from './data';
 import { PageHeader } from './lib';
 import { Link } from './router';
@@ -27,7 +27,7 @@ interface DocumentationRun {
   id: string; prompt: string; provider: string; model: string | null; reasoning_effort: string | null;
   status: string; queue_position: number | null; created_at: string; document_id: string | null; result_revision: number | null;
   target_document_id: string | null; target_revision: number | null;
-  revision_base: string | null; error: string | null; draft_title?: string | null; draft_body?: string | null;
+  error: string | null; draft_title?: string | null; draft_body?: string | null;
   summary: RunSummary | null; review_notes: ReviewNote[]; retryable?: boolean; agent_task?: AgentTask | null;
   retry_of: string | null; attempt: number; recovery: 'none' | 'retried' | 'gave_up' | null; recovery_note: string | null;
   delivery: 'none' | 'publishing' | 'published' | 'failed' | null; delivery_error: string | null;
@@ -67,7 +67,6 @@ interface DocumentationRevision extends DocumentationRevisionSummary {
 }
 interface DocumentationDestination { name: string; path_template: string; coordinates: DeliveryCoordinates }
 interface LoadedDocument { current: DocumentationDocument; history: DocumentationRevisionSummary[]; selected: DocumentationDocument | DocumentationRevision }
-interface PendingEdit { title: string; body: string; expectedRevision: number | undefined }
 interface PlanItem {
   id: string; action: 'create' | 'update'; title: string; document_type: string; anchor_entity_id: string | null; anchor_name: string | null;
   document_id: string | null; rationale: string; priority: 'high' | 'medium' | 'low'; statement_ids: string[];
@@ -100,8 +99,6 @@ interface RevisionDiff { from_revision: number; to_revision: number; lines: { op
 
 const docGet = <T,>(path: string, signal?: AbortSignal) => getJSON<T>('/api/documentation/' + path, signal);
 const docPost = <T,>(path: string, body: unknown) => postJSON<T>('/api/documentation/' + path, body);
-const isBothSidesEdited = (error: unknown) => error instanceof HttpError
-  && !!error.body && typeof error.body === 'object' && 'code' in error.body && error.body.code === 'both_sides_edited';
 const RUN_STATUSES: Record<string, string> = { queued: 'Queued', waiting_for_agent: 'Waiting for an agent', running: 'Generating and reviewing', document_written: 'Saved', document_superseded: 'Saved · newer revision exists', nothing_written: 'No document saved', failed: 'Failed' };
 const DELIVERY_STATUSES: Record<string, string> = { unpublished: 'Internal only', published: 'Published to GitHub', changes_pending: 'Changes awaiting publication', merged: 'Pull request merged', closed: 'Pull request closed without merging' };
 const PULL_REQUEST_STATES: Record<string, string> = { open: 'Open for review', merged: 'Merged', closed: 'Closed without merging' };
@@ -145,7 +142,7 @@ function Released({ task }: { task: AgentTask }) {
 function agentRunStatus(task: AgentTask) {
   if (task.status === 'waiting') return <>Waiting for an agent to claim it.<Released task={task} /></>;
   if (task.status === 'claimed') return <>Claimed by {task.claimed_by || 'an agent'} until {docDate(task.expires_at)}.</>;
-  if (task.status === 'in_review') return <>Written; waiting for another agent's review.</>;
+  if (task.status === 'in_review') return <>Written; waiting for an agent's review.</>;
   if (task.status === 'failed') return <>The agent task failed{task.error ? `: ${task.error}` : '.'}</>;
   return <>The agent finished this task.</>;
 }
@@ -177,12 +174,11 @@ function DocumentationRunSummary({ summary }: { summary: RunSummary }) {
   </dl>;
 }
 
-function DocumentationModel({ options, value, onChange, disabled, filter }: {
+function DocumentationModel({ options, value, onChange, disabled }: {
   options: DocumentationOptions; value: string; onChange: (provider: string) => void; disabled?: boolean;
-  filter?: (model: DocumentationModelOption) => boolean;
 }) {
   return <label>Model for this run<select value={value} onChange={event => onChange(event.target.value)} disabled={disabled}>
-    {options.models.filter(model => !filter || filter(model)).map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.provider === 'agent' ? model.label : model.model ? `${model.label} · ${model.model} · ${model.reasoning_effort ?? 'Model default'} effort${model.available ? '' : ' (unavailable)'}` : `${model.label} · no model chosen`}</option>)}
+    {options.models.map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.provider === 'agent' ? model.label : model.model ? `${model.label} · ${model.model} · ${model.reasoning_effort ?? 'Model default'} effort${model.available ? '' : ' (unavailable)'}` : `${model.label} · no model chosen`}</option>)}
   </select></label>;
 }
 
@@ -198,7 +194,6 @@ function DocumentationGenerator({ options, document, documents = [], onStarted }
   const [anchor, setAnchor] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [bothEdited, setBothEdited] = React.useState(false);
   const submitting = React.useRef(false);
   const selected = options.models.find(model => model.provider === provider);
   const profileName = document?.guideline_set || profile;
@@ -207,17 +202,17 @@ function DocumentationGenerator({ options, document, documents = [], onStarted }
   const allowed = options.can_generate && !!selected?.available && !audienceUnavailable;
   const anchorEntity = anchor.trim() ? docEntityByName(anchor) : null;
   const anchored = anchorEntity ? documents.find(item => item.guideline_set === profile && item.document_type === type && item.anchor_entity_id === anchorEntity.id) : undefined;
-  const submit = async (event: { preventDefault: () => void }, startFromDestination = false) => {
+  const submit = async (event: { preventDefault: () => void }) => {
     event.preventDefault();
     if (submitting.current || !allowed || !prompt.trim()) return;
     if (anchor.trim() && !anchorEntity) { setError('Choose a concept from the list, or clear the field.'); return; }
-    submitting.current = true; setBusy(true); setError(null); setBothEdited(false);
+    submitting.current = true; setBusy(true); setError(null);
     try {
       const run = await docPost<DocumentationRun>(document ? `documents/${encodeURIComponent(document.id)}/revisions` : 'runs', document
-        ? { prompt: prompt.trim(), provider, expected_revision: document.current_revision, start_from_destination: startFromDestination }
+        ? { prompt: prompt.trim(), provider, expected_revision: document.current_revision }
         : { prompt: prompt.trim(), provider, guideline_set: profile || null, document_type: type || null, anchor_entity_id: anchorEntity?.id || null });
       onStarted(run);
-    } catch (error) { setError(errorMessage(error)); setBothEdited(isBothSidesEdited(error)); }
+    } catch (error) { setError(errorMessage(error)); }
     finally { submitting.current = false; setBusy(false); }
   };
   return <form onSubmit={submit} className="docw-panel">
@@ -244,64 +239,6 @@ function DocumentationGenerator({ options, document, documents = [], onStarted }
     {!options.can_generate && <p>Writer or admin access is required to generate and publish documents.</p>}
     {!selected?.available && <p>{selected?.reason || 'The selected provider needs server credentials before it can run.'}</p>}
     {error && <p role="alert">{error}</p>}
-    {bothEdited && <div className="docw-actions"><button type="button" disabled={busy} onClick={event => submit(event, true)}>Start from the published copy on GitHub</button></div>}
-    {bothEdited && document && <p>The new revision starts from the GitHub text; revision {document.current_revision} stays in the history.</p>}
-  </form>;
-}
-
-const docPendingEdits = new Map<string, PendingEdit>();
-window.addEventListener('beforeunload', event => {
-  if (docPendingEdits.size) { event.preventDefault(); event.returnValue = ''; }
-});
-
-function DocumentationEditor({ title: initialTitle, body: initialBody, path, expectedRevision, options, onStarted, onCancel }: {
-  title: string | null | undefined; body: string; path: string; expectedRevision?: number;
-  options: DocumentationOptions; onStarted: (run: DocumentationRun) => void; onCancel: () => void;
-}) {
-  const [title, setTitle] = React.useState(() => docPendingEdits.get(path)?.title ?? initialTitle ?? '');
-  const [body, setBody] = React.useState(() => docPendingEdits.get(path)?.body ?? initialBody);
-  const [baseRevision] = React.useState(() => docPendingEdits.get(path)?.expectedRevision ?? expectedRevision);
-  const serverModel = (model: DocumentationModelOption) => model.provider !== 'agent';
-  const [provider, setProvider] = React.useState(() => options.default_provider === 'agent'
-    ? options.models.find(model => serverModel(model) && model.available)?.provider ?? 'claude'
-    : options.default_provider);
-  const [preview, setPreview] = React.useState<string | null>(null);
-  const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-  const submitting = React.useRef(false);
-  const dirty = title !== (initialTitle || '') || body !== initialBody;
-  React.useEffect(() => {
-    if (dirty) docPendingEdits.set(path, { title, body, expectedRevision: baseRevision });
-    else docPendingEdits.delete(path);
-  }, [path, title, body, baseRevision, dirty]);
-  const allowed = options.can_generate && options.models.some(model => serverModel(model) && model.provider === provider && model.available);
-  const request = async (save: boolean) => {
-    if (submitting.current || !title.trim() || !body.trim()) return;
-    submitting.current = true; setBusy(true); setError(null);
-    try {
-      if (save) {
-        const run = await docPost<DocumentationRun>(path, { title, body, provider, ...(baseRevision ? { expected_revision: baseRevision } : {}) });
-        docPendingEdits.delete(path); onStarted(run);
-      } else {
-        const result = await docPost<{ body_html: string }>('preview', { title, body });
-        setPreview(result.body_html);
-      }
-    } catch (error) { setError(errorMessage(error)); }
-    finally { submitting.current = false; setBusy(false); }
-  };
-  return <form className="docw-panel" onSubmit={event => { event.preventDefault(); if (allowed) request(true); }}>
-    <h2>Edit document</h2>
-    <p>Your Markdown will be checked against the knowledge base and writing profile. Passing review saves the result internally. You can then create a GitHub PR.</p>
-    <p>Unsubmitted edits stay available while this page is open, even if you switch sections.</p>
-    {baseRevision && <p>This edit is based on revision {baseRevision}.</p>}
-    <fieldset disabled={busy}>
-      <label>Document title<input required maxLength={300} value={title} onChange={event => setTitle(event.target.value)} /></label>
-      <label>Markdown body<textarea className="docw-editor" required maxLength={200000} rows={24} value={body} onChange={event => { setBody(event.target.value); setPreview(null); }} /></label>
-      <DocumentationModel options={options} value={provider} onChange={setProvider} filter={serverModel} />
-      <div className="docw-actions"><button type="button" onClick={() => request(false)} disabled={!title.trim() || !body.trim()}>Preview</button><button type="submit" disabled={!allowed || !title.trim() || !body.trim()}>{busy ? 'Working…' : 'Review and save'}</button><button type="button" onClick={() => { if (!dirty || window.confirm('Discard your unsaved edits?')) { docPendingEdits.delete(path); onCancel(); } }}>Cancel</button></div>
-    </fieldset>
-    {error && <p role="alert">{error} Your edits are still here.</p>}
-    {preview !== null && <article aria-label="Edited document preview" className="docw-prose" dangerouslySetInnerHTML={{ __html: preview }} />}
   </form>;
 }
 
@@ -401,11 +338,10 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
   const [error, setError] = React.useState<string | null>(null);
   const [retry, setRetry] = React.useState(0);
   const [source, setSource] = React.useState(false);
-  const [editing, setEditing] = React.useState(false);
   React.useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    setData(null); setError(null); setEditing(false);
+    setData(null); setError(null);
     const path = `documents/${encodeURIComponent(id)}`;
     Promise.all([
       docGet<DocumentationDocument>(path, controller.signal),
@@ -421,7 +357,6 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
   const { current, history, selected } = data;
   const historical = !!revision && Number(revision) !== current.current_revision;
   const selectedRunId = 'run_id' in selected ? selected.run_id : null;
-  if (editing) return <DocumentationEditor key={current.id + ":" + current.current_revision} title={current.title} body={current.body} path={`documents/${encodeURIComponent(id)}/edits`} expectedRevision={current.current_revision} options={options} onStarted={onStarted} onCancel={() => setEditing(false)} />;
   const download = () => {
     const url = URL.createObjectURL(new Blob([selected.body], { type: 'text/markdown;charset=utf-8' }));
     const link = window.document.createElement('a'); link.href = url; link.download = selected.slug + '.md'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -431,8 +366,8 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
       <div className="docw-actions"><button onClick={() => docNavigate({ tab: 'library' })}>← All documents</button><button onClick={onUpdated}>Refresh</button></div>
       <h2>{selected.title}{!historical && current.stale.status === 'out_of_date' && <span className="docw-stale-badge">Out of date</span>}</h2><p className="docw-meta">{selected.guideline_set} · {selected.document_type}{current.audience && <> · <AudienceIdentity audience={current.audience} /></>} · revision {revision || current.current_revision}{current.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: current.anchor_entity_id }}>{docEntityName(current.anchor_entity_id)}</Link></>}</p>
       <label>Revision history<select value={revision || current.current_revision} onChange={event => docNavigate({ document: id, revision: event.target.value })}>{history.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}{item.revision === current.current_revision ? ' (current)' : ''} · {docDate(item.created_at)}</option>)}</select></label>
-      {historical && <p>You are reading an earlier revision. <button onClick={() => docNavigate({ document: id })}>Open current revision to edit or publish</button></p>}
-      <div className="docw-actions"><button onClick={() => setSource(value => !value)}>{source ? 'Read document' : 'View Markdown'}</button><button onClick={download}>Download Markdown</button>{!historical && options.can_generate && <button onClick={() => setEditing(true)}>{docPendingEdits.has(`documents/${encodeURIComponent(id)}/edits`) ? 'Resume edit' : 'Edit Markdown'}</button>}</div>
+      {historical && <p>You are reading an earlier revision. <button onClick={() => docNavigate({ document: id })}>Open current revision to revise or publish</button></p>}
+      <div className="docw-actions"><button onClick={() => setSource(value => !value)}>{source ? 'Read document' : 'View Markdown'}</button><button onClick={download}>Download Markdown</button></div>
       {source ? <pre className="docw-source">{selected.body}</pre> : <article className="docw-prose" dangerouslySetInnerHTML={{ __html: selected.body_html }} />}
       <details><summary>Sources and review</summary><p>{selected.statement_ids?.length || 0} source statements</p><DocumentationSources ids={selected.statement_ids || []} /><pre className="docw-source">{JSON.stringify(selected.review, null, 2)}</pre></details>
       {(selectedRunId || (!historical && current.last_run_id)) && <p><button onClick={() => docNavigate({ run: selectedRunId || current.last_run_id })}>View generation run</button></p>}
@@ -445,7 +380,6 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
 function DocumentationRun({ id, onCompleted, options, onStarted }: {
   id: string; onCompleted: () => void; options: DocumentationOptions; onStarted: (run: DocumentationRun) => void;
 }) {
-  const [editing, setEditing] = React.useState(false);
   const [run, setRun] = React.useState<DocumentationRun | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [retry, setRetry] = React.useState(0);
@@ -466,12 +400,10 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
   }, [id, retry, onCompleted]);
   if (error) return <p role="alert">{error} <button onClick={() => setRetry(value => value + 1)}>Reload run</button></p>;
   if (!run) return <p role="status">Loading run…</p>;
-  if (editing) return <DocumentationEditor title={run.draft_title} body={run.draft_body || ''} path={`runs/${encodeURIComponent(id)}/edits`} options={options} onStarted={onStarted} onCancel={() => setEditing(false)} />;
   return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run)}</h2><p className="docw-meta">{run.provider === 'agent'
     ? <>External agent{run.model !== null && <> · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'}</>}</>
     : <>{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'}</>} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
     {run.target_document_id && <p>Revises <a href={'#/documentation?document=' + encodeURIComponent(run.target_document_id)}>an existing document</a>, starting from its revision {run.target_revision}.</p>}
-    {run.revision_base === 'destination' && <p>This revision started from the published copy on GitHub.</p>}
     {run.retry_of && <p>{run.attempt ? `Automatic retry ${run.attempt}` : 'Retry'} of <a href={'#/documentation?run=' + encodeURIComponent(run.retry_of)}>an earlier run</a>.</p>}
     {run.recovery === 'retried' && <p>Retried in a later run.</p>}
     {run.recovery === 'gave_up' && run.recovery_note && <p role="alert">{run.recovery_note}</p>}
@@ -486,7 +418,6 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
     {run.retryable && options.can_generate && <DocumentationRetry run={run} onStarted={onStarted} />}
     {run.document_id && <button onClick={() => docNavigate({ document: run.document_id, revision: run.result_revision })}>{run.result_revision ? `Read saved revision ${run.result_revision}` : 'Open document'}</button>}
     {run.document_id && !run.result_revision && <p>This older run has no retained revision snapshot. The link opens the current document.</p>}
-    {run.draft_body && !docActive(run) && !run.document_id && options.can_generate && <button onClick={() => setEditing(true)}>{docPendingEdits.has(`runs/${encodeURIComponent(id)}/edits`) ? 'Resume draft edit' : 'Edit and review draft'}</button>}
     {run.draft_body && <details open><summary>Unsaved draft · {run.draft_title}</summary><pre className="docw-source">{run.draft_body}</pre></details>}
   </section>;
 }
