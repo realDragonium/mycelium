@@ -5,7 +5,7 @@ For developers on the product: one page per concept that explains what it is, ho
 This is an example to copy, not a profile the server loads. Create a profile in **Settings → Documentation** or with `save_writing_profile`, and paste the texts below into it. Adjust them to your product and readers.
 
 - **Suggested name:** `developer-reference`
-- **Audience:** Internal technical.
+- **Audience:** All statements (no audience), so a page can rest on anything in the knowledge base. Keep the pages and the downloaded website internal.
 - **Templates:** `entity-page`
 - **When AI work fails:** retry automatically. A revision the review refuses is then tried again with the review's notes instead of leaving the page out of date until someone notices.
 - **Destinations:** none. Pages with concept links and flows are read as a website: an administrator downloads it as a zip under **Download as a website** on the profile in **Settings → Documentation**, or from `GET /api/documentation/sites/<profile>` with an admin token. On the machine that holds the data directory, `mycelium docs-site --profile <profile> --out <directory>` writes the same files.

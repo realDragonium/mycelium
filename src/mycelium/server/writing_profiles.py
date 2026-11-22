@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import audiences, documentation_profiles
+from .. import documentation_profiles
 from .prompt_texts import _prompt_principal
 from .registry import tool
 from .runtime import _prompts_db
@@ -55,14 +55,7 @@ def get_writing_profile(name: str) -> dict[str, Any]:
     if not profile.revision:
         raise ValueError(f"No writing profile is named '{name}'.")
     audience = documentation_profiles.audience_brief(
-        next(
-            (
-                item
-                for item in audiences.live(db)
-                if item.id == profile.effective_audience
-            ),
-            None,
-        )
+        documentation_profiles.effective_audience(profile, db)
     )
     return {
         "profile": profile.model_dump(mode="json"),
@@ -94,7 +87,8 @@ def save_writing_profile(
     "" creates a profile that does not exist yet. A stale revision is refused
     and nothing is written. Needs a real writer; removing a template or
     slot, or changing the audience or destinations of an existing profile,
-    needs an admin. `audience` must be a live audience id, or null for the
+    needs an admin. `audience` must be a live audience id, `all-statements` to
+    write from every statement whatever its audience label, or null for the
     default internal audience. `delivery_destination` is the configured
     destination `auto` delivery publishes a never-published document to;
     `recovery` "ai" lets the maintenance sweep retry failed AI work within

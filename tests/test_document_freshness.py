@@ -7,6 +7,7 @@ import json
 import pytest
 
 from mycelium import (
+    audiences,
     doc_runs,
     docs_store,
     document_freshness,
@@ -449,3 +450,17 @@ def test_a_flow_change_withholds_a_step_the_audience_lost(db, drafts):  # noqa: 
     assert "The export is queued." not in {
         text for change in changes for text in (change.source_text, change.target_text)
     }
+
+
+def test_a_document_written_from_all_statements_ignores_labels(db, drafts):  # noqa: F811
+    corpus = _corpus(db)
+    everything = audiences.ALL_STATEMENTS
+    document, stored = _flow_document(drafts, corpus, everything)
+    assert corpus.failed in stored.drawing.statement_ids
+
+    store.audience_labels.set_label(
+        db, corpus.queued, ["an-audience-since-retired"], source="ai", reason="r"
+    )
+    db.commit()
+
+    assert _fresh(drafts, document) == Freshness("current")
