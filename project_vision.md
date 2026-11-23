@@ -69,7 +69,8 @@ belong in statements of the appropriate kind.
 **Annotations were removed.** They attracted knowledge that belonged in
 statements. Do not add annotation records or introduce a parallel note store
 for domain knowledge. Historical migrations and archive compatibility still
-reference annotations; older databases may retain inert tables.
+reference annotations; upgrading an older database turns its annotations into
+rule statements.
 
 Statement links can carry `when` expressions over statements using AND, OR,
 and NOT. Entity-to-entity links describe structural relationships. There are no

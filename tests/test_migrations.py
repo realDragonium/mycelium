@@ -815,3 +815,128 @@ def test_v29_keeps_stops_and_takes_the_new_kinds():
     assert [
         tuple(row) for row in conn.execute("SELECT kind, item_id FROM automation_stops")
     ] == [("connect", "stm_1"), ("mention", "7")]
+
+
+def _v30_with_annotations() -> sqlite3.Connection:
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    conn.executescript(
+        """
+        CREATE TABLE annotations (id TEXT PRIMARY KEY, kind TEXT NOT NULL,
+            text TEXT NOT NULL, created_at TEXT, updated_at TEXT,
+            created_by TEXT, updated_by TEXT);
+        CREATE TABLE annotation_vector_ids (
+            annotation_id TEXT PRIMARY KEY REFERENCES annotations(id),
+            vector_id INTEGER NOT NULL UNIQUE);
+        CREATE TABLE annotation_mentions (
+            annotation_id TEXT NOT NULL REFERENCES annotations(id),
+            name_id TEXT NOT NULL REFERENCES names(id),
+            PRIMARY KEY (annotation_id, name_id));
+        CREATE TABLE statement_annotations (
+            statement_id TEXT NOT NULL REFERENCES statements(id),
+            annotation_id TEXT NOT NULL REFERENCES annotations(id),
+            created_at TEXT, created_by TEXT,
+            PRIMARY KEY (statement_id, annotation_id));
+        CREATE TABLE entity_annotations (
+            entity_id TEXT NOT NULL REFERENCES entities(id),
+            annotation_id TEXT NOT NULL REFERENCES annotations(id),
+            created_at TEXT, created_by TEXT,
+            PRIMARY KEY (entity_id, annotation_id));
+        """
+    )
+    conn.execute("PRAGMA user_version = 30")
+    conn.commit()
+    return conn
+
+
+def test_v31_turns_annotations_into_rules_the_annotated_statements_follow(caplog):
+    conn = _v30_with_annotations()
+    system = store.create_entity(conn, "Billing")
+    other_system = store.create_entity(conn, "Identity")
+    invoice_sent = store.create_statement(conn, "event", "An invoice is sent.", system)
+    invoice_open = store.create_statement(conn, "state", "The invoice is open.", system)
+    sign_in = store.create_statement(
+        conn, "event", "A user signs in with SSO.", other_system
+    )
+    entity = store.create_entity(conn, "Export format")
+    store.create_name(conn, "Export format", entity)
+    workspace = store.create_entity(conn, "Workspace")
+    store.create_name(conn, "Workspace", workspace)
+    api = store.create_entity(conn, "API")
+    store.create_name(conn, "API", api)
+    export = store.create_entity(conn, "Export")
+    store.create_name(conn, "Export", export)
+    conn.executemany(
+        "INSERT INTO annotations (id, kind, text) VALUES (?, ?, ?)",
+        [
+            ("ann_shared", "invariant", "Invoice links do not expire."),
+            ("ann_mixed", "note", "A sign-in never changes an invoice."),
+            ("ann_entity", "default", "The default export format is CSV."),
+            ("ann_unnamed", "note", "Members are invited by email."),
+            ("ann_suspect", "note", "The API returns JSON."),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO statement_annotations (statement_id, annotation_id) VALUES (?, ?)",
+        [
+            (invoice_sent, "ann_shared"),
+            (invoice_open, "ann_shared"),
+            (invoice_sent, "ann_mixed"),
+            (sign_in, "ann_mixed"),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO entity_annotations (entity_id, annotation_id) VALUES (?, ?)",
+        [
+            (entity, "ann_entity"),
+            (export, "ann_entity"),
+            (workspace, "ann_unnamed"),
+            (api, "ann_suspect"),
+        ],
+    )
+    conn.commit()
+
+    with caplog.at_level("WARNING", logger="mycelium.migrations"):
+        migrations.apply_migrations(conn)
+
+    lost = {(r.args[0], r.args[1]) for r in caplog.records if r.levelname == "WARNING"}
+    assert lost == {
+        ("ann_unnamed", workspace),
+        ("ann_suspect", api),
+        ("ann_entity", export),
+    }
+
+    rules = {
+        row["text"]: row
+        for row in conn.execute(
+            "SELECT id, kind, text, system_entity_id FROM statements WHERE kind = 'rule'"
+        )
+    }
+    assert set(rules) == {
+        "Invoice links do not expire.",
+        "A sign-in never changes an invoice.",
+        "The default export format is CSV.",
+        "Members are invited by email.",
+        "The API returns JSON.",
+    }
+    shared = rules["Invoice links do not expire."]
+    mixed = rules["A sign-in never changes an invoice."]
+    assert shared["system_entity_id"] == system
+    assert mixed["system_entity_id"] is None
+    assert (shared["id"], "governed-by", None) in store.get_links(conn, invoice_sent)
+    assert (shared["id"], "governed-by", None) in store.get_links(conn, invoice_open)
+    assert (mixed["id"], "governed-by", None) in store.get_links(conn, sign_in)
+    queued = {
+        table: {r[0] for r in conn.execute(f"SELECT statement_id FROM {table}")}
+        for table in ("audience_label_queue", "mention_recompute_queue")
+    }
+    for rule in rules.values():
+        assert rule["id"] in queued["audience_label_queue"]
+        assert rule["id"] in queued["mention_recompute_queue"]
+    for table in migrations._ANNOTATION_TABLES:
+        assert not migrations._has_table(conn, table)
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    store.delete_links_touching_statement(conn, invoice_sent)
+    store.clear_derived_for_statement(conn, invoice_sent)
+    store.delete_statement(conn, invoice_sent)

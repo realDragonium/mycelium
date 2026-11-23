@@ -38,6 +38,7 @@ import hashlib
 import logging
 import sqlite3
 import time
+import uuid
 from collections.abc import Callable
 from datetime import UTC
 
@@ -1207,6 +1208,94 @@ def _migration_v30_statement_systems(conn: sqlite3.Connection) -> None:
     )
 
 
+_ANNOTATION_TABLES = (
+    "annotation_mentions",
+    "annotation_vector_ids",
+    "statement_annotations",
+    "entity_annotations",
+    "annotations",
+)
+
+
+def _migration_v31_annotations_to_statements(conn: sqlite3.Connection) -> None:
+    """Turn each annotation the removed annotation subsystem left behind into
+    a `rule` statement that every statement it annotated is `governed-by`,
+    then drop the annotation tables. Their foreign keys blocked deleting or
+    merging an annotated statement, entity or name. A rule inherits the
+    system its statements share; mentions, embedding and audience label are
+    derived the way they are for any new statement. A statement reaches an
+    entity only through the mentions the matcher derives from its text, so an
+    entity annotation whose text yields no mention of its entity loses that
+    association, and each such loss is logged."""
+    from . import mentions, timestamps
+
+    if _has_table(conn, "annotations"):
+        now = timestamps.now()
+        attached: dict[str, list[sqlite3.Row]] = {}
+        if _has_table(conn, "statement_annotations"):
+            for row in conn.execute(
+                "SELECT sa.annotation_id, s.id, s.system_entity_id "
+                "FROM statement_annotations sa "
+                "JOIN statements s ON s.id = sa.statement_id "
+                "ORDER BY sa.rowid"
+            ):
+                attached.setdefault(row[0], []).append(row)
+        annotated_entities: dict[str, list[str]] = {}
+        name_index = mentions.build_index(
+            (row[0], row[1], row[2])
+            for row in conn.execute("SELECT id, entity_id, text FROM names")
+        )
+        if _has_table(conn, "entity_annotations"):
+            for annotation_id, entity_id in conn.execute(
+                "SELECT annotation_id, entity_id FROM entity_annotations ORDER BY rowid"
+            ):
+                annotated_entities.setdefault(annotation_id, []).append(entity_id)
+        for annotation_id, text, created_at, created_by in conn.execute(
+            "SELECT id, text, created_at, created_by FROM annotations ORDER BY rowid"
+        ).fetchall():
+            statements = attached.get(annotation_id, [])
+            systems = {row[2] for row in statements}
+            system = systems.pop() if len(systems) == 1 else None
+            rule_id = f"stm_{uuid.uuid4().hex}"
+            conn.execute(
+                "INSERT INTO statements "
+                "(id, kind, text, system_entity_id, created_at, created_by) "
+                "VALUES (?, 'rule', ?, ?, ?, ?)",
+                (rule_id, text, system, created_at, created_by),
+            )
+            conn.executemany(
+                "INSERT OR IGNORE INTO statement_links "
+                "(from_statement_id, to_statement_id, link_type, when_hash, "
+                "created_at, created_by) "
+                "VALUES (?, ?, 'governed-by', 'NONE', ?, ?)",
+                [(row[1], rule_id, created_at, created_by) for row in statements],
+            )
+            conn.execute(
+                "INSERT INTO audience_label_queue (statement_id, enqueued_at) "
+                "VALUES (?, ?)",
+                (rule_id, now),
+            )
+            conn.execute(
+                "INSERT INTO mention_recompute_queue (statement_id, enqueued_at) "
+                "VALUES (?, ?)",
+                (rule_id, now),
+            )
+            mentioned = {
+                m.entity_id for m in mentions.match_text(text, name_index).mentions
+            }
+            for entity_id in annotated_entities.get(annotation_id, []):
+                if entity_id not in mentioned:
+                    logger.warning(
+                        "annotation %s on entity %s became rule %s, whose text "
+                        "does not mention the entity; that association is not kept",
+                        annotation_id,
+                        entity_id,
+                        rule_id,
+                    )
+    for table in _ANNOTATION_TABLES:
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1241,6 +1330,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (28, _migration_v28_automation_stops),
     (29, _migration_v29_more_automation_stops),
     (30, _migration_v30_statement_systems),
+    (31, _migration_v31_annotations_to_statements),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

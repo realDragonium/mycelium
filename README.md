@@ -181,9 +181,10 @@ checks them against existing knowledge, proposes links, and returns a draft for
 review. While [internal draft review](docs/DRAFT_REVIEW.md) is on, the draft is
 submitted to the reviewer at once.
 
-Historical annotation tables may remain in old databases but are inert. The
-current migration runner leaves them intact for compatibility, and archive
-imports skip their records rather than converting them into statements.
+A database that still holds annotations from before their removal has each
+one turned into a `rule` statement on upgrade, linked `governed-by` from every
+statement it annotated, and the annotation tables dropped. Archive imports skip
+annotation records rather than converting them.
 
 ## Specs
 
