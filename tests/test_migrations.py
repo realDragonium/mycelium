@@ -849,7 +849,7 @@ def _v30_with_annotations() -> sqlite3.Connection:
     return conn
 
 
-def test_v31_turns_annotations_into_rules_the_annotated_statements_follow():
+def test_v31_turns_annotations_into_rules_the_annotated_statements_follow(caplog):
     conn = _v30_with_annotations()
     system = store.create_entity(conn, "Billing")
     other_system = store.create_entity(conn, "Identity")
@@ -859,12 +859,16 @@ def test_v31_turns_annotations_into_rules_the_annotated_statements_follow():
         conn, "event", "A user signs in with SSO.", other_system
     )
     entity = store.create_entity(conn, "Export format")
+    store.create_name(conn, "Export format", entity)
+    workspace = store.create_entity(conn, "Workspace")
+    store.create_name(conn, "Workspace", workspace)
     conn.executemany(
         "INSERT INTO annotations (id, kind, text) VALUES (?, ?, ?)",
         [
             ("ann_shared", "invariant", "Invoice links do not expire."),
             ("ann_mixed", "note", "A sign-in never changes an invoice."),
             ("ann_entity", "default", "The default export format is CSV."),
+            ("ann_unnamed", "note", "Members are invited by email."),
         ],
     )
     conn.executemany(
@@ -876,13 +880,18 @@ def test_v31_turns_annotations_into_rules_the_annotated_statements_follow():
             (sign_in, "ann_mixed"),
         ],
     )
-    conn.execute(
-        "INSERT INTO entity_annotations (entity_id, annotation_id) VALUES (?, 'ann_entity')",
-        (entity,),
+    conn.executemany(
+        "INSERT INTO entity_annotations (entity_id, annotation_id) VALUES (?, ?)",
+        [(entity, "ann_entity"), (workspace, "ann_unnamed")],
     )
     conn.commit()
 
-    migrations.apply_migrations(conn)
+    with caplog.at_level("WARNING", logger="mycelium.migrations"):
+        migrations.apply_migrations(conn)
+
+    lost = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(lost) == 1
+    assert "ann_unnamed" in lost[0] and workspace in lost[0]
 
     rules = {
         row["text"]: row
@@ -894,6 +903,7 @@ def test_v31_turns_annotations_into_rules_the_annotated_statements_follow():
         "Invoice links do not expire.",
         "A sign-in never changes an invoice.",
         "The default export format is CSV.",
+        "Members are invited by email.",
     }
     shared = rules["Invoice links do not expire."]
     mixed = rules["A sign-in never changes an invoice."]

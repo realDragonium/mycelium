@@ -13,7 +13,7 @@ The annotation subsystem was removed, but databases created before the removal k
 
 - **Everything becomes a `rule`.** Annotations were claims about what they annotated (invariants, defaults, definitions, permissions, notes), which is what a rule is. Annotation `property` texts are sentences, not the noun-phrase slots a `property` statement holds. Curators can reclassify afterwards.
 - **`governed-by` from the annotated statement.** It accepts any kind into a rule and is the usual way a statement points at the rule that constrains it.
-- **Entity annotations rely on mentions.** No link joins an entity to a statement; the rule's mentions are derived from its text like any statement's.
+- **Entity annotations rely on mentions.** No link joins an entity to a statement; the rule's mentions are derived from its text like any statement's. An entity annotation whose text never names its entity loses that association; the upgrade logs each one with its ids rather than refusing to start, since the text itself survives as a rule.
 
 ## Impact
 

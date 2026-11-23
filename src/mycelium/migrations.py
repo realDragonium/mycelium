@@ -1223,8 +1223,11 @@ def _migration_v31_annotations_to_statements(conn: sqlite3.Connection) -> None:
     then drop the annotation tables. Their foreign keys blocked deleting or
     merging an annotated statement, entity or name. A rule inherits the
     system its statements share; mentions, embedding and audience label are
-    derived the way they are for any new statement."""
-    from . import timestamps
+    derived the way they are for any new statement. A statement reaches an
+    entity only through mentions of its text, so an entity annotation whose
+    text never names its entity loses that association, and each such loss
+    is logged."""
+    from . import mentions, timestamps
 
     if _has_table(conn, "annotations"):
         now = timestamps.now()
@@ -1237,6 +1240,12 @@ def _migration_v31_annotations_to_statements(conn: sqlite3.Connection) -> None:
                 "ORDER BY sa.rowid"
             ):
                 attached.setdefault(row[0], []).append(row)
+        annotated_entities: dict[str, list[str]] = {}
+        if _has_table(conn, "entity_annotations"):
+            for annotation_id, entity_id in conn.execute(
+                "SELECT annotation_id, entity_id FROM entity_annotations ORDER BY rowid"
+            ):
+                annotated_entities.setdefault(annotation_id, []).append(entity_id)
         for annotation_id, text, created_at, created_by in conn.execute(
             "SELECT id, text, created_at, created_by FROM annotations ORDER BY rowid"
         ).fetchall():
@@ -1267,6 +1276,18 @@ def _migration_v31_annotations_to_statements(conn: sqlite3.Connection) -> None:
                 "VALUES (?, ?)",
                 (rule_id, now),
             )
+            for entity_id in annotated_entities.get(annotation_id, []):
+                names = conn.execute(
+                    "SELECT text FROM names WHERE entity_id = ?", (entity_id,)
+                ).fetchall()
+                if not any(mentions.text_contains_name(text, n[0]) for n in names):
+                    logger.warning(
+                        "annotation %s on entity %s became rule %s, whose text "
+                        "does not name the entity; that association is not kept",
+                        annotation_id,
+                        entity_id,
+                        rule_id,
+                    )
     for table in _ANNOTATION_TABLES:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
 
