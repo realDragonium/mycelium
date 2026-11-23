@@ -72,8 +72,9 @@ statements that mention both entities.
 
 Claims *about* a statement or entity (permissions, invariants, defaults,
 calculations) are statements of the appropriate kind, linked to what they
-govern. The earlier annotation records were removed; older databases may keep
-their tables, inert, and archive import skips their records.
+govern. The earlier annotation records were removed; upgrading an older
+database turns them into `rule` statements its annotated statements are
+`governed-by`, and archive import skips their records.
 
 ## Vocabularies
 
