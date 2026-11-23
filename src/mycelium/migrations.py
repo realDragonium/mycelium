@@ -1224,9 +1224,9 @@ def _migration_v31_annotations_to_statements(conn: sqlite3.Connection) -> None:
     merging an annotated statement, entity or name. A rule inherits the
     system its statements share; mentions, embedding and audience label are
     derived the way they are for any new statement. A statement reaches an
-    entity only through mentions of its text, so an entity annotation whose
-    text never names its entity loses that association, and each such loss
-    is logged."""
+    entity only through the mentions the matcher derives from its text, so an
+    entity annotation whose text yields no mention of its entity loses that
+    association, and each such loss is logged."""
     from . import mentions, timestamps
 
     if _has_table(conn, "annotations"):
@@ -1241,6 +1241,10 @@ def _migration_v31_annotations_to_statements(conn: sqlite3.Connection) -> None:
             ):
                 attached.setdefault(row[0], []).append(row)
         annotated_entities: dict[str, list[str]] = {}
+        name_index = mentions.build_index(
+            (row[0], row[1], row[2])
+            for row in conn.execute("SELECT id, entity_id, text FROM names")
+        )
         if _has_table(conn, "entity_annotations"):
             for annotation_id, entity_id in conn.execute(
                 "SELECT annotation_id, entity_id FROM entity_annotations ORDER BY rowid"
@@ -1276,14 +1280,14 @@ def _migration_v31_annotations_to_statements(conn: sqlite3.Connection) -> None:
                 "VALUES (?, ?)",
                 (rule_id, now),
             )
+            mentioned = {
+                m.entity_id for m in mentions.match_text(text, name_index).mentions
+            }
             for entity_id in annotated_entities.get(annotation_id, []):
-                names = conn.execute(
-                    "SELECT text FROM names WHERE entity_id = ?", (entity_id,)
-                ).fetchall()
-                if not any(mentions.text_contains_name(text, n[0]) for n in names):
+                if entity_id not in mentioned:
                     logger.warning(
                         "annotation %s on entity %s became rule %s, whose text "
-                        "does not name the entity; that association is not kept",
+                        "does not mention the entity; that association is not kept",
                         annotation_id,
                         entity_id,
                         rule_id,

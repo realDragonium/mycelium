@@ -862,6 +862,10 @@ def test_v31_turns_annotations_into_rules_the_annotated_statements_follow(caplog
     store.create_name(conn, "Export format", entity)
     workspace = store.create_entity(conn, "Workspace")
     store.create_name(conn, "Workspace", workspace)
+    api = store.create_entity(conn, "API")
+    store.create_name(conn, "API", api)
+    export = store.create_entity(conn, "Export")
+    store.create_name(conn, "Export", export)
     conn.executemany(
         "INSERT INTO annotations (id, kind, text) VALUES (?, ?, ?)",
         [
@@ -869,6 +873,7 @@ def test_v31_turns_annotations_into_rules_the_annotated_statements_follow(caplog
             ("ann_mixed", "note", "A sign-in never changes an invoice."),
             ("ann_entity", "default", "The default export format is CSV."),
             ("ann_unnamed", "note", "Members are invited by email."),
+            ("ann_suspect", "note", "The API returns JSON."),
         ],
     )
     conn.executemany(
@@ -882,16 +887,24 @@ def test_v31_turns_annotations_into_rules_the_annotated_statements_follow(caplog
     )
     conn.executemany(
         "INSERT INTO entity_annotations (entity_id, annotation_id) VALUES (?, ?)",
-        [(entity, "ann_entity"), (workspace, "ann_unnamed")],
+        [
+            (entity, "ann_entity"),
+            (export, "ann_entity"),
+            (workspace, "ann_unnamed"),
+            (api, "ann_suspect"),
+        ],
     )
     conn.commit()
 
     with caplog.at_level("WARNING", logger="mycelium.migrations"):
         migrations.apply_migrations(conn)
 
-    lost = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
-    assert len(lost) == 1
-    assert "ann_unnamed" in lost[0] and workspace in lost[0]
+    lost = {(r.args[0], r.args[1]) for r in caplog.records if r.levelname == "WARNING"}
+    assert lost == {
+        ("ann_unnamed", workspace),
+        ("ann_suspect", api),
+        ("ann_entity", export),
+    }
 
     rules = {
         row["text"]: row
@@ -904,6 +917,7 @@ def test_v31_turns_annotations_into_rules_the_annotated_statements_follow(caplog
         "A sign-in never changes an invoice.",
         "The default export format is CSV.",
         "Members are invited by email.",
+        "The API returns JSON.",
     }
     shared = rules["Invoice links do not expire."]
     mixed = rules["A sign-in never changes an invoice."]

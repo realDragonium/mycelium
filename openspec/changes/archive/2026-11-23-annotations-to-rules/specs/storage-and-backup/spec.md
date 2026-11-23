@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Upgrades convert removed annotations
-The system SHALL, when upgrading a database that still holds annotations from the removed annotation feature, turn each annotation into a `rule` statement that every statement it annotated is `governed-by`, with the system those statements share. An entity annotation keeps its entity only when its text names it; each lost association SHALL be logged. The annotation records SHALL then be dropped, so what carried them can be deleted and merged.
+The system SHALL, when upgrading a database that still holds annotations from the removed annotation feature, turn each annotation into a `rule` statement that every statement it annotated is `governed-by`, with the system those statements share. An entity annotation keeps its entity only when its text yields a mention of it; each lost association SHALL be logged. The annotation records SHALL then be dropped, so what carried them can be deleted and merged.
 
 #### Scenario: Annotated statement after upgrade
 - **WHEN** an instance holds the statement "An invoice is sent." annotated with "Invoice links do not expire." and starts on the current build
