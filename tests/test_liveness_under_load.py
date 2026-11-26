@@ -44,8 +44,8 @@ def test_anonymous_request_resolves_without_touching_the_auth_db(monkeypatch):
 
     monkeypatch.setattr(AuthMiddleware, "_lookup", staticmethod(explode))
 
-    assert asyncio.run(AuthMiddleware._resolve(None, None)) is None
-    assert asyncio.run(AuthMiddleware._resolve(None, "")) is None
+    assert asyncio.run(AuthMiddleware._resolve(None, None)) == (None, None)
+    assert asyncio.run(AuthMiddleware._resolve(None, "")) == (None, None)
 
 
 def test_credentialed_request_is_looked_up_off_the_event_loop(monkeypatch):

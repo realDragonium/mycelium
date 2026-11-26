@@ -1177,9 +1177,14 @@ def test_an_expired_access_token_is_refreshed_with_rotation(tmp_path, monkeypatc
 
 
 def test_replaying_a_spent_refresh_token_revokes_the_grant(tmp_path, monkeypatch):
-    """A spent refresh token presented again means two parties hold it, and
-    the server cannot tell which is the client. Ending the grant locks out
-    both; the client authorizes again."""
+    """Past the retry window, a spent refresh token presented again means two
+    parties hold it and the server cannot tell which is the client. Ending the
+    grant locks out both; the client authorizes again."""
+    from datetime import timedelta
+
+    from mycelium import oauth_server
+
+    monkeypatch.setattr(oauth_server, "REFRESH_REUSE_GRACE", timedelta(0))
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
         admin_bearer, _ = _admin_bearer(runtime._auth_db())
@@ -1192,6 +1197,82 @@ def test_replaying_a_spent_refresh_token_revokes_the_grant(tmp_path, monkeypatch
         assert r.json()["error"] == "invalid_grant"
         assert _status_as(client, second["access_token"]) == 401
         assert _refresh(client, second["refresh_token"], client_id).status_code == 400
+
+
+def test_a_refresh_retried_inside_the_grace_rotates_instead_of_revoking(
+    tmp_path, monkeypatch
+):
+    """A client whose refresh response never arrived asks again with the same
+    token. Within the window that is the client retrying, not a thief: it gets
+    a usable pair and keeps the grant."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
+        r, client_id, _, _ = _full_flow(client, admin_bearer=admin_bearer)
+        first = r.json()
+        lost = _refresh(client, first["refresh_token"], client_id).json()
+
+        retried = _refresh(client, first["refresh_token"], client_id)
+        assert retried.status_code == 200, retried.text
+        again = retried.json()
+        assert again["access_token"] != lost["access_token"]
+        assert _status_as(client, again["access_token"]) == 200
+        # The grant lives on: the newest refresh token still works.
+        assert _refresh(client, again["refresh_token"], client_id).status_code == 200
+
+
+def test_a_retried_refresh_does_not_extend_the_reuse_window(tmp_path, monkeypatch):
+    """The window runs from when the token was first spent. If each replay
+    re-stamped that, whoever held a spent token could keep pushing the
+    deadline out and never trip the reuse check."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        conn = runtime._auth_db()
+        admin_bearer, _ = _admin_bearer(conn)
+        r, client_id, _, _ = _full_flow(client, admin_bearer=admin_bearer)
+        spent = r.json()["refresh_token"]
+
+        _refresh(client, spent, client_id)
+        used_at = conn.execute(
+            "SELECT used_at FROM oauth_refresh_tokens WHERE hash = ?",
+            (auth.hash_token(spent),),
+        ).fetchone()["used_at"]
+        assert used_at is not None
+
+        assert _refresh(client, spent, client_id).status_code == 200
+        assert (
+            conn.execute(
+                "SELECT used_at FROM oauth_refresh_tokens WHERE hash = ?",
+                (auth.hash_token(spent),),
+            ).fetchone()["used_at"]
+            == used_at
+        )
+
+
+def test_a_refresh_leaves_the_access_token_it_replaced_usable(tmp_path, monkeypatch):
+    """One client keeps several connections open on one grant. The one that
+    refreshes must not unauthenticate the others mid-call, so the replaced
+    secret stays valid until the expiry it was issued with."""
+    monkeypatch.setenv("MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS", "120")
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        conn = runtime._auth_db()
+        admin_bearer, _ = _admin_bearer(conn)
+        r, client_id, _, _ = _full_flow(client, admin_bearer=admin_bearer)
+        first = r.json()
+
+        second = _refresh(client, first["refresh_token"], client_id).json()
+        assert _status_as(client, second["access_token"]) == 200
+        assert _status_as(client, first["access_token"]) == 200
+
+        # Only to its own deadline, though — not the new token's.
+        with store.transaction(conn):
+            conn.execute(
+                "UPDATE mcp_tokens SET prev_expires_at = '2000-01-01T00:00:00+00:00' "
+                "WHERE client_id IS NOT NULL"
+            )
+        assert _status_as(client, first["access_token"]) == 401
+        assert _status_as(client, second["access_token"]) == 200
 
 
 def test_a_revoked_grant_cannot_be_refreshed(tmp_path, monkeypatch):

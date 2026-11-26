@@ -783,3 +783,133 @@ def test_token_use_is_recorded_at_most_once_a_minute():
     )
     auth.record_token_use(conn, raw)
     assert last_used() > first
+
+
+# --- Why a token was refused, and the line that reports it ----------------
+
+
+def _grant_conn():
+    """An auth DB with one OAuth grant: the shape `examine_token` reasons
+    about. Returns (conn, raw_token, token_id)."""
+    conn = auth_store.connect(":memory:")
+    auth_store.migrate(conn)
+    user_id = auth.create_user(
+        conn, name="U", role="writer", type="human", email="u@example.com"
+    )
+    conn.execute(
+        "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at) "
+        "VALUES ('mcp_client', 'Claude', '[]', '2026-01-01T00:00:00+00:00')"
+    )
+    raw, token_id = auth.issue_token(
+        conn, user_id=user_id, name="OAuth: Claude", scope="writer"
+    )
+    conn.execute(
+        "UPDATE mcp_tokens SET client_id = 'mcp_client', expires_at = ? WHERE id = ?",
+        ("2099-01-01T00:00:00+00:00", token_id),
+    )
+    conn.commit()
+    return conn, raw, token_id
+
+
+def test_examine_token_names_an_unknown_token():
+    conn, _, _ = _grant_conn()
+    refusal = auth.examine_token(conn, "myc_nope_nothing")
+    assert isinstance(refusal, auth.TokenRefusal)
+    assert refusal.reason == "unknown"
+    assert refusal.prefix is None
+
+
+def test_examine_token_reports_an_expired_grant_that_can_still_renew():
+    conn, raw, token_id = _grant_conn()
+    conn.execute(
+        "UPDATE mcp_tokens SET expires_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+        (token_id,),
+    )
+    conn.execute(
+        "INSERT INTO oauth_refresh_tokens (hash, token_id, created_at, expires_at) "
+        "VALUES ('refresh-hash', ?, '2026-01-01T00:00:00+00:00', "
+        "'2099-01-01T00:00:00+00:00')",
+        (token_id,),
+    )
+    refusal = auth.examine_token(conn, raw)
+    assert isinstance(refusal, auth.TokenRefusal)
+    assert refusal.reason == "expired"
+    assert refusal.client_id == "mcp_client"
+
+
+def test_examine_token_singles_out_a_grant_with_nothing_left_to_renew_with():
+    """The shape that strands a client: its access token ran out and it holds
+    no refresh token, so no amount of retrying gets it back in."""
+    conn, raw, token_id = _grant_conn()
+    conn.execute(
+        "UPDATE mcp_tokens SET expires_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+        (token_id,),
+    )
+    refusal = auth.examine_token(conn, raw)
+    assert isinstance(refusal, auth.TokenRefusal)
+    assert refusal.reason == "expired_no_refresh"
+
+
+def test_examine_token_reports_a_revoked_and_a_suspended_grant():
+    conn, raw, token_id = _grant_conn()
+    auth.revoke_token(conn, token_id)
+    refusal = auth.examine_token(conn, raw)
+    assert isinstance(refusal, auth.TokenRefusal)
+    assert refusal.reason == "revoked"
+
+    conn, raw, _ = _grant_conn()
+    conn.execute("UPDATE users SET status = 'suspended'")
+    refusal = auth.examine_token(conn, raw)
+    assert isinstance(refusal, auth.TokenRefusal)
+    assert refusal.reason == "user_inactive"
+
+
+def test_a_refused_token_is_reported_with_its_client_and_agent(
+    tmp_path, monkeypatch, caplog
+):
+    """One line per credential-caused 401, naming the token by its prefix and
+    the client by its User-Agent — the two things missing when an operator
+    asks which client keeps falling out."""
+    from mycelium.http import authentication
+
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        conn = runtime._auth_db()
+        user_id = auth.create_user(
+            conn, name="U", role="writer", type="human", email="u@example.com"
+        )
+        with store.transaction(conn):
+            raw, token_id = auth.issue_token(
+                conn, user_id=user_id, name="laptop", scope="writer"
+            )
+            auth.revoke_token(conn, token_id)
+        prefix = conn.execute(
+            "SELECT prefix FROM mcp_tokens WHERE id = ?", (token_id,)
+        ).fetchone()["prefix"]
+
+        with caplog.at_level("INFO", logger="mycelium.auth"):
+            r = client.post(
+                "/mcp",
+                headers={"Authorization": f"Bearer {raw}", "User-Agent": "Claude/1.2"},
+            )
+        assert r.status_code == 401
+        line = next(
+            m for m in caplog.messages if m.startswith(authentication.REFUSAL_TOKEN)
+        )
+        assert "reason=revoked" in line
+        assert f"token={prefix}" in line
+        assert "Claude/1.2" in line
+
+
+def test_a_401_with_no_credential_at_all_is_not_reported(tmp_path, monkeypatch, caplog):
+    """The internet scans for `/.aws/credentials` all day. Those 401s say
+    nothing about anyone's client and would drown out the ones that do."""
+    from mycelium.http import authentication
+
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        with caplog.at_level("INFO", logger="mycelium.auth"):
+            assert client.get("/.aws/credentials").status_code == 401
+        assert not [
+            m for m in caplog.messages if m.startswith(authentication.REFUSAL_TOKEN)
+        ]

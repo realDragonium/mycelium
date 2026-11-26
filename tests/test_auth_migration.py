@@ -262,7 +262,10 @@ def test_failed_copy_rolls_back_rebuild_and_can_be_retried(table):
     before_sql = conn.execute(
         "SELECT sql FROM sqlite_master WHERE name = ?", (table,)
     ).fetchone()["sql"]
-    before_rows = [tuple(row) for row in conn.execute(f"SELECT * FROM {table}")]
+    # Named columns, not SELECT *: a completed migrate may add columns, and
+    # what this test is about is that no row is lost or rewritten.
+    kept = ", ".join(c["name"] for c in conn.execute(f"PRAGMA table_info({table})"))
+    before_rows = [tuple(row) for row in conn.execute(f"SELECT {kept} FROM {table}")]
 
     def deny_copy(action, name, _column, _database, _trigger):
         if action == sqlite3.SQLITE_INSERT and name == f"{table}_new":
@@ -289,12 +292,12 @@ def test_failed_copy_rolls_back_rebuild_and_can_be_retried(table):
             == before_sql
         )
         assert [
-            tuple(row) for row in conn.execute(f"SELECT * FROM {table}")
+            tuple(row) for row in conn.execute(f"SELECT {kept} FROM {table}")
         ] == before_rows
 
         auth_store.migrate(conn)
         assert [
-            tuple(row) for row in conn.execute(f"SELECT * FROM {table}")
+            tuple(row) for row in conn.execute(f"SELECT {kept} FROM {table}")
         ] == before_rows
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         assert auth_store._drop_role_check(conn) is False

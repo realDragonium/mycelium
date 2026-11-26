@@ -381,10 +381,28 @@ An access token issued through the OAuth flow expires after an hour
 (`MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS`), and comes with a refresh token
 the client uses to get the next one. Each refresh replaces the refresh token
 and gives it 30 more days, so a client in regular use never has to sign in
-again; one left unused for 30 days does. A refresh token presented a second
-time means someone else holds a copy, so the whole grant is revoked and the
-client must authorize again. Refresh tokens are stored hashed, like access
-tokens.
+again; one left unused for 30 days does. Refresh tokens are stored hashed,
+like access tokens.
+
+A client typically holds several connections open on one grant — an SSE
+stream alongside its POSTs. So a refresh does not invalidate the access token
+it replaces: that one stays valid until the expiry it was issued with, and the
+connections still using it are not cut off mid-call. Each grant keeps one such
+previous secret.
+
+A refresh token presented a second time within 30 seconds of being spent is
+read as the client retrying a request whose response it never saw: the grant
+rotates again and the client gets a usable pair. Presented later than that,
+someone else holds a copy, so the whole grant is revoked and the client must
+authorize again.
+
+Every 401 a presented credential caused is logged as one
+`MYCELIUM_AUTH_REFUSED` line with the reason, the token's prefix, the client
+id and the client's User-Agent — enough to tell which client keeps falling
+out and why. `reason=expired_no_refresh` is the one that needs a person: that
+client has no refresh token left and cannot recover on its own. A request
+carrying no credential at all is not logged (the internet scans for
+`/.aws/credentials` all day).
 
 OAuth tokens issued before expiry existed carry no refresh token. Starting
 this version gives each a deadline 30 days from that first startup; after
