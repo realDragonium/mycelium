@@ -392,9 +392,12 @@ previous secret.
 
 A refresh token presented a second time within 30 seconds of being spent is
 read as the client retrying a request whose response it never saw: the grant
-rotates again and the client gets a usable pair. Presented later than that,
-someone else holds a copy, so the whole grant is revoked and the client must
-authorize again.
+rotates again and the client gets a usable pair. The rotation it missed left
+an unused refresh token behind, and that one is spent at the same instant the
+replayed token was — a grant only ever has one live chain, so presenting a
+spent token stays detectable and two parties cannot volley rotations past the
+deadline. Presented later than the window, someone else holds a copy, so the
+whole grant is revoked and the client must authorize again.
 
 Every 401 a presented credential caused is logged as one
 `MYCELIUM_AUTH_REFUSED` line with the reason, the token's prefix, the client

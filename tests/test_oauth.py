@@ -1221,6 +1221,41 @@ def test_a_refresh_retried_inside_the_grace_rotates_instead_of_revoking(
         assert _refresh(client, again["refresh_token"], client_id).status_code == 200
 
 
+def test_a_retried_refresh_leaves_only_one_live_chain(tmp_path, monkeypatch):
+    """The rotation whose answer was lost left an unused refresh token behind.
+    Leaving it live would fork the grant into two chains that never present a
+    spent token again, and reuse would stop being detectable at all."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        conn = runtime._auth_db()
+        admin_bearer, _ = _admin_bearer(conn)
+        r, client_id, _, _ = _full_flow(client, admin_bearer=admin_bearer)
+        spent = r.json()["refresh_token"]
+
+        lost = _refresh(client, spent, client_id).json()
+        again = _refresh(client, spent, client_id).json()
+
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM oauth_refresh_tokens WHERE used_at IS NULL"
+            ).fetchone()[0]
+            == 1
+        )
+        # The abandoned chain is spent in the same window as the token that
+        # was replayed, so it cannot be volleyed to push the deadline out.
+        assert (
+            conn.execute(
+                "SELECT used_at FROM oauth_refresh_tokens WHERE hash = ?",
+                (auth.hash_token(lost["refresh_token"]),),
+            ).fetchone()["used_at"]
+            == conn.execute(
+                "SELECT used_at FROM oauth_refresh_tokens WHERE hash = ?",
+                (auth.hash_token(spent),),
+            ).fetchone()["used_at"]
+        )
+        assert _refresh(client, again["refresh_token"], client_id).status_code == 200
+
+
 def test_a_retried_refresh_does_not_extend_the_reuse_window(tmp_path, monkeypatch):
     """The window runs from when the token was first spent. If each replay
     re-stamped that, whoever held a spent token could keep pushing the

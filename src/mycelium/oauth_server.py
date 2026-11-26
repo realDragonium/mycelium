@@ -1020,6 +1020,19 @@ def _refresh(
             # Inside the window this is the client asking again for an answer
             # it never received. Rotating once more hands it a usable pair;
             # the one it missed stays valid as the grant's previous secret.
+            #
+            # The rotation it missed left an unused refresh token behind, and
+            # leaving that live would fork the grant into two chains that
+            # never present a spent token again — reuse would stop being
+            # detectable at all. So the whole attempt shares one window:
+            # every other unused token is spent at the same instant this one
+            # was, which both keeps a single chain alive and stops two
+            # parties from volleying rotations past the deadline.
+            conn.execute(
+                "UPDATE oauth_refresh_tokens SET used_at = ? "
+                "WHERE token_id = ? AND used_at IS NULL",
+                (row["used_at"], row["token_id"]),
+            )
             _log.info(
                 "refresh token re-presented %.1fs after use; rotating again "
                 "(client=%s, token=%s)",
