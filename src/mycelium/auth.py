@@ -31,6 +31,7 @@ of toggle state.
 from __future__ import annotations
 
 import contextvars
+import functools
 import hashlib
 import logging
 import os
@@ -330,44 +331,98 @@ def _clamp_scope(scope: str, role: str) -> Role:
     return role  # type: ignore[return-value]
 
 
+#: Why a presented bearer token was refused. `expired_no_refresh` singles out
+#: an OAuth grant whose access token ran out and that has no refresh token
+#: left to renew it — its client cannot recover on its own and the person has
+#: to connect again, so it is worth telling apart from an ordinary expiry.
+TokenRefusalReason = Literal[
+    "unknown",
+    "revoked",
+    "expired",
+    "expired_no_refresh",
+    "user_inactive",
+    "email_domain",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class TokenRefusal:
+    """What a refused token was, for the log line that reports the 401.
+    Carries no secret: `prefix` is the identifier already shown in the UI."""
+
+    reason: TokenRefusalReason
+    prefix: str | None = None
+    client_id: str | None = None
+
+
 def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
-    """Look up a bearer token and return the authenticated principal.
-    Returns None when the token is unknown, revoked, expired, or its owner
-    is suspended/missing. Reads only; `record_token_use` notes the use.
+    """Look up a bearer token and return the authenticated principal, or None
+    when it is unknown, revoked, expired, or its owner is suspended/missing.
+    `examine_token` reports which of those it was."""
+    resolved = examine_token(conn, raw_token)
+    return resolved if isinstance(resolved, Principal) else None
+
+
+def examine_token(conn: sqlite3.Connection, raw_token: str) -> Principal | TokenRefusal:
+    """`resolve_token` with the refusal spelled out. Reads only;
+    `record_token_use` notes the use.
+
+    A grant's previous secret stays valid until the expiry it was issued with
+    (`prev_hash` / `prev_expires_at`), so a client that holds one connection
+    open while another refreshes keeps working to the end of the token it
+    already had.
     """
+    presented = hash_token(raw_token)
     row = conn.execute(
         """
-        SELECT t.id AS token_id, t.scope, t.revoked_at, t.expires_at,
+        SELECT t.id AS token_id, t.scope, t.revoked_at, t.hash, t.expires_at,
+               t.prev_hash, t.prev_expires_at, t.prefix, t.client_id,
                u.id AS user_id, u.name, u.role, u.type, u.status, u.email
         FROM mcp_tokens t
         JOIN users u ON u.id = t.user_id
-        WHERE t.hash = ?
+        WHERE t.hash = ? OR t.prev_hash = ?
         """,
-        (hash_token(raw_token),),
+        (presented, presented),
     ).fetchone()
     if row is None:
-        return None
+        return TokenRefusal("unknown")
+    refused = functools.partial(
+        TokenRefusal, prefix=row["prefix"], client_id=row["client_id"]
+    )
     if row["revoked_at"] is not None:
-        return None
+        return refused("revoked")
+    expires_at = (
+        row["expires_at"] if row["hash"] == presented else row["prev_expires_at"]
+    )
     now = datetime.now(UTC)
-    if (
-        row["expires_at"] is not None
-        and datetime.fromisoformat(row["expires_at"]) <= now
-    ):
-        return None
+    if expires_at is not None and datetime.fromisoformat(expires_at) <= now:
+        renewable = _grant_can_renew(conn, row["token_id"], now)
+        return refused("expired" if renewable else "expired_no_refresh")
     if row["status"] != "active":
-        return None
+        return refused("user_inactive")
     if blocked_by_domain_policy(row["type"], row["email"]):
         _log_domain_refusal(
             f"token of user {row['user_id']}", row["email"], "email domain not allowed"
         )
-        return None
+        return refused("email_domain")
     return Principal(
         id=row["user_id"],
         name=row["name"],
         role=_clamp_scope(row["scope"], row["role"]),
         type=row["type"],
     )
+
+
+def _grant_can_renew(conn: sqlite3.Connection, token_id: str, now: datetime) -> bool:
+    """Whether an expired OAuth grant still has a refresh token its client can
+    spend. A manually-minted token never reaches this question — it has no
+    expiry."""
+    row = conn.execute(
+        "SELECT 1 FROM oauth_refresh_tokens "
+        "WHERE token_id = ? AND used_at IS NULL AND expires_at > ? LIMIT 1",
+        (token_id, now.isoformat()),
+    ).fetchone()
+    return row is not None
 
 
 #: How far behind a token's `last_used_at` may run. It tells an admin roughly
@@ -381,9 +436,10 @@ def record_token_use(conn: sqlite3.Connection, raw_token: str) -> None:
     in a transaction of its own."""
     from . import store
 
+    presented = hash_token(raw_token)
     row = conn.execute(
-        "SELECT id, last_used_at FROM mcp_tokens WHERE hash = ?",
-        (hash_token(raw_token),),
+        "SELECT id, last_used_at FROM mcp_tokens WHERE hash = ? OR prev_hash = ?",
+        (presented, presented),
     ).fetchall()
     now = datetime.now(UTC)
     if not row or (

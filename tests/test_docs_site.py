@@ -1887,7 +1887,10 @@ def test_an_admin_downloads_the_site_and_a_writer_does_not(
     role = "admin"
 
     async def resolve(*_):
-        return auth.Principal(id="fixture", name="Fixture", role=role, type="human")
+        return (
+            auth.Principal(id="fixture", name="Fixture", role=role, type="human"),
+            None,
+        )
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", resolve)
     monkeypatch.setattr(store, "substrate_connection", lambda: db)

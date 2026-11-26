@@ -236,7 +236,7 @@ def test_prompt_routes_require_a_real_writer(tmp_path, monkeypatch, role, expect
     from mycelium.http.authentication import AuthMiddleware
 
     async def resolve(*_):
-        return principal(role)
+        return principal(role), None
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", resolve)
     with _app(tmp_path, monkeypatch, auth_mode="on") as client:

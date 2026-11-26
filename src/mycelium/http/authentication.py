@@ -8,6 +8,7 @@ wrapper inside the mounted transport read the same identity.
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import secrets
 from urllib.parse import urlsplit
@@ -121,6 +122,41 @@ def _is_exempt(path: str) -> bool:
     )
 
 
+#: The token every refused-credential line starts with, for a log-metric
+#: filter. Mirrors `request_timing.SLOW_TOKEN`.
+REFUSAL_TOKEN = "MYCELIUM_AUTH_REFUSED"
+
+#: Enough of a client's User-Agent to tell Claude Desktop from Claude Code
+#: from a browser, and no more.
+_MAX_LOGGED_USER_AGENT = 120
+
+_log = logging.getLogger("mycelium.auth")
+
+
+def _log_rejection(request: Request, refusal: auth.TokenRefusal | None) -> None:
+    """Report a 401 that a credential caused, with what the credential was.
+
+    A request carrying nothing at all is not reported: the internet scans for
+    `/.aws/credentials` all day and those 401s say nothing about anyone's
+    client. What is reported names the token by the prefix the UI already
+    shows, never the secret, and tells an operator which client is failing
+    and why — `expired_no_refresh` in particular means that client cannot
+    recover by itself and the person has to connect again.
+    """
+    if refusal is None:
+        return
+    agent = (request.headers.get("user-agent") or "-")[:_MAX_LOGGED_USER_AGENT]
+    _log.info(
+        "%s path=%s reason=%s token=%s client=%s agent=%r",
+        REFUSAL_TOKEN,
+        request.url.path,
+        refusal.reason,
+        refusal.prefix or "-",
+        refusal.client_id or "-",
+        agent,
+    )
+
+
 def _is_browser_navigation(request: Request) -> bool:
     """Heuristic: did this request come from a human typing in the URL
     bar or clicking a link, vs. a JS fetch / API client / MCP client?
@@ -153,7 +189,7 @@ class AuthMiddleware:
             return
         request = Request(scope)
         raw_token, session_user_id = self._credentials(request)
-        principal = await self._resolve(raw_token, session_user_id)
+        principal, refusal = await self._resolve(raw_token, session_user_id)
         if principal is None and auth.is_enabled() and not _is_exempt(request.url.path):
             if _is_browser_navigation(request):
                 # Send the user through logout-then-login, not straight to
@@ -191,6 +227,7 @@ class AuthMiddleware:
                     f'Bearer realm="mycelium", scope="mcp", '
                     f'resource_metadata="{base}/.well-known/oauth-protected-resource"'
                 )
+            _log_rejection(request, refusal)
             rejection = JSONResponse(
                 status_code=401,
                 content={"detail": "authentication required"},
@@ -265,33 +302,38 @@ class AuthMiddleware:
         return raw, user_id
 
     @staticmethod
-    def _lookup(raw: str | None, user_id: str | None) -> auth.Principal | None:
-        """Resolve credentials against the auth DB. Blocking, and a token hit
-        now and then writes its `last_used_at`, which is why `_resolve` keeps
-        it off the event loop."""
+    def _lookup(
+        raw: str | None, user_id: str | None
+    ) -> tuple[auth.Principal | None, auth.TokenRefusal | None]:
+        """Resolve credentials against the auth DB, with the reason a bearer
+        token was refused for the caller to log. Blocking, and a token hit now
+        and then writes its `last_used_at`, which is why `_resolve` keeps it
+        off the event loop."""
         try:
             conn = runtime._auth_db()
         except RuntimeError:
             # Lifespan hasn't run (e.g. ASGI tests hitting the app
             # without the context manager), so the auth store isn't
             # configured yet. Treat as no credentials.
-            return None
+            return None, None
+        refusal: auth.TokenRefusal | None = None
         if raw is not None:
-            principal = auth.resolve_token(conn, raw)
-            if principal is not None:
+            resolved = auth.examine_token(conn, raw)
+            if isinstance(resolved, auth.Principal):
                 auth.record_token_use(conn, raw)
-                return principal
-        return auth.resolve_session_user(conn, user_id)
+                return resolved, None
+            refusal = resolved
+        return auth.resolve_session_user(conn, user_id), refusal
 
     @classmethod
     async def _resolve(
         cls, raw: str | None, user_id: str | None
-    ) -> auth.Principal | None:
+    ) -> tuple[auth.Principal | None, auth.TokenRefusal | None]:
         """An anonymous request carries nothing to look up, so it never touches
         the DB and never needs a worker thread — which is what keeps the health
         probe cheap even while every thread is busy serving tool calls."""
         if raw is None and not user_id:
-            return None
+            return None, None
         return await request_timing.run_sync(
             functools.partial(cls._lookup, raw, user_id)
         )

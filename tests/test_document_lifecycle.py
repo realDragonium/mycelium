@@ -533,7 +533,10 @@ def test_the_http_routes_track_the_pull_request(conn, github, monkeypatch):
     from mycelium.http.authentication import AuthMiddleware
 
     async def writer(*_):
-        return auth.Principal(id="w", name="Writer", role="writer", type="human")
+        return (
+            auth.Principal(id="w", name="Writer", role="writer", type="human"),
+            None,
+        )
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", writer)
     # Routes run on worker threads, past a thread-pinned connection.

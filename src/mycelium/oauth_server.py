@@ -35,7 +35,11 @@ the user pasting a token. The flow:
      from the OAuth flow vs. a manual mint — they're the same row.
  10. Once the access token expires, the client posts the refresh token
      to /token. The grant's row gets a new secret and expiry, and the
-     refresh token is spent and replaced.
+     refresh token is spent and replaced. The secret just replaced stays
+     valid until the expiry it was issued with, so the client's other
+     open connections are not cut off by its own refresh, and a refresh
+     token re-presented within `REFRESH_REUSE_GRACE` rotates again
+     instead of ending the grant.
 
 Identity is still delegated to Auth0/Google. We are *not* an OIDC
 provider — we're an OAuth Authorization Server that uses our own
@@ -53,6 +57,7 @@ import base64
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
@@ -71,6 +76,8 @@ from . import auth, cimd, store
 from .request_timing import TimedRoute
 
 router = APIRouter(tags=["oauth"], route_class=TimedRoute)
+
+_log = logging.getLogger("mycelium.oauth")
 
 
 def _require_oauth_enabled() -> None:
@@ -98,6 +105,13 @@ CONSENT_TTL_SECONDS = 600
 # token's life, so a client in use never has to authorize again.
 DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 3600
 REFRESH_TOKEN_TTL = timedelta(days=30)
+
+# How long after a refresh token is spent its presenter may present it again
+# and get another rotation instead of losing the grant. A client whose
+# refresh response was lost to a dropped connection retries within seconds;
+# a thief replaying a token it harvested somewhere does not race the real
+# client that closely. Past the window, reuse still ends the grant.
+REFRESH_REUSE_GRACE = timedelta(seconds=30)
 REFRESH_TOKEN_PREFIX = "mycr"
 _GRANT_TYPES = ("authorization_code", "refresh_token")
 
@@ -995,11 +1009,36 @@ def _refresh(
         if row["client_id"] != client_id:
             return _oauth_error("invalid_grant", "client_id mismatch")
         if row["used_at"] is not None:
-            # Two parties hold this token and nothing says which one is the
-            # client, so the grant ends for both (OAuth 2.1 §4.3.1).
-            auth.revoke_token(conn, row["token_id"])
-            return _oauth_error(
-                "invalid_grant", "refresh token already used; the grant is revoked"
+            spent_for = _now() - datetime.fromisoformat(row["used_at"])
+            if spent_for > REFRESH_REUSE_GRACE:
+                # Two parties hold this token and nothing says which one is
+                # the client, so the grant ends for both (OAuth 2.1 §4.3.1).
+                auth.revoke_token(conn, row["token_id"])
+                return _oauth_error(
+                    "invalid_grant", "refresh token already used; the grant is revoked"
+                )
+            # Inside the window this is the client asking again for an answer
+            # it never received. Rotating once more hands it a usable pair;
+            # the one it missed stays valid as the grant's previous secret.
+            #
+            # The rotation it missed left an unused refresh token behind, and
+            # leaving that live would fork the grant into two chains that
+            # never present a spent token again — reuse would stop being
+            # detectable at all. So the whole attempt shares one window:
+            # every other unused token is spent at the same instant this one
+            # was, which both keeps a single chain alive and stops two
+            # parties from volleying rotations past the deadline.
+            conn.execute(
+                "UPDATE oauth_refresh_tokens SET used_at = ? "
+                "WHERE token_id = ? AND used_at IS NULL",
+                (row["used_at"], row["token_id"]),
+            )
+            _log.info(
+                "refresh token re-presented %.1fs after use; rotating again "
+                "(client=%s, token=%s)",
+                spent_for.total_seconds(),
+                client_id,
+                row["prefix"],
             )
         if row["revoked_at"] is not None:
             return _oauth_error("invalid_grant", "grant revoked")
@@ -1010,13 +1049,21 @@ def _refresh(
         if auth.blocked_by_domain_policy(row["type"], row["email"]):
             return _oauth_error("invalid_grant", "email domain not allowed")
 
+        # COALESCE, not an overwrite: the window runs from when the token was
+        # first spent. Re-stamping it would let whoever holds a spent token
+        # keep pushing the deadline out and never trip the reuse check.
         conn.execute(
-            "UPDATE oauth_refresh_tokens SET used_at = ? WHERE hash = ?",
+            "UPDATE oauth_refresh_tokens SET used_at = COALESCE(used_at, ?) "
+            "WHERE hash = ?",
             (_now().isoformat(), auth.hash_token(refresh_token)),
         )
         raw, _, h = auth.generate_token(prefix=row["prefix"])
+        # The secret being replaced keeps working until the expiry it was
+        # issued with: the client's other connections are still using it, and
+        # a refresh is not a reason to cut them off mid-call.
         conn.execute(
-            "UPDATE mcp_tokens SET hash = ?, expires_at = ? WHERE id = ?",
+            "UPDATE mcp_tokens SET hash = ?, expires_at = ?, "
+            "prev_hash = hash, prev_expires_at = expires_at WHERE id = ?",
             (h, (_now() + _access_token_ttl()).isoformat(), row["token_id"]),
         )
         refresh = _new_refresh_token(conn, row["token_id"])

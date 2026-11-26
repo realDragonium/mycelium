@@ -352,7 +352,7 @@ def test_http_selection_and_real_role(monkeypatch, tmp_path, role, expected):
     principal = auth.Principal(id="fixture", name="Fixture", role=role, type="human")
 
     async def resolve(*_):
-        return principal
+        return principal, None
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", resolve)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")

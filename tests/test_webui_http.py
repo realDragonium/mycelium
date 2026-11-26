@@ -18,7 +18,10 @@ from mycelium.http.authentication import AuthMiddleware
 
 def _reader(monkeypatch):
     async def resolve(*_):
-        return auth.Principal(id="fixture", name="Fixture", role="reader", type="human")
+        return (
+            auth.Principal(id="fixture", name="Fixture", role="reader", type="human"),
+            None,
+        )
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", resolve)
     return TestClient(create_app())

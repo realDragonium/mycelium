@@ -70,26 +70,37 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 -- OAuth-issued tokens record which registered client minted them and
 -- when they expire. Manually-minted tokens leave both NULL — they're
 -- long-lived and tied only to the user.
+--
+-- `prev_hash` holds the secret the last refresh replaced, valid until
+-- `prev_expires_at` — the expiry it already carried. A client keeps several
+-- connections open on one grant (an SSE stream next to its POSTs); without
+-- the overlap, the first connection to refresh unauthenticated all the
+-- others mid-call.
 CREATE TABLE IF NOT EXISTS mcp_tokens (
-    id           TEXT PRIMARY KEY,
-    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name         TEXT NOT NULL,
-    prefix       TEXT NOT NULL UNIQUE,
-    hash         TEXT NOT NULL,
-    scope        TEXT NOT NULL,  -- free-form; narrowed against the owner's role in code
-    created_at   TEXT NOT NULL,
-    last_used_at TEXT,
-    revoked_at   TEXT,
-    client_id    TEXT REFERENCES oauth_clients(client_id) ON DELETE SET NULL,
-    expires_at   TEXT
+    id              TEXT PRIMARY KEY,
+    user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    prefix          TEXT NOT NULL UNIQUE,
+    hash            TEXT NOT NULL,
+    scope           TEXT NOT NULL,  -- free-form; narrowed against the owner's role in code
+    created_at      TEXT NOT NULL,
+    last_used_at    TEXT,
+    revoked_at      TEXT,
+    client_id       TEXT REFERENCES oauth_clients(client_id) ON DELETE SET NULL,
+    expires_at      TEXT,
+    prev_hash       TEXT,
+    prev_expires_at TEXT
 );
 CREATE INDEX IF NOT EXISTS mcp_tokens_user   ON mcp_tokens (user_id);
 CREATE INDEX IF NOT EXISTS mcp_tokens_hash   ON mcp_tokens (hash);
 CREATE INDEX IF NOT EXISTS mcp_tokens_client ON mcp_tokens (client_id);
+CREATE INDEX IF NOT EXISTS mcp_tokens_prev_hash ON mcp_tokens (prev_hash);
 
 -- Refresh tokens of OAuth grants. A grant is one `mcp_tokens` row whose
 -- secret is replaced on each refresh. A refresh token is spent on use
--- (used_at) and replaced; presenting a spent one again revokes the grant.
+-- (used_at) and replaced; presenting a spent one again rotates the grant
+-- once more inside `REFRESH_REUSE_GRACE` (the client retrying a refresh
+-- whose response it never saw) and revokes it after.
 -- Only the sha256 hash is stored, as for access tokens.
 CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
     hash       TEXT PRIMARY KEY,
@@ -217,6 +228,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     ALTER a CHECK in place, so we rebuild the affected tables (users,
     mcp_tokens, invites) preserving every row.
     """
+    # Before the schema script: its `mcp_tokens_prev_hash` index cannot be
+    # created against an older table that still lacks the column.
+    _add_token_overlap_columns(conn)
     conn.executescript(AUTH_SCHEMA)
     _add_oauth_code_resource(conn)
     _drop_audience_columns(conn)
@@ -229,6 +243,19 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.executescript(AUTH_SCHEMA)
     _expire_legacy_oauth_tokens(conn)
     conn.commit()
+
+
+def _add_token_overlap_columns(conn: sqlite3.Connection) -> None:
+    """Add `mcp_tokens.prev_hash` / `prev_expires_at` to a DB created before
+    a refresh kept the secret it replaced. Existing rows have no previous
+    secret to honor, so NULL is the right starting value.
+
+    Nothing to do when the table isn't there yet — the schema script that
+    runs next creates it with both columns, and its index with them."""
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(mcp_tokens)")}
+    if columns and "prev_hash" not in columns:
+        conn.execute("ALTER TABLE mcp_tokens ADD COLUMN prev_hash TEXT")
+        conn.execute("ALTER TABLE mcp_tokens ADD COLUMN prev_expires_at TEXT")
 
 
 def _add_oauth_code_resource(conn: sqlite3.Connection) -> None:
@@ -341,17 +368,19 @@ def _drop_role_check(conn: sqlite3.Connection) -> bool:
         """,
         "mcp_tokens": """
             CREATE TABLE mcp_tokens_new (
-                id           TEXT PRIMARY KEY,
-                user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                name         TEXT NOT NULL,
-                prefix       TEXT NOT NULL UNIQUE,
-                hash         TEXT NOT NULL,
-                scope        TEXT NOT NULL,
-                created_at   TEXT NOT NULL,
-                last_used_at TEXT,
-                revoked_at   TEXT,
-                client_id    TEXT REFERENCES oauth_clients(client_id) ON DELETE SET NULL,
-                expires_at   TEXT
+                id              TEXT PRIMARY KEY,
+                user_id         TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                prefix          TEXT NOT NULL UNIQUE,
+                hash            TEXT NOT NULL,
+                scope           TEXT NOT NULL,
+                created_at      TEXT NOT NULL,
+                last_used_at    TEXT,
+                revoked_at      TEXT,
+                client_id       TEXT REFERENCES oauth_clients(client_id) ON DELETE SET NULL,
+                expires_at      TEXT,
+                prev_hash       TEXT,
+                prev_expires_at TEXT
             )
         """,
         "invites": """

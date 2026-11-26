@@ -21,7 +21,10 @@ def _anthropic_credentials(monkeypatch):
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
     async def resolve(*_):
-        return auth.Principal(id="fixture", name="Fixture", role="writer", type="human")
+        return (
+            auth.Principal(id="fixture", name="Fixture", role="writer", type="human"),
+            None,
+        )
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", resolve)
     with closing(docs_store.connect(tmp_path / "drafts.db")) as conn:
@@ -183,7 +186,10 @@ def test_revision_actions_require_real_writer_and_surface_errors(
     assert calls[0]["expected_revision"] == 1
 
     async def reader(*_):
-        return auth.Principal(id="reader", name="Reader", role="reader", type="human")
+        return (
+            auth.Principal(id="reader", name="Reader", role="reader", type="human"),
+            None,
+        )
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", reader)
     assert (
